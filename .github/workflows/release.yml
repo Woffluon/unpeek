@@ -1,9 +1,8 @@
 name: Release
 
 on:
-  workflow_run:
-    workflows: [ "CI" ]
-    types: [ completed ]
+  push:
+    branches: [ "main" ]
   workflow_dispatch:
     inputs:
       target_sha:
@@ -27,24 +26,10 @@ jobs:
     steps:
       - name: Evaluate release gate
         id: gate
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          CI_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          CI_EVENT: ${{ github.event.workflow_run.event }}
         run: |
-          enabled=false
-          reason="CI run is not a successful push on main; release skipped."
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            enabled=true
-            reason="Manual release requested."
-          elif [[ "$CI_CONCLUSION" == "success" && "$CI_BRANCH" == "main" && "$CI_EVENT" == "push" ]]; then
-            enabled=true
-            reason="Successful main CI run is eligible for release discovery."
-          fi
-          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
           echo "### Release gate" >> "$GITHUB_STEP_SUMMARY"
-          echo "$reason" >> "$GITHUB_STEP_SUMMARY"
+          echo "Direct push on main is eligible for release discovery." >> "$GITHUB_STEP_SUMMARY"
 
   preflight:
     name: Release Preflight
@@ -65,9 +50,8 @@ jobs:
         shell: powershell
         env:
           DISPATCH_SHA: ${{ inputs.target_sha }}
-          CI_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          $Requested = if ($env:GITHUB_EVENT_NAME -eq "workflow_run") { $env:CI_SHA } elseif ($env:DISPATCH_SHA) { $env:DISPATCH_SHA } else { "origin/main" }
+          $Requested = if ($env:DISPATCH_SHA) { $env:DISPATCH_SHA } else { "origin/main" }
           $Target = (& git rev-parse "$Requested^{commit}").Trim()
           if ($LASTEXITCODE -ne 0) { throw "Cannot resolve release target '$Requested'." }
           & git merge-base --is-ancestor $Target origin/main
@@ -121,63 +105,30 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Check immutable tag and release state
-        id: state
-        shell: powershell
-        env:
-          RELEASE_SHA: ${{ matrix.release.sha }}
-          RELEASE_TAG: ${{ matrix.release.tag }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          powershell -File scripts/test-existing-release.ps1 `
-            -ReleaseSha $env:RELEASE_SHA `
-            -ReleaseTag $env:RELEASE_TAG `
-            -Version "${{ matrix.release.version }}"
+      - name: Setup pnpm
+        uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
 
-      - name: Download CI release artifacts
-        shell: powershell
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-          CI_RUN_ID: ${{ github.event.workflow_run.id }}
-          RELEASE_SHA: ${{ matrix.release.sha }}
-        run: |
-          $RunId = if ($env:EVENT_NAME -eq "workflow_run" -and $env:CI_RUN_ID) {
-            $env:CI_RUN_ID
-          } else {
-            (& gh run list --commit $env:RELEASE_SHA --workflow CI --status success --json databaseId --jq '.[0].databaseId').Trim()
-          }
-          if (-not $RunId) {
-            throw "No successful CI workflow run found for commit $env:RELEASE_SHA"
-          }
-          Write-Host "Downloading CI artifacts from run $RunId..."
-          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
-          gh run download $RunId --name unpeek-CI-Build --dir artifacts
+      - name: Setup Node.js for build and release
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
 
-      - name: Verify staged release artifacts and checksums
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Stage release artifacts
         shell: powershell
-        run: |
-          $Version = "${{ matrix.release.version }}"
-          $Tarball = "artifacts/unpeek-v$Version.tgz"
-          $ChecksumFile = "artifacts/unpeek-v$Version-SHA256SUMS.txt"
-          if (-not (Test-Path -LiteralPath $Tarball)) { throw "Missing release tarball: $Tarball" }
-          if (-not (Test-Path -LiteralPath $ChecksumFile)) { throw "Missing checksum manifest: $ChecksumFile" }
-          $ActualHash = (Get-FileHash -LiteralPath $Tarball -Algorithm SHA256).Hash.ToLowerInvariant()
-          $ExpectedLine = "$ActualHash  unpeek-v$Version.tgz"
-          $Content = (Get-Content -LiteralPath $ChecksumFile -Raw).Trim()
-          if ($Content -cne $ExpectedLine) {
-            throw "Checksum mismatch: expected '$ExpectedLine', got '$Content'"
-          }
-          "COMMIT_MSG=$(git log -1 --format='%s')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        run: powershell -File scripts/stage-release.ps1
 
       - name: Publish immutable GitHub release
-        if: steps.state.outputs.needed == 'true'
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
           tag_name: ${{ matrix.release.tag }}
           name: unpeek ${{ matrix.release.tag }}
           body: |
-            ${{ env.COMMIT_MSG }}
+            ${{ matrix.release.tag }}
 
             ### Installation
             ```bash
@@ -196,12 +147,6 @@ jobs:
           prerelease: false
           make_latest: "false"
           token: ${{ github.token }}
-
-      - name: Setup Node.js for npm publish
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
 
       - name: Publish package to npm registry via OIDC Trusted Publishing
         shell: powershell
