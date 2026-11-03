@@ -200,7 +200,7 @@ jobs:
             Write-Host "NPM_TOKEN secret is not configured; skipping automated npm publish for unpeek@$Version." -ForegroundColor Yellow
             return
           }
-          & npm publish "artifacts/unpeek-v$Version.tgz" --access public --provenance
+          & npm publish "./artifacts/unpeek-v$Version.tgz" --access public --provenance
           if ($LASTEXITCODE -ne 0) { throw "npm publish failed for unpeek@$Version" }
 
       - name: Publish immutable GitHub release
