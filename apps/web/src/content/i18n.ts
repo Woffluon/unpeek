@@ -172,7 +172,7 @@ export async function verifyWorkspaceLicense(_0x4a1) {
 export const DICTIONARY: Record<Locale, Dictionary> = {
   en: {
     meta: {
-      version: "v1.0.0",
+      version: "v1.0.1",
       license: "MIT Licensed",
     },
     nav: {
@@ -646,7 +646,7 @@ curl -fsSL https://raw.githubusercontent.com/Woffluon/unpeek/main/skills/unpeek/
   },
   tr: {
     meta: {
-      version: "v1.0.0",
+      version: "v1.0.1",
       license: "MIT Lisanslı",
     },
     nav: {
