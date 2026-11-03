@@ -115,6 +115,9 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: pnpm
 
+      - name: Update npm CLI for OIDC Trusted Publishing
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -163,6 +166,7 @@ jobs:
             return
           }
           Write-Host "Publishing unpeek@$Version via npm OIDC Trusted Publishing..." -ForegroundColor Cyan
+          Write-Host "NPM CLI version: $(& npm --version)" -ForegroundColor Cyan
           & npm publish "./artifacts/unpeek-v$Version.tgz" --access public --provenance
           if ($LASTEXITCODE -ne 0) { throw "npm publish failed for unpeek@$Version" }
 
