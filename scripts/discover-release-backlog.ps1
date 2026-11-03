@@ -72,10 +72,13 @@ if ($Tags.Count -gt 0) {
     }
 }
 
-$Candidates = @($History | Where-Object {
+$Candidates = @()
+if ($NpmMissingForBase) {
+    $Candidates += [ordered]@{ sha = $BaseCommit; version = $BaseVersion; tag = $BaseTag }
+}
+$Candidates += @($History | Where-Object {
     if ($_.bump -eq "none") { return $false }
     if (-not $BaseCommit) { return $true }
-    if ($NpmMissingForBase -and $_.sha -ceq $BaseCommit) { return $true }
     & git -C $RepoRoot merge-base --is-ancestor $BaseCommit $_.sha
     if ($LASTEXITCODE -gt 1) { throw "Cannot compare release base $BaseCommit with $($_.sha)." }
     return $LASTEXITCODE -eq 0 -and $_.sha -cne $BaseCommit
