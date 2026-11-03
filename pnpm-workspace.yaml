@@ -1,7 +1,7 @@
 packages:
   - "packages/*"
   - "apps/*"
-ignoredBuiltDependencies:
-  - esbuild
-  - sharp
+allowBuilds:
+  esbuild: true
+  sharp: true
 verifyDepsBeforeRun: false
