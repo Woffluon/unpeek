@@ -201,7 +201,6 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          registry-url: "https://registry.npmjs.org"
 
       - name: Publish package to npm registry
         shell: powershell
@@ -219,10 +218,7 @@ jobs:
             Write-Host "unpeek@$Version is already published on npm; skipping npm publish." -ForegroundColor Yellow
             return
           }
-          if ([string]::IsNullOrWhiteSpace($env:NODE_AUTH_TOKEN)) {
-            Write-Host "NPM_TOKEN secret is not configured; skipping automated npm publish for unpeek@$Version." -ForegroundColor Yellow
-            return
-          }
+          Write-Host "Publishing unpeek@$Version (supports OIDC Trusted Publishing & NPM_TOKEN fallback)..." -ForegroundColor Cyan
           & npm publish "./artifacts/unpeek-v$Version.tgz" --access public --provenance
           if ($LASTEXITCODE -ne 0) { throw "npm publish failed for unpeek@$Version" }
 
