@@ -1,0 +1,24 @@
+{
+  "name": "unpeek-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Zero-config, near-zero-overhead (<2% CPU) client-side JavaScript protection & anti-reverse-engineering toolkit.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Woffluon/unpeek.git"
+  },
+  "license": "MIT",
+  "packageManager": "pnpm@11.10.0",
+  "scripts": {
+    "build": "pnpm --filter unpeek build && pnpm --filter web build",
+    "build:pkg": "pnpm --filter unpeek build",
+    "build:web": "pnpm --filter web build",
+    "test": "pnpm --filter unpeek test",
+    "bench": "pnpm --filter unpeek bench",
+    "typecheck": "pnpm --filter unpeek typecheck && pnpm --filter web typecheck",
+    "lint": "pnpm --filter unpeek typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  }
+}

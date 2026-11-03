@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+:root {
+  --bg-base: #09090b;
+  --bg-elevated: #111114;
+  --bg-surface: #18181b;
+  --border-subtle: #27272a;
+  --text-primary: #f4f4f5;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --accent-emerald: #10b981;
+}
+
+html {
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  color-scheme: dark;
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: #09090b;
+  color: #f4f4f5;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  overflow-x: hidden;
+}
+
+code,
+pre,
+.font-mono {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+::selection {
+  background-color: rgba(16, 185, 129, 0.22);
+  color: #f4f4f5;
+}
