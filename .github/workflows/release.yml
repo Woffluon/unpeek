@@ -1,0 +1,263 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [ "CI" ]
+    types: [ completed ]
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: "Commit on main to release (defaults to current main)"
+        required: false
+        type: string
+
+concurrency:
+  group: stable-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Release Gate
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+    steps:
+      - name: Evaluate release gate
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          CI_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          CI_EVENT: ${{ github.event.workflow_run.event }}
+        run: |
+          enabled=false
+          reason="CI run is not a successful push on main; release skipped."
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            enabled=true
+            reason="Manual release requested."
+          elif [[ "$CI_CONCLUSION" == "success" && "$CI_BRANCH" == "main" && "$CI_EVENT" == "push" ]]; then
+            enabled=true
+            reason="Successful main CI run is eligible for release discovery."
+          fi
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          echo "### Release gate" >> "$GITHUB_STEP_SUMMARY"
+          echo "$reason" >> "$GITHUB_STEP_SUMMARY"
+
+  preflight:
+    name: Release Preflight
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true'
+    runs-on: windows-latest
+    outputs:
+      target_sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - name: Checkout main history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve target commit
+        id: target
+        shell: powershell
+        env:
+          DISPATCH_SHA: ${{ inputs.target_sha }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          $Requested = if ($env:GITHUB_EVENT_NAME -eq "workflow_run") { $env:CI_SHA } elseif ($env:DISPATCH_SHA) { $env:DISPATCH_SHA } else { "origin/main" }
+          $Target = (& git rev-parse "$Requested^{commit}").Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Cannot resolve release target '$Requested'." }
+          & git merge-base --is-ancestor $Target origin/main
+          if ($LASTEXITCODE -ne 0) { throw "Release target must be reachable from main: $Target" }
+          powershell -File scripts/validate-version.ps1 -CommitSha $Target
+          "sha=$Target" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+  discover:
+    name: Discover Unreleased Versions
+    needs: preflight
+    runs-on: windows-latest
+    outputs:
+      releases: ${{ steps.discover.outputs.releases }}
+      count: ${{ steps.discover.outputs.count }}
+    steps:
+      - name: Checkout target history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          fetch-depth: 0
+
+      - name: Find version-changing commits since latest tag
+        id: discover
+        shell: powershell
+        env:
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          powershell -File scripts/discover-release-backlog.ps1 -TargetSha $env:TARGET_SHA
+
+  publish:
+    name: Publish ${{ matrix.release.tag }}
+    needs: discover
+    if: needs.discover.outputs.count != '0'
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        release: ${{ fromJson(needs.discover.outputs.releases) }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ matrix.release.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check immutable tag and release state
+        id: state
+        shell: powershell
+        env:
+          RELEASE_SHA: ${{ matrix.release.sha }}
+          RELEASE_TAG: ${{ matrix.release.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          powershell -File scripts/test-existing-release.ps1 `
+            -ReleaseSha $env:RELEASE_SHA `
+            -ReleaseTag $env:RELEASE_TAG `
+            -Version "${{ matrix.release.version }}"
+
+      - name: Download CI release artifacts
+        if: steps.state.outputs.needed == 'true'
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          RELEASE_SHA: ${{ matrix.release.sha }}
+        run: |
+          $RunId = if ($env:EVENT_NAME -eq "workflow_run" -and $env:CI_RUN_ID) {
+            $env:CI_RUN_ID
+          } else {
+            (& gh run list --commit $env:RELEASE_SHA --workflow CI --status success --json databaseId --jq '.[0].databaseId').Trim()
+          }
+          if (-not $RunId) {
+            throw "No successful CI workflow run found for commit $env:RELEASE_SHA"
+          }
+          Write-Host "Downloading CI artifacts from run $RunId..."
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          gh run download $RunId --name unpeek-CI-Build --dir artifacts
+
+      - name: Verify staged release artifacts and checksums
+        if: steps.state.outputs.needed == 'true'
+        shell: powershell
+        run: |
+          $Version = "${{ matrix.release.version }}"
+          $Tarball = "artifacts/unpeek-v$Version.tgz"
+          $ChecksumFile = "artifacts/unpeek-v$Version-SHA256SUMS.txt"
+          if (-not (Test-Path -LiteralPath $Tarball)) { throw "Missing release tarball: $Tarball" }
+          if (-not (Test-Path -LiteralPath $ChecksumFile)) { throw "Missing checksum manifest: $ChecksumFile" }
+          $ActualHash = (Get-FileHash -LiteralPath $Tarball -Algorithm SHA256).Hash.ToLowerInvariant()
+          $ExpectedLine = "$ActualHash  unpeek-v$Version.tgz"
+          $Content = (Get-Content -LiteralPath $ChecksumFile -Raw).Trim()
+          if ($Content -cne $ExpectedLine) {
+            throw "Checksum mismatch: expected '$ExpectedLine', got '$Content'"
+          }
+          "COMMIT_MSG=$(git log -1 --format='%s')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Setup Node.js for npm publish
+        if: steps.state.outputs.needed == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish package to npm registry
+        if: steps.state.outputs.needed == 'true'
+        shell: powershell
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          $Version = "${{ matrix.release.version }}"
+          $Existing = ""
+          try {
+            $Existing = (& npm view "unpeek@$Version" version 2>$null | Out-String).Trim()
+          } catch {
+            $Existing = ""
+          }
+          if ($Existing -ceq $Version) {
+            Write-Host "unpeek@$Version is already published on npm; skipping npm publish." -ForegroundColor Yellow
+            return
+          }
+          if ([string]::IsNullOrWhiteSpace($env:NODE_AUTH_TOKEN)) {
+            Write-Host "NPM_TOKEN secret is not configured; skipping automated npm publish for unpeek@$Version." -ForegroundColor Yellow
+            return
+          }
+          & npm publish "artifacts/unpeek-v$Version.tgz" --access public --provenance
+          if ($LASTEXITCODE -ne 0) { throw "npm publish failed for unpeek@$Version" }
+
+      - name: Publish immutable GitHub release
+        if: steps.state.outputs.needed == 'true'
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
+        with:
+          tag_name: ${{ matrix.release.tag }}
+          name: unpeek ${{ matrix.release.tag }}
+          body: |
+            ${{ env.COMMIT_MSG }}
+
+            ### Installation
+            ```bash
+            npm install -D unpeek@${{ matrix.release.version }}
+            npx unpeek init
+            ```
+
+            ### Release Artifacts
+            - **NPM Package Tarball:** `unpeek-v${{ matrix.release.version }}.tgz`
+            - **SHA-256 Checksums:** `unpeek-v${{ matrix.release.version }}-SHA256SUMS.txt`
+            - **Documentation:** https://woffluon.github.io/unpeek
+          target_commitish: ${{ matrix.release.sha }}
+          files: artifacts/*
+          generate_release_notes: false
+          draft: false
+          prerelease: false
+          make_latest: "false"
+          token: ${{ github.token }}
+
+  finalize:
+    name: Finalize Latest Release
+    needs: [ discover, publish ]
+    if: needs.discover.outputs.count != '0' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: Mark newest release as latest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASES_JSON: ${{ needs.discover.outputs.releases }}
+        run: |
+          $Discovered = @($env:RELEASES_JSON | ConvertFrom-Json)
+          if ($Discovered.Count -eq 0) { throw "Release discovery output is empty." }
+          $Latest = $Discovered | Sort-Object { [version]$_.version } -Descending | Select-Object -First 1
+          $PublishedJson = gh release view $Latest.tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease
+          if ($LASTEXITCODE -ne 0) { throw "Cannot read discovered release $($Latest.tag)." }
+          $Published = $PublishedJson | ConvertFrom-Json
+          if ($Published.tagName -cne $Latest.tag -or $Published.isDraft -or $Published.isPrerelease) {
+            throw "Discovered release $($Latest.tag) is not a published stable release."
+          }
+          gh release edit $Latest.tag --repo $env:GITHUB_REPOSITORY --latest
+          if ($LASTEXITCODE -ne 0) { throw "Cannot mark discovered release $($Latest.tag) as latest." }
+
+      - name: Deploy refreshed website data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-pages.yml --repo "$GITHUB_REPOSITORY" --ref main

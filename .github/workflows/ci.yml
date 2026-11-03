@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  website-checks:
+    name: Website Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check and build website
+        env:
+          NEXT_PUBLIC_BASE_PATH: /unpeek
+        run: |
+          pnpm --filter web run typecheck
+          pnpm --filter web run build
+
+  package-and-tests:
+    name: Core Lints, Tests, Benchmarks & Package
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Verify Version Consistency
+        shell: powershell
+        run: |
+          powershell -File scripts/test-versioning.ps1
+          powershell -File scripts/validate-version.ps1
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and Typecheck Core Package
+        run: |
+          pnpm --filter unpeek run build
+          pnpm --filter unpeek run typecheck
+
+      - name: Unit, E2E & REA Resistance Tests
+        run: pnpm --filter unpeek run test:coverage
+
+      - name: Enforce CPU (<2%) & Gzip (<15%) Budgets
+        run: pnpm --filter unpeek run bench
+
+      - name: Stage Release Tarball & SHA-256 Checksums
+        shell: powershell
+        run: powershell -File scripts/stage-release.ps1
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unpeek-CI-Build
+          path: artifacts/*

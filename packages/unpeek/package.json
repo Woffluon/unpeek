@@ -1,0 +1,67 @@
+{
+  "name": "unpeek",
+  "version": "1.0.0",
+  "description": "Zero-config, call-graph-aware polymorphic AST obfuscation and passive runtime anti-tamper with <2% CPU overhead.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Woffluon/unpeek.git",
+    "directory": "packages/unpeek"
+  },
+  "homepage": "https://woffluon.github.io/unpeek",
+  "keywords": [
+    "obfuscator",
+    "anti-debug",
+    "anti-tamper",
+    "devtools",
+    "sourcemap",
+    "ast",
+    "security",
+    "unplugin",
+    "vite",
+    "nextjs",
+    "webpack"
+  ],
+  "bin": {
+    "unpeek": "./bin/unpeek.mjs"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./unplugin": {
+      "types": "./dist/bundler/unplugin.d.ts",
+      "import": "./dist/bundler/unplugin.js"
+    }
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "bench": "tsx benchmarks/overhead.bench.ts"
+  },
+  "dependencies": {
+    "acorn": "^8.14.1",
+    "acorn-walk": "^8.3.4",
+    "astring": "^1.9.0",
+    "unplugin": "^2.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@vitest/coverage-v8": "^3.0.8",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8"
+  }
+}
