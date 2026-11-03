@@ -21,6 +21,7 @@ $History = @(Get-ValidatedVersionHistory -RepoRoot $RepoRoot -TargetSha $Target)
 $Tags = @(& git -C $RepoRoot tag --merged $Target --list "v*" --sort=-version:refname | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' })
 if ($LASTEXITCODE -ne 0) { throw "Cannot read semantic-version tags merged into $Target." }
 $BaseCommit = $null
+$NpmMissingForBase = $false
 if ($Tags.Count -gt 0) {
     $BaseTag = $Tags[0]
     $BaseVersion = $BaseTag.Substring(1)
@@ -64,11 +65,17 @@ if ($Tags.Count -gt 0) {
     if ($IntegrityContract -contains "scripts/test-existing-release.ps1") {
         & (Join-Path $PSScriptRoot "test-existing-release.ps1") -ReleaseSha $BaseCommit -ReleaseTag $BaseTag -Version $BaseVersion -RepoRoot $RepoRoot -Repository $Repository -Token $Token -NoOutput
     }
+    try {
+        Invoke-RestMethod -Uri "https://registry.npmjs.org/unpeek/$BaseVersion" -Method Get | Out-Null
+    } catch {
+        $NpmMissingForBase = $true
+    }
 }
 
 $Candidates = @($History | Where-Object {
     if ($_.bump -eq "none") { return $false }
     if (-not $BaseCommit) { return $true }
+    if ($NpmMissingForBase -and $_.sha -ceq $BaseCommit) { return $true }
     & git -C $RepoRoot merge-base --is-ancestor $BaseCommit $_.sha
     if ($LASTEXITCODE -gt 1) { throw "Cannot compare release base $BaseCommit with $($_.sha)." }
     return $LASTEXITCODE -eq 0 -and $_.sha -cne $BaseCommit
