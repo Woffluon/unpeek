@@ -1,366 +1,310 @@
 "use client";
 
-import React, { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  ShieldCheck,
-  TerminalWindow,
-  Copy,
-  Check,
-  ArrowRight,
-  GitBranch,
-  Cpu,
-  LockKey,
-  FileCode,
-  ArrowUpRight,
-} from "@phosphor-icons/react";
-import { CODE_SAMPLES, DICTIONARY, type Locale } from "@/content/i18n";
-import { DocsReader } from "@/components/docs-reader";
+import { DICTIONARY } from "@/content/i18n";
+import { useLocale } from "@/lib/use-locale";
+import { SiteHeader } from "@/components/site-header";
+import { SiteFooter } from "@/components/site-footer";
+import { CallGraphLab } from "@/components/call-graph-lab";
+import { SourceTicker } from "@/components/source-ticker";
+
+// Bars share one scale per row: the signal bar is the measured unpeek figure
+// drawn against the legacy upper bound, so its width is the real ratio.
+const COMPARE_SHARE = [(2 / 850) * 100, (14 / 340) * 100];
+
 
 export default function HomePage() {
-  const [locale, setLocale] = useState<Locale>("en");
-  const [activeCodeTab, setActiveCodeTab] = useState<"before" | "after">("after");
-  const [copiedInit, setCopiedInit] = useState(false);
-
+  const [locale, setLocale] = useLocale();
   const dict = DICTIONARY[locale];
+  const [copied, setCopied] = useState(false);
+  const [installCopied, setInstallCopied] = useState(false);
+  const heroTimer = useRef<number | null>(null);
+  const installTimer = useRef<number | null>(null);
 
-  const handleCopyInit = () => {
-    if (typeof navigator !== "undefined" && navigator.clipboard) {
-      navigator.clipboard.writeText(dict.hero.initCmd);
-      setCopiedInit(true);
-      setTimeout(() => setCopiedInit(false), 1800);
-    }
-  };
+  useEffect(() => {
+    return () => {
+      if (heroTimer.current) window.clearTimeout(heroTimer.current);
+      if (installTimer.current) window.clearTimeout(installTimer.current);
+    };
+  }, []);
+
+  const copyHero = useCallback(async () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    await navigator.clipboard.writeText(dict.hero.initCmd);
+    setCopied(true);
+    if (heroTimer.current) window.clearTimeout(heroTimer.current);
+    heroTimer.current = window.setTimeout(() => setCopied(false), 1600);
+  }, [dict.hero.initCmd]);
+
+  const copyInstall = useCallback(async () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    await navigator.clipboard.writeText(dict.installSection.command);
+    setInstallCopied(true);
+    if (installTimer.current) window.clearTimeout(installTimer.current);
+    installTimer.current = window.setTimeout(() => setInstallCopied(false), 1600);
+  }, [dict.installSection.command]);
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col">
-      {/* Single-line h-16 Top Navigation */}
-      <header className="sticky top-0 z-40 h-16 border-b border-zinc-800 bg-[#09090b]/95 backdrop-blur-sm">
-        <div className="max-w-[1400px] mx-auto h-full px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-8">
-            <a
-              href="#"
-              className="inline-flex items-center gap-2.5 text-zinc-100 font-mono text-base font-semibold tracking-tight"
-            >
-              <span className="w-6 h-6 flex items-center justify-center border border-emerald-500/60 bg-emerald-500/10 text-emerald-400">
-                <ShieldCheck size={15} weight="bold" />
-              </span>
-              <span>unpeek</span>
-              <span className="hidden sm:inline-block font-mono text-xs text-zinc-400 border border-zinc-800 bg-zinc-900 px-1.5 py-0.5">
-                {dict.meta.version}
-              </span>
-            </a>
+    <div className="flex min-h-screen flex-col">
+      <SiteHeader dict={dict} locale={locale} onLocaleChange={setLocale} />
 
-            <nav className="hidden md:flex items-center gap-6 text-sm text-zinc-400">
-              <a
-                href="#architecture"
-                className="hover:text-zinc-100 transition-colors whitespace-nowrap"
-              >
-                {dict.nav.architecture}
-              </a>
-              <a
-                href="#benchmarks"
-                className="hover:text-zinc-100 transition-colors whitespace-nowrap"
-              >
-                {dict.nav.benchmarks}
-              </a>
-              <a
-                href="#docs"
-                className="hover:text-zinc-100 transition-colors whitespace-nowrap"
-              >
-                {dict.nav.docs}
-              </a>
-              <Link
-                href="/docs"
-                className="inline-flex items-center gap-1 text-zinc-300 hover:text-emerald-400 transition-colors whitespace-nowrap font-mono text-xs"
-              >
-                <span>/docs</span>
-                <ArrowUpRight size={13} weight="regular" />
-              </Link>
-            </nav>
-          </div>
+      <main id="main" className="flex-1">
+        {/* Hero */}
+        <section className="border-b border-rule lg:flex lg:min-h-[calc(100vh-4rem)] lg:flex-col lg:justify-between">
+          <div className="shell flex flex-1 flex-col justify-center py-10 lg:py-12">
+            <h1 className="display py-6 text-[clamp(44px,7.2vw,96px)] text-ink sm:py-8 lg:py-10">
+              <span className="block">{dict.hero.headlineTop}</span>
+              <span className="mt-2 block text-ink-2">{dict.hero.headlineBottom}</span>
+            </h1>
 
-          <div className="flex items-center gap-3">
-            {/* EN | TR Language Switcher */}
-            <div
-              role="group"
-              aria-label="Language Switcher"
-              className="inline-flex items-center border border-zinc-800 bg-zinc-950 p-0.5 font-mono text-xs"
-            >
-              <button
-                type="button"
-                onClick={() => setLocale("en")}
-                className={`px-2.5 py-1 transition-colors ${
-                  locale === "en"
-                    ? "bg-emerald-500 text-zinc-950 font-semibold"
-                    : "text-zinc-400 hover:text-zinc-200"
-                }`}
-              >
-                EN
-              </button>
-              <button
-                type="button"
-                onClick={() => setLocale("tr")}
-                className={`px-2.5 py-1 transition-colors ${
-                  locale === "tr"
-                    ? "bg-emerald-500 text-zinc-950 font-semibold"
-                    : "text-zinc-400 hover:text-zinc-200"
-                }`}
-              >
-                TR
-              </button>
-            </div>
-
-            <a
-              href="https://github.com/Woffluon/unpeek"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono text-zinc-200 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 transition-colors whitespace-nowrap"
-            >
-              <span>{dict.nav.github}</span>
-              <ArrowUpRight size={14} weight="regular" className="text-zinc-400" />
-            </a>
-          </div>
-        </div>
-      </header>
-
-      <main className="flex-1">
-        {/* Hero Section: Fits initial viewport (min-h-[calc(100dvh-4rem)]), Split Left Copy / Right Code Comparison */}
-        <section className="min-h-[calc(100dvh-4rem)] flex items-center border-b border-zinc-800 py-12 lg:py-16">
-          <div className="max-w-[1400px] mx-auto w-full px-4 sm:px-6 lg:px-8">
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-center">
-              {/* Left Column: Strictly 4 Text Elements (1. Eyebrow, 2. Headline, 3. Subtext <=20w, 4. CTAs) */}
-              <div className="lg:col-span-5 space-y-6">
-                {/* Element 1: Eyebrow (1 of 2 allowed on page) */}
-                <div className="inline-flex items-center gap-2 px-2.5 py-1 border border-zinc-800 bg-zinc-950">
-                  <span className="w-1.5 h-1.5 bg-emerald-500" />
-                  <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-emerald-400">
-                    {dict.hero.eyebrow}
-                  </span>
-                </div>
-
-                {/* Element 2: Headline (2 lines max on desktop) */}
-                <h1 className="text-4xl sm:text-5xl xl:text-[52px] font-semibold tracking-tighter leading-[1.06] text-zinc-100">
-                  <span className="block">{dict.hero.headlineLine1}</span>
-                  <span className="block text-zinc-400">{dict.hero.headlineLine2}</span>
-                </h1>
-
-                {/* Element 3: Subtext (<= 20 words) */}
-                <p className="text-base md:text-lg text-zinc-400 leading-relaxed max-w-[54ch]">
+            <div className="grid grid-cols-1 gap-10 border-t border-rule pt-8 pb-4 lg:grid-cols-12 lg:gap-14 lg:pt-10 lg:pb-6">
+              <div className="lg:col-span-6">
+                <p className="max-w-[48ch] text-[15px] leading-7 text-ink-2 sm:text-[16px]">
                   {dict.hero.subtext}
                 </p>
 
-                {/* Element 4: CTAs (1-Click Copy Terminal Command + Read Documentation CTA) */}
-                <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                <div className="mt-8 flex flex-col items-stretch gap-2.5 sm:flex-row sm:items-center">
                   <button
                     type="button"
-                    onClick={handleCopyInit}
-                    aria-label={dict.hero.initCmd}
-                    className="group flex items-center justify-between gap-4 px-4 py-3 border border-zinc-700 hover:border-emerald-500/70 bg-zinc-950 text-left font-mono text-sm transition-colors active:scale-[0.98]"
+                    onClick={copyHero}
+                    className="group flex items-center justify-between gap-6 rounded-[3px] bg-ink px-3.5 py-3 text-left transition-colors duration-150 hover:bg-carbon-2 active:scale-[0.99]"
                   >
-                    <span className="flex items-center gap-2.5">
-                      <span className="text-emerald-400 select-none">$</span>
-                      <span className="text-zinc-100 font-medium whitespace-nowrap">
-                        {dict.hero.initCmd}
+                    <span className="flex items-center gap-2 font-mono text-[13px] text-paper">
+                      <span className="text-paper/45" aria-hidden="true">
+                        $
                       </span>
+                      {dict.hero.initCmd}
                     </span>
-                    <span className="inline-flex items-center gap-1.5 text-xs text-zinc-400 group-hover:text-emerald-400 pl-3 border-l border-zinc-800 whitespace-nowrap">
-                      {copiedInit ? (
-                        <>
-                          <Check size={14} weight="bold" className="text-emerald-400" />
-                          <span className="text-emerald-400">{dict.hero.copiedLabel}</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy size={14} weight="regular" />
-                          <span>{dict.hero.copyLabel}</span>
-                        </>
-                      )}
+                    <span className="shrink-0 border-l border-paper/20 pl-3 font-mono text-[11px] text-paper/70">
+                      {copied ? dict.hero.copiedLabel : dict.hero.copyLabel}
                     </span>
                   </button>
 
                   <a
-                    href="#docs"
-                    className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-medium text-sm transition-colors whitespace-nowrap active:scale-[0.98]"
+                    href="https://github.com/Woffluon/unpeek"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-2 rounded-[3px] border border-rule px-4 py-3 font-mono text-[12px] leading-none text-ink transition-colors duration-150 hover:bg-paper-2"
                   >
-                    <span>{dict.hero.primaryCta}</span>
-                    <ArrowRight size={16} weight="bold" />
+                    {dict.hero.sourceCta}
+                    <span aria-hidden="true">↗</span>
+                  </a>
+                </div>
+
+                <div className="mt-5 flex flex-wrap items-center gap-x-6 gap-y-2 font-mono text-[10.5px] text-ink-3">
+                  <Link
+                    href="/docs#doc-architecture"
+                    className="underline decoration-rule decoration-1 underline-offset-4 transition-colors duration-150 hover:text-ink"
+                  >
+                    {dict.hero.secondaryCta}
+                  </Link>
+                  <a
+                    href="https://www.npmjs.com/package/unpeek"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline decoration-rule decoration-1 underline-offset-4 transition-colors duration-150 hover:text-ink"
+                  >
+                    {dict.hero.npmCta}
                   </a>
                 </div>
               </div>
 
-              {/* Right Column: Authentic Before / After AST Transformation Code Comparison */}
-              <div className="lg:col-span-7">
-                <div className="border border-zinc-800 bg-[#0d0d10]">
-                  {/* Code Window Top Bar */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-b border-zinc-800 bg-zinc-950">
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setActiveCodeTab("before")}
-                        className={`px-3 py-1.5 text-xs font-mono transition-colors border ${
-                          activeCodeTab === "before"
-                            ? "border-zinc-700 bg-zinc-900 text-zinc-100"
-                            : "border-transparent text-zinc-400 hover:text-zinc-200"
-                        }`}
-                      >
-                        {dict.hero.codeTabs.beforeLabel}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setActiveCodeTab("after")}
-                        className={`px-3 py-1.5 text-xs font-mono transition-colors border ${
-                          activeCodeTab === "after"
-                            ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-300"
-                            : "border-transparent text-zinc-400 hover:text-zinc-200"
-                        }`}
-                      >
-                        {dict.hero.codeTabs.afterLabel}
-                      </button>
+              <dl className="lg:col-span-6 lg:pl-12">
+                <div className="border-t border-ink">
+                  {dict.hero.ledger.map((row) => (
+                    <div
+                      key={row.label}
+                      className="flex flex-wrap items-baseline justify-between gap-x-8 gap-y-1 border-b border-rule py-3.5"
+                    >
+                      <dt className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-ink-3">
+                        {row.label}
+                      </dt>
+                      <dd className="font-mono text-[12px] text-ink">{row.value}</dd>
                     </div>
+                  ))}
+                </div>
+              </dl>
+            </div>
+          </div>
 
-                    <div className="inline-flex items-center gap-2 px-2.5 py-1 border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 font-mono text-xs">
-                      <TerminalWindow size={14} weight="regular" />
-                      <span>{dict.hero.codeTabs.statusBadge}</span>
+          <div>
+            <SourceTicker
+              sourceLabel={dict.hero.tickerSource}
+              protectedLabel={dict.hero.tickerProtected}
+            />
+            <div className="border-t border-rule bg-paper">
+              <div className="shell">
+                <div className="grid grid-cols-2 divide-x divide-rule lg:grid-cols-4">
+                  {dict.metricsStrip.items.map((item, index) => (
+                    <div
+                      key={item.label}
+                      className={`py-5 lg:py-6 ${index % 2 === 0 ? "pr-4 lg:pr-6" : "pl-4 lg:px-6"} ${
+                        index < 2 ? "border-b border-rule lg:border-b-0" : ""
+                      } ${index === 0 ? "lg:pl-0" : ""}`}
+                    >
+                      <div className="tnum font-display text-[28px] leading-none tracking-[-0.03em] text-ink lg:text-[32px]">
+                        {item.value}
+                      </div>
+                      <div className="mt-2 text-[12.5px] leading-snug text-ink-2">{item.label}</div>
                     </div>
-                  </div>
-
-                  {/* Code Diff / Output Body */}
-                  <div className="p-4 sm:p-5 overflow-x-auto max-h-[420px] overflow-y-auto bg-[#09090b]">
-                    <pre className="font-mono text-xs leading-relaxed text-zinc-200">
-                      <code>
-                        {activeCodeTab === "before" ? CODE_SAMPLES.before : CODE_SAMPLES.after}
-                      </code>
-                    </pre>
-                  </div>
-
-                  {/* Bottom Engineering Telemetry Bar */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-zinc-800 border-t border-zinc-800 bg-zinc-950 text-xs font-mono">
-                    <div className="px-4 py-2.5 flex items-center gap-2 text-zinc-300">
-                      <Cpu size={15} weight="regular" className="text-emerald-400 shrink-0" />
-                      <span className="truncate">{dict.hero.codeTabs.hotPathNote}</span>
-                    </div>
-                    <div className="px-4 py-2.5 flex items-center gap-2 text-zinc-300">
-                      <LockKey size={15} weight="regular" className="text-emerald-400 shrink-0" />
-                      <span className="truncate">{dict.hero.codeTabs.coldPathNote}</span>
-                    </div>
-                  </div>
+                  ))}
+                </div>
+              </div>
+              <div className="border-t border-rule">
+                <div className="shell py-2.5">
+                  <p className="font-mono text-[10px] leading-4 text-ink-3">
+                    {dict.metricsStrip.note}
+                  </p>
                 </div>
               </div>
             </div>
           </div>
         </section>
 
-        {/* Measured Engineering Budget Strip */}
-        <section className="border-b border-zinc-800 bg-[#0b0b0e]">
-          <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-zinc-800">
-              {dict.metricsStrip.items.map((item, idx) => (
-                <div key={idx} className="p-6 lg:p-8 space-y-2">
-                  <div className="font-mono text-3xl lg:text-4xl font-semibold text-emerald-400 tracking-tight">
-                    {item.value}
-                  </div>
-                  <div className="text-sm font-medium text-zinc-100">{item.label}</div>
-                  <p className="text-xs text-zinc-400 leading-relaxed">{item.detail}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* Compiler Architecture & Call-Graph Flow Section */}
-        <section id="architecture" className="py-20 lg:py-28 border-b border-zinc-800 scroll-mt-16">
-          <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
-            {/* Stacked Vertical Header (Following Split-Header Ban & Eyebrow Cap 2/2) */}
-            <div className="space-y-4 max-w-[65ch]">
-              <div className="inline-flex items-center gap-2 px-2.5 py-1 border border-zinc-800 bg-zinc-950">
-                <GitBranch size={13} weight="regular" className="text-emerald-400" />
-                <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-emerald-400">
-                  {dict.architectureSection.eyebrow}
-                </span>
-              </div>
-              <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-zinc-100">
-                {dict.architectureSection.title}
+        {/* Parser */}
+        <section
+          id="parser"
+          className="scroll-mt-16 border-b border-rule lg:flex lg:min-h-screen lg:flex-col lg:justify-center"
+        >
+          <div className="shell py-20 lg:py-0">
+            <div className="measure">
+              <h2 className="heading text-[32px] text-ink sm:text-[40px]">
+                {dict.parserSection.title}
               </h2>
-              <p className="text-base text-zinc-400 leading-relaxed">
-                {dict.architectureSection.subtitle}
-              </p>
+              <p className="mt-4 text-[16px] leading-7 text-ink-2">{dict.parserSection.lead}</p>
             </div>
 
-            {/* 4-Stage Pipeline Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 border border-zinc-800 divide-y md:divide-y-0 md:divide-x divide-zinc-800 bg-[#0d0d10]">
-              {dict.architectureSection.stages.map((stage, idx) => (
-                <div key={idx} className="p-6 lg:p-7 flex flex-col justify-between space-y-6">
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-                      <span className="font-mono text-xs text-emerald-400 font-semibold">
-                        {stage.step}
-                      </span>
-                      <span className="font-mono text-xs text-zinc-400 bg-zinc-900 px-2 py-0.5 border border-zinc-800">
-                        {stage.metric}
-                      </span>
+            <div className="mt-14 grid grid-cols-1 gap-12 lg:grid-cols-12 lg:gap-16">
+              <div className="lg:col-span-4">
+                <div className="space-y-8 lg:sticky lg:top-24">
+                  <div className="border-t border-ink pt-4">
+                    <div className="flex items-center gap-2">
+                      <span className="h-1.5 w-1.5 bg-signal" aria-hidden="true" />
+                      <h3 className="text-[15px] font-medium text-ink">
+                        {dict.parserSection.hotTitle}
+                      </h3>
                     </div>
-                    <h3 className="text-lg font-medium text-zinc-100 tracking-tight">
-                      {stage.title}
-                    </h3>
-                    <p className="text-sm text-zinc-400 leading-relaxed">{stage.description}</p>
+                    <p className="mt-2 text-[13.5px] leading-6 text-ink-2">
+                      {dict.parserSection.hotBody}
+                    </p>
                   </div>
 
-                  <div className="pt-4 border-t border-zinc-800/70">
-                    <p className="font-mono text-xs text-zinc-300 leading-relaxed">
-                      {stage.detail}
+                  <div className="border-t border-rule pt-4">
+                    <div className="flex items-center gap-2">
+                      <span className="h-1.5 w-1.5 bg-ink" aria-hidden="true" />
+                      <h3 className="text-[15px] font-medium text-ink">
+                        {dict.parserSection.coldTitle}
+                      </h3>
+                    </div>
+                    <p className="mt-2 text-[13.5px] leading-6 text-ink-2">
+                      {dict.parserSection.coldBody}
                     </p>
                   </div>
                 </div>
-              ))}
+              </div>
+
+              <ol className="lg:col-span-8">
+                {dict.parserSection.stages.map((stage) => (
+                  <li
+                    key={stage.step}
+                    className="group grid grid-cols-[48px_minmax(0,1fr)] gap-4 border-t border-rule py-5 last:border-b sm:grid-cols-[64px_180px_minmax(0,1fr)] sm:items-baseline"
+                  >
+                    <span className="tnum font-mono text-[11px] text-ink-3">{stage.step}</span>
+                    <span className="text-[15px] font-medium leading-snug text-ink">
+                      {stage.title}
+                    </span>
+                    <span className="col-span-2 text-[13.5px] leading-6 text-ink-2 sm:col-span-1">
+                      {stage.detail}
+                    </span>
+                  </li>
+                ))}
+              </ol>
             </div>
           </div>
         </section>
 
-        {/* Measured Benchmark & Tradeoff Matrix Section */}
-        <section id="benchmarks" className="py-20 lg:py-28 border-b border-zinc-800 scroll-mt-16">
-          <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
-            <div className="space-y-3 max-w-[65ch]">
-              <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-zinc-100">
-                {dict.comparisonSection.title}
-              </h2>
-              <p className="text-base text-zinc-400 leading-relaxed">
-                {dict.comparisonSection.subtitle}
-              </p>
+        {/* Lab */}
+        <section
+          id="lab"
+          className="scroll-mt-16 border-b border-rule lg:flex lg:min-h-screen lg:flex-col lg:justify-center"
+        >
+          <div className="shell py-20 lg:py-0">
+            <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+              <div className="measure">
+                <h2 className="heading text-[32px] text-ink sm:text-[40px]">{dict.lab.title}</h2>
+                <p className="mt-3 text-[16px] leading-7 text-ink-2">{dict.lab.lead}</p>
+              </div>
+              <div className="flex items-center gap-5 font-mono text-[10.5px] text-ink-3">
+                <span className="flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 bg-signal" aria-hidden="true" />
+                  {dict.lab.legendHot}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 bg-ink" aria-hidden="true" />
+                  {dict.lab.legendCold}
+                </span>
+              </div>
             </div>
 
-            <div className="overflow-x-auto border border-zinc-800 bg-[#0d0d10]">
-              <table className="w-full text-left border-collapse">
+            <div className="mt-10">
+              <CallGraphLab dict={dict} />
+            </div>
+          </div>
+        </section>
+
+        {/* Specs */}
+        <section
+          id="specs"
+          className="scroll-mt-16 border-b border-rule lg:flex lg:min-h-screen lg:flex-col lg:justify-center"
+        >
+          <div className="shell py-20 lg:py-0">
+            <div className="measure">
+              <h2 className="heading text-[32px] text-ink sm:text-[40px]">
+                {dict.specSection.title}
+              </h2>
+              <p className="mt-4 text-[16px] leading-7 text-ink-2">{dict.specSection.lead}</p>
+            </div>
+
+            <dl className="mt-8 border-t border-ink sm:hidden">
+              {dict.specSection.rows.map((row) => (
+                <div key={row.metric} className="border-b border-rule py-4">
+                  <dt className="text-[14px] leading-6 text-ink">{row.metric}</dt>
+                  <dd className="mt-1 font-mono text-[12.5px] leading-5 text-ink">{row.value}</dd>
+                  <dd className="mt-0.5 font-mono text-[11px] leading-5 text-ink-3">
+                    {row.where}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+
+            <div className="mt-10 hidden overflow-x-auto sm:block">
+              <table className="w-full min-w-[520px] border-collapse text-left">
                 <thead>
-                  <tr className="border-b border-zinc-800 bg-zinc-950 font-mono text-xs text-zinc-300">
-                    <th className="py-4 px-5 border-r border-zinc-800">
-                      {dict.comparisonSection.columns.metric}
+                  <tr className="border-b border-ink">
+                    <th className="py-2.5 pr-4 font-mono text-[10.5px] font-normal uppercase tracking-[0.04em] text-ink-3">
+                      {dict.specSection.columns.metric}
                     </th>
-                    <th className="py-4 px-5 border-r border-zinc-800 text-emerald-400 bg-emerald-500/5">
-                      {dict.comparisonSection.columns.unpeek}
+                    <th className="py-2.5 pr-4 font-mono text-[10.5px] font-normal uppercase tracking-[0.04em] text-ink-3">
+                      {dict.specSection.columns.value}
                     </th>
-                    <th className="py-4 px-5 border-r border-zinc-800 text-zinc-400">
-                      {dict.comparisonSection.columns.legacy}
-                    </th>
-                    <th className="py-4 px-5 text-zinc-400">
-                      {dict.comparisonSection.columns.minifier}
+                    <th className="py-2.5 font-mono text-[10.5px] font-normal uppercase tracking-[0.04em] text-ink-3">
+                      {dict.specSection.columns.where}
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-800 text-sm">
-                  {dict.comparisonSection.rows.map((row, rIdx) => (
-                    <tr key={rIdx} className="hover:bg-zinc-900/40 transition-colors">
-                      <td className="py-4 px-5 font-medium text-zinc-200 border-r border-zinc-800">
-                        {row.metric}
+                <tbody>
+                  {dict.specSection.rows.map((row) => (
+                    <tr
+                      key={row.metric}
+                      className="border-b border-rule transition-colors duration-150 hover:bg-paper-2"
+                    >
+                      <td className="py-3.5 pr-4 text-[14px] leading-6 text-ink">{row.metric}</td>
+                      <td className="py-3.5 pr-4 font-mono text-[12.5px] leading-6 text-ink">
+                        {row.value}
                       </td>
-                      <td className="py-4 px-5 font-mono text-xs text-emerald-300 bg-emerald-500/5 border-r border-zinc-800 font-medium">
-                        {row.unpeek}
-                      </td>
-                      <td className="py-4 px-5 font-mono text-xs text-zinc-400 border-r border-zinc-800">
-                        {row.legacyObfuscator}
-                      </td>
-                      <td className="py-4 px-5 font-mono text-xs text-zinc-400">
-                        {row.plainMinifier}
+                      <td className="py-3.5 font-mono text-[11.5px] leading-6 text-ink-3">
+                        {row.where}
                       </td>
                     </tr>
                   ))}
@@ -370,70 +314,201 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* Full Interactive Bilingual Documentation Section */}
-        <section id="docs" className="py-20 lg:py-28 scroll-mt-16">
-          <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
-            <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-              <div className="space-y-3 max-w-[65ch]">
-                <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-zinc-100">
-                  {dict.docsHeader.title}
+        {/* Measured comparison */}
+        <section
+          id="measured"
+          className="scroll-mt-16 border-b border-rule lg:flex lg:min-h-screen lg:flex-col lg:justify-center"
+        >
+          <div className="shell py-20 lg:py-0">
+            <div className="measure">
+              <h2 className="heading text-[32px] text-ink sm:text-[40px]">
+                {dict.comparisonSection.title}
+              </h2>
+              <p className="mt-4 text-[16px] leading-7 text-ink-2">
+                {dict.comparisonSection.subtitle}
+              </p>
+            </div>
+
+            <div className="mt-12 border-t border-ink">
+              {dict.comparisonSection.rows.slice(0, 2).map((row, index) => (
+                <div key={row.metric} className="border-b border-rule py-6">
+                  <div className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-ink-3">
+                    {row.metric}
+                  </div>
+
+                  <div className="mt-4 space-y-2">
+                    <div className="flex items-center gap-3">
+                      <span className="w-[56px] shrink-0 font-mono text-[10px] text-ink-3">
+                        {dict.comparisonSection.barLabels.unpeek}
+                      </span>
+                      <div className="h-2.5 flex-1 bg-paper-3">
+                        <div
+                          className="h-full bg-signal"
+                          style={{
+                            width: `${COMPARE_SHARE[index]}%`,
+                            minWidth: "2px",
+                          }}
+                        />
+                      </div>
+                      <span className="w-[104px] shrink-0 text-right font-mono text-[11px] leading-4 text-ink sm:w-[150px]">
+                        {row.unpeek}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <span className="w-[56px] shrink-0 font-mono text-[10px] text-ink-3">
+                        {dict.comparisonSection.barLabels.legacy}
+                      </span>
+                      <div className="h-2.5 flex-1 bg-paper-3">
+                        <div className="h-full w-full bg-ink/30" />
+                      </div>
+                      <span className="w-[104px] shrink-0 text-right font-mono text-[11px] leading-4 text-ink-2 sm:w-[150px]">
+                        {row.legacyObfuscator}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <p className="mt-3 max-w-[64ch] font-mono text-[10.5px] leading-4 text-ink-3">
+              {dict.comparisonSection.scaleNote}
+            </p>
+
+            <dl className="mt-12 grid grid-cols-1 gap-x-12 gap-y-0 sm:grid-cols-3">
+              {dict.comparisonSection.rows.slice(2).map((row) => (
+                <div key={row.metric} className="border-t border-rule py-4">
+                  <dt className="font-mono text-[10.5px] uppercase tracking-[0.04em] text-ink-3">
+                    {row.metric}
+                  </dt>
+                  <dd className="mt-1.5 text-[13.5px] leading-6 text-ink">{row.unpeek}</dd>
+                  <dd className="font-mono text-[11px] leading-5 text-ink-3">
+                    {dict.comparisonSection.columns.legacy}: {row.legacyObfuscator}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+
+            <p className="mt-8 max-w-[70ch] font-mono text-[10.5px] leading-4 text-ink-3">
+              {dict.comparisonSection.note}
+            </p>
+          </div>
+        </section>
+
+        {/* Docs pointer */}
+        <section
+          id="docs"
+          className="scroll-mt-16 border-b border-rule lg:flex lg:min-h-screen lg:flex-col lg:justify-center"
+        >
+          <div className="shell py-16 lg:py-0">
+            <div className="grid grid-cols-1 gap-10 lg:grid-cols-12 lg:gap-14">
+              <div className="lg:col-span-5">
+                <div className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-ink-3">
+                  {dict.docsCta.kicker}
+                </div>
+                <h2 className="heading mt-3 text-[28px] leading-[1.1] text-ink sm:text-[34px]">
+                  {dict.docsCta.title}
                 </h2>
-                <p className="text-base text-zinc-400 leading-relaxed">
-                  {dict.docsHeader.subtitle}
+                <p className="mt-4 max-w-[46ch] text-[15px] leading-7 text-ink-2">
+                  {dict.docsCta.body}
+                </p>
+                <Link
+                  href="/docs"
+                  className="mt-7 inline-flex items-center gap-3 rounded-[3px] bg-ink px-4 py-3 font-mono text-[12px] leading-none text-paper transition-colors duration-150 hover:bg-carbon-2"
+                >
+                  {dict.docsCta.cta}
+                  <span aria-hidden="true">→</span>
+                </Link>
+              </div>
+
+              <ol className="lg:col-span-7 lg:pl-8">
+                {dict.docsSections.map((section) => (
+                  <li key={section.id} className="border-t border-rule first:border-t-0">
+                    <Link
+                      href={`/docs#doc-${section.id}`}
+                      className="group flex items-baseline gap-5 py-3.5"
+                    >
+                      <span className="tnum w-6 shrink-0 font-mono text-[10.5px] text-ink-3">
+                        {section.number}
+                      </span>
+                      <span className="flex-1 text-[14px] leading-6 text-ink transition-colors duration-150 group-hover:text-ink-2">
+                        {section.title}
+                      </span>
+                      <span className="tnum shrink-0 font-mono text-[10px] text-ink-3">
+                        {String(section.subsections.length).padStart(2, "0")}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </div>
+        </section>
+
+        {/* Install */}
+        <section
+          id="install"
+          className="scroll-mt-16 bg-carbon text-carbon-text lg:flex lg:min-h-screen lg:flex-col lg:justify-center"
+        >
+          <div className="shell py-20 lg:py-0">
+            <div className="grid grid-cols-1 gap-12 lg:grid-cols-12">
+              <div className="lg:col-span-5">
+                <h2 className="heading text-[32px] text-carbon-text sm:text-[40px]">
+                  {dict.installSection.title}
+                </h2>
+                <p className="measure mt-4 text-[15px] leading-7 text-carbon-text/65">
+                  {dict.installSection.lead}
+                </p>
+                <p className="measure mt-6 font-mono text-[10.5px] leading-4 text-carbon-text/65">
+                  {dict.installSection.note}
                 </p>
               </div>
 
-              <Link
-                href="/docs"
-                className="inline-flex items-center gap-2 px-4 py-2.5 border border-zinc-800 bg-zinc-950 hover:border-emerald-500/60 text-xs font-mono text-zinc-200 hover:text-emerald-400 transition-colors self-start md:self-auto whitespace-nowrap"
-              >
-                <FileCode size={15} weight="regular" className="text-emerald-400" />
-                <span>{dict.docsHeader.openStandaloneLabel}</span>
-                <ArrowUpRight size={14} weight="regular" />
-              </Link>
-            </div>
+              <div className="lg:col-span-7">
+                <div className="border border-carbon-rule">
+                  <div className="flex items-center justify-between gap-3 border-b border-carbon-rule px-4 py-2.5">
+                    <span className="font-mono text-[10.5px] text-carbon-text/65">postbuild</span>
+                    <button
+                      type="button"
+                      onClick={copyInstall}
+                      className="rounded-[3px] border border-carbon-rule px-2.5 py-1 font-mono text-[10.5px] text-carbon-text/70 transition-colors duration-150 hover:text-carbon-text active:scale-[0.98]"
+                    >
+                      {installCopied ? dict.hero.copiedLabel : dict.hero.copyLabel}
+                    </button>
+                  </div>
+                  <div className="px-4 py-6 sm:px-6 sm:py-8">
+                    <code className="block font-mono text-[20px] leading-tight text-carbon-text sm:text-[28px]">
+                      <span className="text-carbon-text/55">$ </span>
+                      {dict.installSection.command}
+                    </code>
+                  </div>
+                </div>
 
-            <DocsReader dict={dict} />
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                  <a
+                    href="https://github.com/Woffluon/unpeek"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center rounded-[4px] bg-carbon-text px-4 py-2.5 text-[13px] font-medium leading-none text-ink transition-opacity duration-150 hover:opacity-85"
+                  >
+                    {dict.installSection.starCta}
+                  </a>
+                  <a
+                    href="https://www.npmjs.com/package/unpeek"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center rounded-[4px] border border-carbon-rule px-4 py-2.5 text-[13px] leading-none text-carbon-text/80 transition-colors duration-150 hover:text-carbon-text"
+                  >
+                    {dict.installSection.npmCta}
+                  </a>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
       </main>
 
-      {/* Monochrome Engineering Footer */}
-      <footer className="border-t border-zinc-800 bg-[#09090b] py-10">
-        <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2 font-mono text-sm font-semibold text-zinc-100">
-              <span className="w-2 h-2 bg-emerald-500" />
-              <span>unpeek</span>
-              <span className="text-zinc-500">·</span>
-              <span className="text-xs text-zinc-400 font-normal">{dict.meta.license}</span>
-            </div>
-            <p className="text-xs text-zinc-400">{dict.footer.tagline}</p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-6 text-xs font-mono text-zinc-400">
-            <Link href="/docs" className="hover:text-emerald-400 transition-colors">
-              {dict.footer.links.docs}
-            </Link>
-            <a
-              href="https://github.com/Woffluon/unpeek"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-emerald-400 transition-colors"
-            >
-              {dict.footer.links.github}
-            </a>
-            <a
-              href="https://www.npmjs.com/package/unpeek"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-emerald-400 transition-colors"
-            >
-              {dict.footer.links.npm}
-            </a>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter dict={dict} />
     </div>
   );
 }

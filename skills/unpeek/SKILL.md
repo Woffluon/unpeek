@@ -4,7 +4,7 @@ description: Zero-config, call-graph-aware client-side JavaScript protection, an
 license: MIT
 metadata:
   author: Woffluon
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # unpeek Skill

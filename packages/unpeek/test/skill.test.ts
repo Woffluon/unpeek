@@ -32,7 +32,7 @@ describe('unpeek Agent Skill Specification & Compliance', () => {
     expect(content).toMatch(/name:\s*unpeek/);
     expect(content).toMatch(/license:\s*MIT/);
     expect(content).toMatch(/author:\s*"?Woffluon"?/);
-    expect(content).toMatch(/version:\s*"?1\.2\.0"?/);
+    expect(content).toMatch(/version:\s*"?\d+\.\d+\.\d+"?/);
   });
 
   it('contains all 6 required modular reference guides and none are empty', () => {

@@ -12,3 +12,4 @@ artifacts/
 Thumbs.db
 analizler
 *.tsbuildinfo
+.shots

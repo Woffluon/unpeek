@@ -21,19 +21,17 @@ export interface DocSection {
   subsections: DocSubsection[];
 }
 
-export interface PipelineStage {
-  step: string;
-  title: string;
-  metric: string;
-  description: string;
-  detail: string;
-}
-
 export interface ComparisonRow {
   metric: string;
   unpeek: string;
   legacyObfuscator: string;
   plainMinifier: string;
+}
+
+export interface SpecRow {
+  metric: string;
+  value: string;
+  where: string;
 }
 
 export interface Dictionary {
@@ -42,41 +40,70 @@ export interface Dictionary {
     license: string;
   };
   nav: {
-    architecture: string;
-    benchmarks: string;
+    parser: string;
+    lab: string;
+    specs: string;
     docs: string;
-    fullDocsPage: string;
     github: string;
   };
   hero: {
     eyebrow: string;
-    headlineLine1: string;
-    headlineLine2: string;
+    metaRight: string;
+    headlineTop: string;
+    headlineBottom: string;
     subtext: string;
     initCmd: string;
     copyLabel: string;
     copiedLabel: string;
-    primaryCta: string;
-    codeTabs: {
-      beforeLabel: string;
-      afterLabel: string;
-      statusBadge: string;
-      hotPathNote: string;
-      coldPathNote: string;
-    };
+    secondaryCta: string;
+    sourceCta: string;
+    npmCta: string;
+    ledger: { label: string; value: string }[];
+    tickerSource: string;
+    tickerProtected: string;
+    hotLabel: string;
+    coldLabel: string;
   };
   metricsStrip: {
-    items: {
-      value: string;
-      label: string;
-      detail: string;
-    }[];
+    note: string;
+    items: { value: string; label: string }[];
   };
-  architectureSection: {
-    eyebrow: string;
+  parserSection: {
     title: string;
-    subtitle: string;
-    stages: PipelineStage[];
+    lead: string;
+    hotTitle: string;
+    hotBody: string;
+    coldTitle: string;
+    coldBody: string;
+    stages: { step: string; title: string; detail: string }[];
+  };
+  lab: {
+    title: string;
+    lead: string;
+    codeTitle: string;
+    codeNote: string;
+    analyze: string;
+    analyzing: string;
+    reset: string;
+    protectHot: string;
+    exemptHot: string;
+    particleLoad: string;
+    fpsLabel: string;
+    hotFpsCaption: string;
+    coldFpsCaption: string;
+    disclaimer: string;
+    decisionHot: string;
+    decisionCold: string;
+    decisionCaller: string;
+    legendHot: string;
+    legendCold: string;
+    evidence: string;
+  };
+  specSection: {
+    title: string;
+    lead: string;
+    columns: { metric: string; value: string; where: string };
+    rows: SpecRow[];
   };
   comparisonSection: {
     title: string;
@@ -88,18 +115,38 @@ export interface Dictionary {
       minifier: string;
     };
     rows: ComparisonRow[];
+    note: string;
+    scaleNote: string;
+    barLabels: { unpeek: string; legacy: string };
   };
   docsHeader: {
     title: string;
     subtitle: string;
     sidebarTitle: string;
     onPageLabel: string;
-    openStandaloneLabel: string;
     backToHomeLabel: string;
+    previousLabel: string;
+    nextLabel: string;
+    stats: { sections: string; topics: string; samples: string };
   };
   docsSections: DocSection[];
+  docsCta: {
+    kicker: string;
+    title: string;
+    body: string;
+    cta: string;
+  };
+  installSection: {
+    title: string;
+    lead: string;
+    command: string;
+    starCta: string;
+    npmCta: string;
+    note: string;
+  };
   footer: {
     tagline: string;
+    license: string;
     links: {
       docs: string;
       github: string;
@@ -109,212 +156,206 @@ export interface Dictionary {
 }
 
 export const CODE_SAMPLES = {
-  before: `// src/client/telemetry-engine.ts
-export function stepPhysicsFrame(particles: Float32Array, dt: number): void {
-  // Hot path: runs at 60fps inside requestAnimationFrame
-  for (let i = 0; i < particles.length; i += 4) {
-    particles[i] += particles[i + 2] * dt;
-    particles[i + 1] += particles[i + 3] * dt;
+  source: `// license-guard.ts
+export function renderFrame(t: number) {
+  // 60fps loop, called from requestAnimationFrame
+  for (let i = 0; i < particles.length; i++) {
+    particles[i].x += lerp(a, b, t);
   }
 }
 
-export async function verifyWorkspaceLicense(token: string) {
-  const endpoint = "https://licensing.internal.acme.dev/v2/verify";
-  const secretSalt = "unpeek_prod_hmac_v2_99481a";
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "X-Workspace-Signature": secretSalt + ":" + token,
-      "Content-Type": "application/json",
-    },
-  });
-  return res.json();
+export function validateLicense(key: string) {
+  const salt = "uNp33k_v4";
+  const endpoint = "https://api.unpeek.dev/v1/license";
+  return check(key, salt, endpoint);
 }`,
-  after: `// dist/assets/telemetry-engine.js (Protected by unpeek --seed 0x7f4a2c)
-const _u0x3d = [
-  [119,88,69,89,72,21,84,21,67,64,74,69,88,72,72,71,78,23,66,71],
-  [92,71,89,78,78,66,118,89,91,70,77,118,65,68,72,74,118,95,25],
-  [121,102,110,93,20,126,70,89,66,88,89,72,74,78,20,122,66,78,71]
-];
-const _u0x9c = new Map();
-function _u0x1f(i, k) {
-  if (_u0x9c.has(i)) return _u0x9c.get(i);
-  const b = _u0x3d[i];
+  protected: `// license-guard.js, protected output
+const _v = [[119,88,69,89,72,21,84],[92,71,89,78,78,66,118]];
+const _m = new Map();
+function _d(i, k) {
+  if (_m.has(i)) return _m.get(i);
+  const b = _v[i];
   let s = "";
   for (let j = 0; j < b.length; j++) s += String.fromCharCode(b[j] ^ ((k + j * 17) & 0xff));
-  _u0x9c.set(i, s);
+  _m.set(i, s);
   return s;
 }
 
-// [unpeek] Hot-path exempted via call-graph analysis (0.0% CPU overhead)
-export function stepPhysicsFrame(particles, dt) {
-  for (let i = 0; i < particles.length; i += 4) {
-    particles[i] += particles[i + 2] * dt;
-    particles[i + 1] += particles[i + 3] * dt;
+// hot path exempted by the call graph
+export function renderFrame(t) {
+  for (let i = 0; i < particles.length; i++) {
+    particles[i].x += lerp(a, b, t);
   }
 }
 
-// [unpeek] Cold-path protected: O(1) lazy vault + lexical mangling + FNV-1a guard
-export async function verifyWorkspaceLicense(_0x4a1) {
-  const _0x8b2 = _u0x1f(0, 0x1b);
-  const _0x9c4 = _u0x1f(1, 0x1b);
-  const _0x2e1 = await fetch(_0x8b2, {
-    method: _u0x1f(2, 0x1b),
-    headers: {
-      [_u0x1f(3, 0x1b)]: _0x9c4 + ":" + _0x4a1,
-      "Content-Type": "application/json",
-    },
-  });
-  return _0x2e1.json();
+// cold path protected: O(1) vault + mangling + FNV-1a
+export function validateLicense(_0x4a1) {
+  const _0x8b2 = _d(1, 0x1b);
+  const _0x9c4 = _d(2, 0x1b);
+  return check(_0x4a1, _0x9c4, _0x8b2);
 }`,
 };
 
 export const DICTIONARY: Record<Locale, Dictionary> = {
   en: {
     meta: {
-      version: "v1.2.0",
-      license: "MIT Licensed",
+      version: "v1.3.0",
+      license: "MIT License",
     },
     nav: {
-      architecture: "Architecture",
-      benchmarks: "Benchmarks",
-      docs: "Documentation",
-      fullDocsPage: "Full Reference",
+      parser: "Parser",
+      lab: "Lab",
+      specs: "Specs",
+      docs: "Docs",
       github: "GitHub",
     },
     hero: {
-      eyebrow: "AST-GUIDED CLIENT JS PROTECTION",
-      headlineLine1: "Harden production bundles.",
-      headlineLine2: "Never tax the hot path.",
+      eyebrow: "CALL-GRAPH AWARE JS PROTECTION",
+      metaRight: "v1.2.0 / MIT / npm",
+      headlineTop: "Nothing to peek at.",
+      headlineBottom: "Nothing to slow down.",
       subtext:
-        "Zero-config JavaScript protection with call-graph hot-path exemption, O(1) string vaults, and private source-map extraction.",
+        "unpeek reads the call graph before it rewrites a token. Cold paths go into an O(1) string vault. Hot paths, the frame loops and everything they call, keep their original source.",
       initCmd: "npx unpeek init",
       copyLabel: "Copy",
       copiedLabel: "Copied",
-      primaryCta: "Read Documentation",
-      codeTabs: {
-        beforeLabel: "Input (TypeScript / JS)",
-        afterLabel: "Protected Output (unpeek)",
-        statusBadge: "Hot-Path Exempted · <2% CPU",
-        hotPathNote: "60fps loop detected & skipped automatically",
-        coldPathNote: "Strings encrypted in O(1) lazy cache + FNV-1a shield",
-      },
+      secondaryCta: "Read the spec",
+      sourceCta: "Source",
+      npmCta: "npm",
+      ledger: [
+        { label: "hot path", value: "left byte for byte" },
+        { label: "cold path", value: "string vault, O(1) lookup" },
+        { label: "integrity", value: "FNV-1a, 32 bit" },
+      ],
+      tickerSource: "source",
+      tickerProtected: "protected",
+      hotLabel: "HOT PATH / EXEMPT",
+      coldLabel: "COLD PATH / VAULTED",
     },
     metricsStrip: {
+      note: "Default profile, measured by the benchmark suite in packages/unpeek/benchmarks.",
       items: [
-        {
-          value: "< 2%",
-          label: "Hot-Path CPU Overhead",
-          detail: "Loops, rAF callbacks, and Canvas/WebGL renderers are automatically exempted via static call-graph analysis.",
-        },
-        {
-          value: "< 15%",
-          label: "Gzip Bundle Size Delta",
-          detail: "Compact byte tables and shared O(1) memoized string decoders keep network transfer budgets predictable.",
-        },
-        {
-          value: "0 LOC",
-          label: "Application Code Changes",
-          detail: "Drop-in postbuild CLI or unplugin integration for Next.js, Vite, Webpack, and Vanilla JS outputs.",
-        },
-        {
-          value: "100%",
-          label: "Source Map Isolation",
-          detail: "Extracts .map files into .unpeek-maps/ and strips sourceMappingURL comments from public assets.",
-        },
+        { value: "< 2%", label: "Hot-path CPU overhead" },
+        { value: "< 15%", label: "Gzip bundle delta" },
+        { value: "0 LOC", label: "Application changes" },
+        { value: "100%", label: "Source maps isolated" },
       ],
     },
-    architectureSection: {
-      eyebrow: "COMPILER PIPELINE",
-      title: "Engineered around runtime budgets, not blind AST bloat.",
-      subtitle:
-        "Traditional obfuscators wrap every expression in recursive state machines, tanking frame rates by 300-800%. unpeek models your call graph first and protects only what stays off the hot path.",
+    parserSection: {
+      title: "The parser sees two kinds of code.",
+      lead: "unpeek builds a call graph before it rewrites a single token. Functions that run inside a frame are marked hot and left alone. Everything else goes to the vault.",
+      hotTitle: "Hot path",
+      hotBody:
+        "Any function with a loop, a requestAnimationFrame callback, or a high-frequency timer. Hot status propagates to every callee in the chain, so a helper called from a render loop stays untouched too.",
+      coldTitle: "Cold path",
+      coldBody:
+        "License checks, telemetry, API clients. String literals move to an O(1) lookup, local bindings get renamed, and the entry chunk receives a 32-bit FNV-1a integrity check.",
       stages: [
-        {
-          step: "STAGE 01",
-          title: "Acorn AST & Call-Graph Construction",
-          metric: "ECMA-2022 Module Parse",
-          description:
-            "Parses emitted client chunks into an Abstract Syntax Tree and builds an intra-module call graph mapping every function declaration, arrow expression, and method invocation.",
-          detail: "Identifies entry points, exported symbols, and lexical scopes before touching a single token.",
-        },
-        {
-          step: "STAGE 02",
-          title: "Transitive Hot-Path Exemption",
-          metric: "0% Loop Penalty",
-          description:
-            "Detects functions containing tight loops (for, while, do-while), requestAnimationFrame hooks, and high-frequency timers, then propagates hot status transitively to their callees.",
-          detail: "Hot functions and the helpers they call are left untouched so V8/JavaScriptCore JIT inline caches remain optimal.",
-        },
-        {
-          step: "STAGE 03",
-          title: "Polymorphic String Vault & Lexical Mangling",
-          metric: "O(1) Memoized Decode",
-          description:
-            "Extracts cold-path string literals into a polymorphic XOR/ADD/ROL byte array keyed by a per-build seed. First access decodes and caches into a Map; subsequent reads are O(1).",
-          detail: "Simultaneously renames cold-path local bindings and parameters without breaking exported APIs or object properties.",
-        },
-        {
-          step: "STAGE 04",
-          title: "Source Map Vault & FNV-1a Integrity Shield",
-          metric: "32-bit FNV-1a Checksum",
-          description:
-            "Relocates .js.map files into a private .unpeek-maps/ vault, strips //# sourceMappingURL directives, and injects a lightweight FNV-1a self-checksum and DevTools timing detector.",
-          detail: "Supports gradual degradation or passive telemetry modes when beautification or tampering is detected.",
-        },
+        { step: "01", title: "Parse", detail: "Acorn builds an AST for each client chunk. Server output is never opened." },
+        { step: "02", title: "Graph", detail: "Calls and references become an intra-module call graph." },
+        { step: "03", title: "Mark", detail: "Loops and rAF callbacks flag hot. Callees inherit the flag." },
+        { step: "04", title: "Transform", detail: "Only cold functions are rewritten. Hot functions keep their original source." },
+        { step: "05", title: "Seal", detail: "Source maps move to .unpeek-maps/. The public bundle loses the mapping URL." },
+      ],
+    },
+    lab: {
+      title: "Run the call graph yourself.",
+      lead: "Same source, same seed. Turn the exemption off and watch the frame rate answer.",
+      codeTitle: "license-guard.ts",
+      codeNote: "Panels: hot lines stay as written.",
+      analyze: "Analyze bundle",
+      analyzing: "Scanning",
+      reset: "Reset",
+      protectHot: "Protect hot path",
+      exemptHot: "Exempt hot path",
+      particleLoad: "Particle load",
+      fpsLabel: "Frames per second",
+      hotFpsCaption: "Exempt: the loop runs as written.",
+      coldFpsCaption: "Protected: every iteration pays the vault.",
+      disclaimer:
+        "Demo workload modeled on the project benchmark profile. Not a device benchmark.",
+      decisionHot: "Loop found. Flagged hot, then propagated to lerp and stepParticles.",
+      decisionCold: "No loop, no rAF. Cold path, so literals and bindings are rewritten.",
+      decisionCaller: "Called from a hot function. Inherits the exemption.",
+      legendHot: "Exempt",
+      legendCold: "Protected",
+      evidence: "Selection",
+    },
+    specSection: {
+      title: "What ships, and where it lands.",
+      lead: "Every number below comes from the benchmark suite or the transform pipeline in this repository. Nothing is rounded up for the page.",
+      columns: { metric: "Dimension", value: "Default profile", where: "Source" },
+      rows: [
+        { metric: "Hot-path CPU overhead", value: "under 2%", where: "benchmarks/overhead.bench.ts" },
+        { metric: "Gzip bundle delta", value: "+4% to +14%", where: "src/cli/protect.ts" },
+        { metric: "Cold function transform", value: "string vault + mangling", where: "src/ast" },
+        { metric: "Source map handling", value: "moved to .unpeek-maps/", where: "src/bundler/sourcemap-vault.ts" },
+        { metric: "Runtime shield", value: "FNV-1a, 32-bit", where: "src/runtime" },
+        { metric: "Client bundle scope", value: "static chunks only", where: "src/bundler/detector.ts" },
       ],
     },
     comparisonSection: {
-      title: "Measured against legacy obfuscation",
-      subtitle:
-        "Verified across production Next.js and Vite bundles using packages/unpeek/benchmarks/run.ts.",
+      title: "Measured against legacy obfuscation.",
+      subtitle: "The tradeoff is not speed against secrecy. It is where the secrecy is spent.",
       columns: {
-        metric: "Engineering Dimension",
-        unpeek: "unpeek (Default Profile)",
-        legacy: "Legacy Obfuscator (High Preset)",
-        minifier: "Standard Minifier (Terser / SWC)",
+        metric: "Dimension",
+        unpeek: "unpeek",
+        legacy: "Legacy obfuscator",
+        minifier: "Minifier only",
       },
       rows: [
         {
-          metric: "Hot-Path Loop / Render CPU Overhead",
-          unpeek: "< 2% (Auto-exempted via Call Graph)",
-          legacyObfuscator: "+300% to +850% (JIT deoptimization)",
-          plainMinifier: "0% (Baseline)",
+          metric: "Hot-path CPU",
+          unpeek: "< 2%, call-graph exempt",
+          legacyObfuscator: "+300% to +850%",
+          plainMinifier: "0% baseline",
         },
         {
-          metric: "Gzipped Bundle Size Delta",
-          unpeek: "+4% to +14% (<15% strict budget)",
-          legacyObfuscator: "+120% to +340% (Control-flow bloat)",
-          plainMinifier: "0% (Baseline)",
+          metric: "Gzip delta",
+          unpeek: "+4% to +14%",
+          legacyObfuscator: "+120% to +340%",
+          plainMinifier: "0% baseline",
         },
         {
-          metric: "String Literal Decoding Complexity",
-          unpeek: "O(1) Lazy Map Memoization",
-          legacyObfuscator: "O(N) Repeated RC4 / Base64 per call",
-          plainMinifier: "Plaintext strings in bundle",
+          metric: "String decode",
+          unpeek: "O(1) memoized map",
+          legacyObfuscator: "O(N) per call",
+          plainMinifier: "Plaintext in bundle",
         },
         {
-          metric: "Public Source Map Leak Prevention",
-          unpeek: "Automated .unpeek-maps/ Vault + URL Strip",
-          legacyObfuscator: "Manual configuration required",
-          plainMinifier: "Often deployed alongside chunks by default",
+          metric: "Source maps",
+          unpeek: "Vaulted, URL stripped",
+          legacyObfuscator: "Manual",
+          plainMinifier: "Shipped by default",
         },
         {
-          metric: "Runtime Self-Integrity Verification",
-          unpeek: "32-bit FNV-1a Checksum + Gradual Deterrent",
-          legacyObfuscator: "Heavy regex self-defending (breaks strict CSP)",
+          metric: "Integrity check",
+          unpeek: "32-bit FNV-1a",
+          legacyObfuscator: "Regex self-defense",
           plainMinifier: "None",
         },
       ],
+      note: "Legacy figures are published ranges for control-flow flattening presets. unpeek figures come from this repository's benchmark run.",
+      scaleNote:
+        "Both bars share one scale per row: the unpeek bar is the measured figure drawn against the legacy upper bound.",
+      barLabels: { unpeek: "unpeek", legacy: "legacy" },
     },
     docsHeader: {
-      title: "Technical Documentation",
+      title: "Documentation",
       subtitle:
-        "Complete reference for CLI workflows, framework integrations, hot-path heuristics, source map vaults, programmatic APIs, and AI agent skills.",
-      sidebarTitle: "Documentation Sections",
-      onPageLabel: "Section Reference",
-      openStandaloneLabel: "Open Dedicated /docs View",
-      backToHomeLabel: "Back to Launch Overview",
+        "CLI, bundler adapters, hot-path heuristics, the source map vault, the programmatic API, the security model, and the failure modes you will actually hit.",
+      sidebarTitle: "Sections",
+      onPageLabel: "Reference",
+      backToHomeLabel: "Back to overview",
+      previousLabel: "Previous",
+      nextLabel: "Next",
+      stats: { sections: "sections", topics: "topics", samples: "code samples" },
+    },
+    docsCta: {
+      kicker: "Reference",
+      title: "The full manual lives on its own page.",
+      body: "CLI flags, bundler adapters, hot-path heuristics, the source map vault, the programmatic API and the security model. Every section is written against this repository.",
+      cta: "Open the documentation",
     },
     docsSections: [
       {
@@ -675,161 +716,268 @@ npx skills add Woffluon/unpeek --agent claude-code codex cursor gemini-cli githu
           },
         ],
       },
+      {
+        id: "troubleshooting",
+        number: "07",
+        title: "Troubleshooting & Failure Modes",
+        summary:
+          "The symptoms that show up after a protected deploy, what causes them, and the first command to run for each.",
+        subsections: [
+          {
+            title: "A hydrated page stops matching the server markup",
+            body: [
+              "unpeek only opens client output directories: `.next/static/chunks`, `dist/assets`, and `build/static/js`. Server bundles under `.next/server` are never parsed, so React server rendering stays untouched.",
+              "If a mismatch appears anyway, confirm the protected directory with `--out-dir` and check that it points at the client output rather than the project root. A wrong `--out-dir` is the only way protection reaches a server bundle.",
+            ],
+            codeBlocks: [
+              {
+                label: "Terminal: Point the CLI at the client output",
+                language: "bash",
+                code: `# Explicit target, passive shield, deterministic seed
+unpeek protect --out-dir .next/static/chunks --passive --seed 0x7f4a2c`,
+              },
+            ],
+          },
+          {
+            title: "Production stack traces point at _0x4a1",
+            body: [
+              "Source maps are moved into `.unpeek-maps/` and the `//# sourceMappingURL=` comment is stripped from the public bundle, so the browser has nothing to resolve. Upload the vault to your error tracker instead of the public directory.",
+            ],
+            bullets: [
+              "Point the Sentry or Datadog upload step at `.unpeek-maps/`, never at the public output.",
+              "Keep `.unpeek-maps/` in `.gitignore`. `unpeek init` appends the entry for you.",
+              "Use `--no-maps` when the vault is not needed and the maps should be deleted outright.",
+            ],
+          },
+          {
+            title: "A slow function was not marked hot",
+            body: [
+              "Hot status comes from loops, `requestAnimationFrame` callbacks, and high-frequency timers, and it propagates to every callee in the chain. Work driven by a Web Worker, a virtualized list, or a layout effect without a loop is not part of that graph.",
+              "That is safe but not free: the function still behaves correctly, it just pays the vault lookup. If a profile shows the cost, move the work behind a detected frame loop or raise `--min-string-length` so fewer literals enter the vault.",
+            ],
+          },
+        ],
+      },
+      {
+        id: "security-model",
+        number: "08",
+        title: "Security Model & Limits",
+        summary:
+          "What the transform buys you, what it does not, and how to reason about the runtime shield.",
+        subsections: [
+          {
+            title: "Threat model",
+            body: [
+              "unpeek raises the cost of reading a client bundle. String literals leave the source, local bindings are renamed with a seeded polymorphic pass, and cold control flow is rewritten so a reader cannot follow a license check or an internal endpoint straight out of the shipped file.",
+              "It is not a cryptographic boundary. Any code the browser can execute can be executed by anyone who receives it. Treat the output as a deterrent against casual inspection and scraping, not as a secret store.",
+            ],
+            bullets: [
+              "Do not ship API keys, signing salts, or private tokens in client code. The vault relocates them, it does not protect them.",
+              "Keep authorization decisions on the server. A protected bundle is still not a trusted place for them.",
+              "Pin `--seed` in CI so repeated builds produce identical output and diffs stay reviewable.",
+            ],
+          },
+          {
+            title: "Runtime shield",
+            body: [
+              "The injected shield hashes its own source with 32-bit FNV-1a over `Function.prototype.toString()`. Pretty-printing, patching, or wrapping the protected function changes the hash and trips the deterrent.",
+              "`--passive` logs and continues. The default `gradual` mode escalates in steps instead of throwing on the first mismatch, so one false positive does not take down a production session.",
+            ],
+            codeBlocks: [
+              {
+                label: "Terminal: Shield modes",
+                language: "bash",
+                code: `# Gradual deterrent (default)
+unpeek protect --seed 0x7f4a2c
+
+# Passive deterrent for staged rollouts
+unpeek protect --passive
+
+# No shield at all
+unpeek protect --no-shield`,
+              },
+            ],
+          },
+        ],
+      },
     ],
+    installSection: {
+      title: "One line in postbuild.",
+      lead: "unpeek reads the framework, finds the client output, and protects it. Server bundles stay readable.",
+      command: "npx unpeek init",
+      starCta: "Star on GitHub",
+      npmCta: "View on npm",
+      note: "No config file. No wrapper. Remove the postbuild line and the next build ships untouched.",
+    },
     footer: {
-      tagline: "Built with monochrome engineering discipline. Open-source under the MIT License.",
+      tagline: "Client-side protection with a frame budget.",
+      license: "MIT License",
       links: {
-        docs: "Documentation",
-        github: "GitHub Repository",
-        npm: "NPM Package",
+        docs: "Docs",
+        github: "GitHub",
+        npm: "npm",
       },
     },
   },
   tr: {
     meta: {
-      version: "v1.2.0",
-      license: "MIT Lisanslı",
+      version: "v1.3.0",
+      license: "MIT Lisansı",
     },
     nav: {
-      architecture: "Mimari",
-      benchmarks: "Karşılaştırma",
-      docs: "Dokümantasyon",
-      fullDocsPage: "Tam Referans",
+      parser: "Parser",
+      lab: "Laboratuvar",
+      specs: "Spesifikasyon",
+      docs: "Dokümanlar",
       github: "GitHub",
     },
     hero: {
-      eyebrow: "AST DESTEKLİ İSTEMCİ JS KORUMASI",
-      headlineLine1: "İstemci kodunu zırhlayın.",
-      headlineLine2: "Hot-path hızından ödün vermeyin.",
+      eyebrow: "ÇAĞRI GRAFİĞİ FARKINDALIKLI JS KORUMASI",
+      metaRight: "v1.2.0 / MIT / npm",
+      headlineTop: "Bakacak bir şey yok.",
+      headlineBottom: "Yavaşlayacak bir şey yok.",
       subtext:
-        "Call-graph hot-path muafiyeti, O(1) string kasası ve gizli source-map ayrıştırmasıyla sıfır ayar gerektiren JavaScript koruması.",
+        "unpeek tek bir token yazmadan önce çağrı grafiğini okur. Soğuk yollar O(1) string kasasına girer. Sıcak yollar, kare döngüleri ve çağırdıkları her şey, özgün kaynağını korur.",
       initCmd: "npx unpeek init",
       copyLabel: "Kopyala",
       copiedLabel: "Kopyalandı",
-      primaryCta: "Dokümantasyonu Oku",
-      codeTabs: {
-        beforeLabel: "Girdi (TypeScript / JS)",
-        afterLabel: "Korunmuş Çıktı (unpeek)",
-        statusBadge: "Hot-Path Muaf · <%2 CPU",
-        hotPathNote: "60fps döngüsü algılandı ve otomatik muaf tutuldu",
-        coldPathNote: "String'ler O(1) önbellekli kasada şifrelendi + FNV-1a kalkanı",
-      },
+      secondaryCta: "Spesifikasyonu oku",
+      sourceCta: "Kaynak",
+      npmCta: "npm",
+      ledger: [
+        { label: "sıcak yol", value: "bayt bayt olduğu gibi" },
+        { label: "soğuk yol", value: "string kasası, O(1) arama" },
+        { label: "bütünlük", value: "FNV-1a, 32 bit" },
+      ],
+      tickerSource: "kaynak",
+      tickerProtected: "korumalı",
+      hotLabel: "SICAK YOL / MUAF",
+      coldLabel: "SOĞUK YOL / KASADA",
     },
     metricsStrip: {
+      note: "Varsayılan profil, packages/unpeek/benchmarks altındaki ölçüm paketiyle alındı.",
       items: [
-        {
-          value: "< %2",
-          label: "Hot-Path CPU Ek Yükü",
-          detail: "Döngüler, rAF çağrıları ve Canvas/WebGL çizim fonksiyonları statik call-graph analiziyle otomatik olarak muaf tutulur.",
-        },
-        {
-          value: "< %15",
-          label: "Gzip Paket Boyutu Farkı",
-          detail: "Kompakt bayt tabloları ve paylaşımlı O(1) önbellekli string çözücüler ağ transfer bütçesini korur.",
-        },
-        {
-          value: "0 Satır",
-          label: "Uygulama Kodu Değişikliği",
-          detail: "Next.js, Vite, Webpack ve Vanilla JS çıktıları için sıfır ayarlı postbuild CLI veya unplugin entegrasyonu.",
-        },
-        {
-          value: "%100",
-          label: "Source Map İzolasyonu",
-          detail: ".map dosyalarını .unpeek-maps/ kasasına taşır ve genel (public) dosyalardaki sourceMappingURL satırlarını temizler.",
-        },
+        { value: "%2'den az", label: "Sıcak yol CPU maliyeti" },
+        { value: "%15'ten az", label: "Gzip paket artışı" },
+        { value: "0 satır", label: "Uygulama kodu değişikliği" },
+        { value: "%100", label: "Kaynak haritası izolasyonu" },
       ],
     },
-    architectureSection: {
-      eyebrow: "DERLEYİCİ HATTI",
-      title: "Körlemesine AST şişirmesi değil, çalışma zamanı bütçesi odaklı mühendislik.",
-      subtitle:
-        "Geleneksel obfuscator araçları her ifadeyi karmaşık durum makinelerine sararak kare hızlarını %300-%800 düşürür. unpeek önce çağrı grafiğinizi (call-graph) modeller ve yalnızca hot-path dışındaki kritik mantığı şifreler.",
+    parserSection: {
+      title: "Parser iki tür kod görür.",
+      lead: "unpeek tek bir token yazmadan önce çağrı grafiğini kurar. Kare içinde çalışan fonksiyonlar sıcak işaretlenir ve olduğu gibi bırakılır. Geri kalanı kasaya girer.",
+      hotTitle: "Sıcak yol",
+      hotBody:
+        "Döngü içeren, requestAnimationFrame geri çağrısı olan veya yüksek frekanslı zamanlayıcı kullanan her fonksiyon. Sıcak durumu zincirdeki tüm çağrılanlara geçer, yani render döngüsünden çağrılan yardımcı da korunmaz.",
+      coldTitle: "Soğuk yol",
+      coldBody:
+        "Lisans kontrolleri, telemetri, API istemcileri. String sabitleri O(1) aramaya taşınır, yerel bağlar yeniden adlandırılır ve giriş paketine 32 bit FNV-1a bütünlük kontrolü eklenir.",
       stages: [
-        {
-          step: "AŞAMA 01",
-          title: "Acorn AST & Çağrı Grafiği (Call-Graph) İnşası",
-          metric: "ECMA-2022 Modül Analizi",
-          description:
-            "Derlenmiş istemci paketlerini Soyut Sözdizimi Ağacına (AST) dönüştürür ve her fonksiyon tanımını, ok fonksiyonunu ve çağrı ilişkisini haritalayan modül içi çağrı grafiğini çıkarır.",
-          detail: "Tek bir sembole dokunmadan önce dışa aktarılan (export) API'leri ve leksikal kapsamları belirler.",
-        },
-        {
-          step: "AŞAMA 02",
-          title: "Geçişken (Transitive) Hot-Path Muafiyeti",
-          metric: "%0 Döngü Cezası",
-          description:
-            "Yoğun döngüler (for, while, do-while), requestAnimationFrame kancaları ve yüksek frekanslı zamanlayıcılar içeren fonksiyonları tespit eder; ardından bu fonksiyonların çağırdığı alt yardımcıları da geçişken olarak muaf işaretler.",
-          detail: "Hot fonksiyonlar ve yardımcıları değiştirilmez; böylece V8/JavaScriptCore JIT inline önbellekleri tam hızda çalışır.",
-        },
-        {
-          step: "AŞAMA 03",
-          title: "Polimorfik String Kasası & Leksikal Karıştırma",
-          metric: "O(1) Önbellekli Çözümleme",
-          description:
-            "Cold-path içindeki string sabitlerini derleme tohumu (seed) ile anahtarlanmış polimorfik XOR bayt dizilerine dönüştürür. İlk erişimde çözülen metin Map içine kaydedilir; sonraki tüm okumalar O(1) sürede döner.",
-          detail: "Aynı anda dış API'leri bozmadan yerel değişken ve parametre isimlerini anlamsız onaltılık sembollerle yeniden adlandırır.",
-        },
-        {
-          step: "AŞAMA 04",
-          title: "Source Map Kasası & FNV-1a Bütünlük Kalkanı",
-          metric: "32-bit FNV-1a Özeti",
-          description:
-            ".js.map dosyalarını gizli .unpeek-maps/ klasörüne taşır, //# sourceMappingURL yorumlarını siler ve giriş paketlerine hafif bir FNV-1a öz-doğrulama ile DevTools zamanlama kalkanı enjekte eder.",
-          detail: "Kodun güzelleştirilmesi (beautify) veya değiştirilmesi algılandığında kademeli yavaşlatma (gradual) veya pasif telemetri uygular.",
-        },
+        { step: "01", title: "Ayrıştır", detail: "Acorn her istemci paketi için AST kurar. Sunucu çıktısı hiç açılmaz." },
+        { step: "02", title: "Graf", detail: "Çağrılar ve referanslar modül içi bir çağrı grafiğine dönüşür." },
+        { step: "03", title: "İşaretle", detail: "Döngüler ve rAF geri çağrıları sıcak işaretler. Çağrılanlar bu işareti devralır." },
+        { step: "04", title: "Dönüştür", detail: "Yalnızca soğuk fonksiyonlar yeniden yazılır. Sıcak fonksiyonlar özgün kaynağını korur." },
+        { step: "05", title: "Mühürle", detail: "Kaynak haritaları .unpeek-maps/ içine taşınır. Genel pakette eşleme adresi kalmaz." },
+      ],
+    },
+    lab: {
+      title: "Çağrı grafiğini kendiniz çalıştırın.",
+      lead: "Aynı kaynak, aynı tohum. Muafiyeti kapatın ve kare hızının nasıl tepki verdiğini görün.",
+      codeTitle: "license-guard.ts",
+      codeNote: "Sıcak satırlar yazıldığı gibi kalır.",
+      analyze: "Paketi analiz et",
+      analyzing: "Taranıyor",
+      reset: "Sıfırla",
+      protectHot: "Sıcak yolu koru",
+      exemptHot: "Sıcak yolu muaf tut",
+      particleLoad: "Parçacık yükü",
+      fpsLabel: "Saniyedeki kare",
+      hotFpsCaption: "Muaf: döngü yazıldığı gibi çalışır.",
+      coldFpsCaption: "Korumalı: her yineleme kasanın bedelini öder.",
+      disclaimer:
+        "Gösterim yükü proje ölçüm profiline göre modellendi. Cihaz ölçümü değildir.",
+      decisionHot: "Döngü bulundu. Sıcak işaretlendi, ardından lerp ve stepParticles fonksiyonlarına geçti.",
+      decisionCold: "Döngü yok, rAF yok. Soğuk yol, bu yüzden sabitler ve bağlar yeniden yazılır.",
+      decisionCaller: "Sıcak bir fonksiyondan çağrılıyor. Muafiyeti devralır.",
+      legendHot: "Muaf",
+      legendCold: "Korumalı",
+      evidence: "Seçim",
+    },
+    specSection: {
+      title: "Neyin gönderildiği ve nereye indiği.",
+      lead: "Aşağıdaki her değer bu depodaki ölçüm paketinden veya dönüşüm hattından gelir. Sayfa için yukarı yuvarlanmış tek bir sayı yok.",
+      columns: { metric: "Boyut", value: "Varsayılan profil", where: "Kaynak" },
+      rows: [
+        { metric: "Sıcak yol CPU maliyeti", value: "%2 altında", where: "benchmarks/overhead.bench.ts" },
+        { metric: "Gzip paket artışı", value: "%4 ile %14 arası", where: "src/cli/protect.ts" },
+        { metric: "Soğuk fonksiyon dönüşümü", value: "string kasası + mangling", where: "src/ast" },
+        { metric: "Kaynak haritası işlemi", value: ".unpeek-maps/ içine taşınır", where: "src/bundler/sourcemap-vault.ts" },
+        { metric: "Çalışma zamanı kalkanı", value: "FNV-1a, 32 bit", where: "src/runtime" },
+        { metric: "İstemci paketi kapsamı", value: "yalnızca statik paketler", where: "src/bundler/detector.ts" },
       ],
     },
     comparisonSection: {
-      title: "Geleneksel obfuscator araçlarıyla ölçülmüş karşılaştırma",
-      subtitle:
-        "packages/unpeek/benchmarks/run.ts kullanılarak gerçek Next.js ve Vite üretim paketleri üzerinde doğrulanmıştır.",
+      title: "Eski obfuscation ile ölçülmüş karşılaştırma.",
+      subtitle: "Tradeoff hız ile gizlilik arasında değil. Gizliliğin nerede harcandığında.",
       columns: {
-        metric: "Mühendislik Boyutu",
-        unpeek: "unpeek (Varsayılan Profil)",
-        legacy: "Geleneksel Obfuscator (Yüksek Preset)",
-        minifier: "Standart Minifier (Terser / SWC)",
+        metric: "Boyut",
+        unpeek: "unpeek",
+        legacy: "Eski obfuscator",
+        minifier: "Sadece minifier",
       },
       rows: [
         {
-          metric: "Hot-Path Döngü / Çizim CPU Ek Yükü",
-          unpeek: "< %2 (Call-Graph ile otomatik muaf)",
-          legacyObfuscator: "+%300 ila +%850 (JIT optimizasyon kaybı)",
-          plainMinifier: "%0 (Referans)",
+          metric: "Sıcak yol CPU",
+          unpeek: "%2 altı, çağrı grafiği muaf",
+          legacyObfuscator: "%300 ile %850 arası",
+          plainMinifier: "%0 taban",
         },
         {
-          metric: "Gzip Paket Boyutu Artışı",
-          unpeek: "+%4 ila +%14 (<%15 sıkı bütçe)",
-          legacyObfuscator: "+%120 ila +%340 (Kontrol akışı şişmesi)",
-          plainMinifier: "%0 (Referans)",
+          metric: "Gzip artışı",
+          unpeek: "%4 ile %14 arası",
+          legacyObfuscator: "%120 ile %340 arası",
+          plainMinifier: "%0 taban",
         },
         {
-          metric: "String Sabiti Çözümleme Karmaşıklığı",
-          unpeek: "O(1) Lazy Map Önbellekleme",
-          legacyObfuscator: "Her çağrıda O(N) tekrarlı RC4 / Base64",
-          plainMinifier: "Pakette açık metin (plaintext)",
+          metric: "String çözümü",
+          unpeek: "O(1) önbellekli map",
+          legacyObfuscator: "Her çağrıda O(N)",
+          plainMinifier: "Pakette düz metin",
         },
         {
-          metric: "Açık Source Map Sızıntısı Önleme",
-          unpeek: "Otomatik .unpeek-maps/ Kasası + URL Silme",
-          legacyObfuscator: "Manuel yapılandırma gerektirir",
-          plainMinifier: "Genellikle üretim ortamına yanlışlıkla yüklenir",
+          metric: "Kaynak haritaları",
+          unpeek: "Kasada, adres silinmiş",
+          legacyObfuscator: "Elle yapılandırma",
+          plainMinifier: "Varsayılan olarak genel",
         },
         {
-          metric: "Çalışma Zamanı Öz-Bütünlük Doğrulaması",
-          unpeek: "32-bit FNV-1a Özeti + Kademeli Caydırıcı",
-          legacyObfuscator: "Ağır regex self-defending (CSP politikalarını bozar)",
+          metric: "Bütünlük kontrolü",
+          unpeek: "32 bit FNV-1a",
+          legacyObfuscator: "Regex savunması",
           plainMinifier: "Yok",
         },
       ],
+      note: "Eski obfuscator değerleri kontrol akışı düzleştirme profilleri için yayımlanmış aralıklardır. unpeek değerleri bu depodaki ölçüm koşusundan gelir.",
+      scaleNote:
+        "Her satırda iki çubuk aynı ölçeği paylaşır: unpeek çubuğu, eski obfuscator üst sınırına göre çizilmiş ölçülmüş değerdir.",
+      barLabels: { unpeek: "unpeek", legacy: "eski obf." },
     },
     docsHeader: {
-      title: "Teknik Dokümantasyon",
+      title: "Dokümantasyon",
       subtitle:
-        "CLI iş akışları, framework entegrasyonları, hot-path sezgiselleri, source map kasası, programatik API'ler ve AI ajan kurulumu için eksiksiz kılavuz.",
-      sidebarTitle: "Dokümantasyon Bölümleri",
-      onPageLabel: "Bölüm Referansı",
-      openStandaloneLabel: "Tam Sayfa /docs Görünümünü Aç",
-      backToHomeLabel: "Lansman Sayfasına Dön",
+        "CLI, bundler adaptörleri, sıcak yol sezgileri, kaynak haritası kasası, programatik API, güvenlik modeli ve gerçekte karşılaşacağınız hata modları.",
+      sidebarTitle: "Bölümler",
+      onPageLabel: "Referans",
+      backToHomeLabel: "Genel bakışa dön",
+      previousLabel: "Önceki",
+      nextLabel: "Sonraki",
+      stats: { sections: "bölüm", topics: "konu", samples: "kod örneği" },
+    },
+    docsCta: {
+      kicker: "Referans",
+      title: "Tam kılavuz kendi sayfasında.",
+      body: "CLI bayrakları, bundler adaptörleri, sıcak yol sezgileri, kaynak haritası kasası, programatik API ve güvenlik modeli. Her bölüm bu depodaki koda göre yazıldı.",
+      cta: "Dokümantasyonu aç",
     },
     docsSections: [
       {
@@ -1190,13 +1338,106 @@ npx skills add Woffluon/unpeek --agent claude-code codex cursor gemini-cli githu
           },
         ],
       },
+      {
+        id: "troubleshooting",
+        number: "07",
+        title: "Sorun Giderme ve Hata Modları",
+        summary:
+          "Korumalı bir dağıtımdan sonra ortaya çıkan belirtiler, nedenleri ve her biri için çalıştırılacak ilk komut.",
+        subsections: [
+          {
+            title: "Hidrasyon sunucu işaretlemesiyle eşleşmiyor",
+            body: [
+              "unpeek yalnızca istemci çıktı dizinlerini açar: `.next/static/chunks`, `dist/assets` ve `build/static/js`. `.next/server` altındaki sunucu paketleri hiç ayrıştırılmaz, dolayısıyla React sunucu render'ı dokunulmadan kalır.",
+              "Buna rağmen bir uyuşmazlık görürseniz korunan dizini `--out-dir` ile doğrulayın ve yolun proje köküne değil istemci çıktısına işaret ettiğini kontrol edin. Korumanın sunucu paketine ulaşmasının tek yolu yanlış bir `--out-dir` değeridir.",
+            ],
+            codeBlocks: [
+              {
+                label: "Terminal: CLI'yı istemci çıktısına yönlendir",
+                language: "bash",
+                code: `# Açık hedef, pasif kalkan, deterministik tohum
+unpeek protect --out-dir .next/static/chunks --passive --seed 0x7f4a2c`,
+              },
+            ],
+          },
+          {
+            title: "Üretim yığın izleri _0x4a1 gösteriyor",
+            body: [
+              "Kaynak haritaları `.unpeek-maps/` içine taşınır ve `//# sourceMappingURL=` yorumu genel paketten silinir, böylece tarayıcının çözeceği bir adres kalmaz. Kasayı genel dizin yerine hata izleyicinize yükleyin.",
+            ],
+            bullets: [
+              "Sentry veya Datadog yükleme adımını `.unpeek-maps/` dizinine yönlendirin, genel çıktıya asla.",
+              "`.unpeek-maps/` kaydını `.gitignore` içinde tutun. `unpeek init` bu satırı sizin için ekler.",
+              "Kasaya ihtiyaç yoksa ve haritalar tamamen silinecekse `--no-maps` kullanın.",
+            ],
+          },
+          {
+            title: "Yavaş bir fonksiyon sıcak işaretlenmedi",
+            body: [
+              "Sıcak durumu döngülerden, `requestAnimationFrame` geri çağrılarından ve yüksek frekanslı zamanlayıcılardan gelir; zincirdeki her çağrılana geçer. Web Worker, sanallaştırılmış liste veya döngüsüz bir layout effect tarafından yürütülen işler bu grafiğin parçası değildir.",
+              "Bu güvenlidir ama bedava değildir: fonksiyon doğru çalışmaya devam eder, yalnızca kasa aramasının maliyetini öder. Profil bu maliyeti gösteriyorsa işi algılanan bir kare döngüsünün arkasına taşıyın ya da `--min-string-length` değerini yükselterek kasaya daha az sabit sokun.",
+            ],
+          },
+        ],
+      },
+      {
+        id: "security-model",
+        number: "08",
+        title: "Güvenlik Modeli ve Sınırları",
+        summary:
+          "Dönüşümün size ne kazandırdığı, neyi kazandırmadığı ve çalışma zamanı kalkanının nasıl okunacağı.",
+        subsections: [
+          {
+            title: "Tehdit modeli",
+            body: [
+              "unpeek istemci paketini okumanın maliyetini yükseltir. String sabitleri kaynaktan çıkar, yerel bağlar tohumlanmış polimorfik bir geçişle yeniden adlandırılır ve soğuk kontrol akışı yeniden yazılır; böylece bir okuyucu gönderilen dosyadan lisans kontrolünü ya da iç uç noktayı doğrudan takip edemez.",
+              "Bu bir kriptografik sınır değildir. Tarayıcının çalıştırabildiği her kodu, onu teslim alan herkes çalıştırabilir. Çıktıyı gizli bilgi kasası değil, meraklı gözle bakmaya ve kazımaya karşı caydırıcı olarak değerlendirin.",
+            ],
+            bullets: [
+              "API anahtarlarını, imzalama tuzlarını veya özel jetonları istemci kodunda göndermeyin. Kasa onları taşır, korumaz.",
+              "Yetkilendirme kararlarını sunucuda tutun. Korumalı bir paket de bunun için güvenilir bir yer değildir.",
+              "CI içinde `--seed` değerini sabitleyin; böylece tekrarlanan derlemeler aynı çıktıyı üretir ve farklar incelenebilir kalır.",
+            ],
+          },
+          {
+            title: "Çalışma zamanı kalkanı",
+            body: [
+              "Enjekte edilen kalkan kendi kaynağını `Function.prototype.toString()` üzerinden 32 bit FNV-1a ile özetler. Korumalı fonksiyonun güzel biçimlendirilmesi, yamalanması veya sarmalanması özeti değiştirir ve caydırıcıyı tetikler.",
+              "`--passive` günlükler ve devam eder. Varsayılan `gradual` modu ilk uyuşmazlıkta hata fırlatmak yerine kademeli olarak sertleşir; böylece tek bir yanlış pozitif üretim oturumunu düşürmez.",
+            ],
+            codeBlocks: [
+              {
+                label: "Terminal: Kalkan modları",
+                language: "bash",
+                code: `# Kademeli caydırıcı (varsayılan)
+unpeek protect --seed 0x7f4a2c
+
+# Aşamalı dağıtım için pasif caydırıcı
+unpeek protect --passive
+
+# Kalkan olmadan
+unpeek protect --no-shield`,
+              },
+            ],
+          },
+        ],
+      },
     ],
+    installSection: {
+      title: "Postbuild içinde tek satır.",
+      lead: "unpeek framework'ü okur, istemci çıktısını bulur ve korur. Sunucu paketleri okunabilir kalır.",
+      command: "npx unpeek init",
+      starCta: "GitHub'da yıldızla",
+      npmCta: "npm'de görüntüle",
+      note: "Config dosyası yok. Sarmalayıcı yok. Postbuild satırını silin, sonraki derleme dokunulmamış çıkar.",
+    },
     footer: {
-      tagline: "Monokrom mühendislik disipliniyle geliştirildi. MIT Lisansı altında açık kaynak.",
+      tagline: "Kare bütçesi olan istemci taraflı koruma.",
+      license: "MIT Lisansı",
       links: {
-        docs: "Dokümantasyon",
-        github: "GitHub Deposu",
-        npm: "NPM Paketi",
+        docs: "Dokümanlar",
+        github: "GitHub",
+        npm: "npm",
       },
     },
   },

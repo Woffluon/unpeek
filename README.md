@@ -1,13 +1,20 @@
 # unpeek
 
-**Zero-config, call-graph-aware polymorphic JavaScript protection and runtime anti-tamper toolkit with <2% CPU overhead.**
+\\	ext
+  ▛▀▀▜  unpeek
+  ▙▄▄▟  client bundle protection
+\
+**Nothing to peek at. Nothing to slow down.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-emerald.svg)](LICENSE)
-[![CPU Overhead](https://img.shields.io/badge/CPU_Overhead-%3C2%25-10b981.svg)](packages/unpeek/benchmarks/overhead.bench.ts)
-[![Gzip Delta](https://img.shields.io/badge/Gzip_Delta-%3C15%25-06b6d4.svg)](packages/unpeek/benchmarks/overhead.bench.ts)
-[![Interactive Playground](https://img.shields.io/badge/Playground-Live_Demo-6366f1.svg)](https://woffluon.github.io/unpeek)
+Zero-config, call-graph-aware client-side JavaScript protection and runtime anti-tamper toolkit with <2% CPU overhead and <15% Gzip budget.
 
-English | [Türkçe](./README.tr.md) · [Live Interactive Playground](https://woffluon.github.io/unpeek) · [Agent Architecture Guide](./AGENTS.md) · [AI Skill](./skills/unpeek/SKILL.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-111111.svg?style=flat-square)](LICENSE)
+[![Hot-Path CPU](https://img.shields.io/badge/Hot--Path%20CPU-%3C2%25-FF3300.svg?style=flat-square)](packages/unpeek/benchmarks/overhead.bench.ts)
+[![Gzip Delta](https://img.shields.io/badge/Gzip%20Delta-%3C15%25-111111.svg?style=flat-square)](packages/unpeek/benchmarks/overhead.bench.ts)
+[![Interactive Showcase](https://img.shields.io/badge/Showcase-Live%20Demo-FF3300.svg?style=flat-square)](https://woffluon.github.io/unpeek)
+[![Documentation](https://img.shields.io/badge/Docs-Dedicated%20Reference-111111.svg?style=flat-square)](https://woffluon.github.io/unpeek/docs)
+
+English | [Türkçe](./README.tr.md) · [Interactive Showcase](https://woffluon.github.io/unpeek) · [Documentation](https://woffluon.github.io/unpeek/docs) · [Agent Architecture Guide](./AGENTS.md) · [AI Skill](./skills/unpeek/SKILL.md)
 
 ---
 
