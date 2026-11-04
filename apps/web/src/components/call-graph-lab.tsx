@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dictionary } from "@/content/i18n";
+import { tokenize, tokenClass } from "@/components/syntax-highlight";
 
 type Phase = "idle" | "scanning" | "ready";
 type NodeKind = "hot" | "cold";
@@ -217,7 +218,15 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
                           : "block"
                   }
                 >
-                  {line.text || "\u00A0"}
+                  {line.text ? (
+                    tokenize(line.text, "ts").map((tok, tIdx) => (
+                      <span key={tIdx} className={tokenClass(tok.type)}>
+                        {tok.value}
+                      </span>
+                    ))
+                  ) : (
+                    "\u00A0"
+                  )}
                 </span>
               ))}
             </code>
