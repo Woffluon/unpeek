@@ -1,9 +1,13 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner.svg">
+    <img src="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner.svg" alt="unpeek - call-graph aware client-side javascript protection" width="100%">
+  </picture>
+</p>
+
 # unpeek
 
-\\	ext
-  ▛▀▀▜  unpeek
-  ▙▄▄▟  client bundle protection
-\
 **Nothing to peek at. Nothing to slow down.**
 
 Zero-config, call-graph-aware client-side JavaScript protection and runtime anti-tamper toolkit with <2% CPU overhead and <15% Gzip budget.

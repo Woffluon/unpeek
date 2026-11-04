@@ -115,6 +115,7 @@
   "files": [
     "bin",
     "dist",
+    "assets",
     "README.md",
     "README.tr.md",
     "LICENSE"

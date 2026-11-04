@@ -1,9 +1,13 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner.svg">
+    <img src="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner.svg" alt="unpeek - call-graph aware client-side javascript protection" width="100%">
+  </picture>
+</p>
+
 # unpeek
 
-\\	ext
-  ▛▀▀▜  unpeek
-  ▙▄▄▟  client bundle protection
-\
 **Bakılacak bir şey yok. Yavaşlayacak hiçbir şey yok.**
 
 Sıfır yapılandırma gerektiren, çağrı grafiği (call-graph) farkındalıklı, <%2 CPU ek yükü ve <%15 Gzip bütçesine sahip istemci tarafı JavaScript koruma ve çalışma zamanı (runtime) müdahale önleme aracı.
