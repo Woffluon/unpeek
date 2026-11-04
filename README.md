@@ -11,8 +11,6 @@ English | [Türkçe](./README.tr.md) · [Live Interactive Playground](https://wo
 
 ---
 
-<baglam>
-
 ## Why unpeek?
 
 Deploying a web application built with Next.js, Vite, or Webpack exposes client-side business logic, internal API endpoints, feature flags, and proprietary algorithms to anyone who opens browser developer tools or runs automated AST deobfuscators like `webcrack` or `synchrony`.
@@ -60,11 +58,7 @@ flowchart TD
 4. **Automatic Source Map Vault (`.unpeek-maps/`)**
    Leaving `.js.map` files in a public build directory reconstructs your original TypeScript project tree inside DevTools. [`protectProject`](packages/unpeek/src/cli/protect.ts) extracts `.map` files from your public build directory into a private `.unpeek-maps/` folder and strips `//# sourceMappingURL=` comments from every client bundle so you can upload maps to Sentry or Datadog without serving them to end users.
 
-</baglam>
-
 ---
-
-<talimat>
 
 ## Quick Start
 
@@ -90,19 +84,33 @@ npm install -D unpeek
 npx unpeek protect
 ```
 
-#### CLI Options
+#### CLI Commands & Options
 
-| Flag | Description | Default |
+| Command / Flag | Description | Default |
 | :--- | :--- | :--- |
+| `init [--dry-run]` | Automatically detect project framework, configure `postbuild` script, and create `.unpeek-maps/` vault | |
+| `protect` | Protect production client bundles in-place (default command) | |
 | `--out-dir <path>` | Explicit client output directory override (e.g., `dist/assets`, `.next/static/chunks`) | Auto-detected from project framework |
 | `--seed <number>` | Deterministic 32-bit polymorphic build seed | Random per build |
 | `--passive` | Use passive deterrent mode instead of gradual state degradation | Default: gradual degradation |
 | `--no-maps` | Permanently delete `.map` files instead of moving them to `.unpeek-maps/` | Moves to `.unpeek-maps/` |
+| `--min-string-length <num>` | Minimum string length for lazy encryption vault | `4` |
+| `--private-maps-dir <dir>` | Directory to store vaulted private source maps | `.unpeek-maps` |
+| `--no-shield` | Do not inject runtime anti-tamper deterrent shield | Shield injected into entry chunks |
 | `-h, --help` | Show CLI help message | |
 | `-v, --version` | Show CLI version number | |
 
 > [!NOTE]
 > Programmatic execution through `protectProject(options)` supports additional fine-grained options, including `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, and `cwd`.
+
+> [!IMPORTANT]
+> **CommonJS Users (Dynamic `import()`):**
+> Because `unpeek` is distributed with native ECMAScript Modules (`"type": "module"`), in CommonJS environments (`.cjs` files or `require()` scripts) load `unpeek` using dynamic `import()`:
+> ```javascript
+> // CommonJS (next.config.js / webpack.config.js / scripts)
+> const unpeek = (await import('unpeek/unplugin')).default;
+> const { protectProject, transformJavaScript } = await import('unpeek');
+> ```
 
 ### 3. Universal Bundler Plugin (`unpeek/unplugin`)
 
@@ -219,11 +227,7 @@ curl -fsSL https://raw.githubusercontent.com/Woffluon/unpeek/main/skills/unpeek/
   -o ~/.agents/skills/unpeek/SKILL.md
 ```
 
-</talimat>
-
 ---
-
-<dogrulama>
 
 ## Verification, Testing & Benchmarks
 
@@ -268,8 +272,6 @@ powershell -File scripts/stage-release.ps1
 - **Gzip Size Delta:** `< 15%` on production application bundles
 - **Runtime CPU Overhead:** `< 2.00%` (interleaved multi-round V8 JIT benchmark)
 - **Plaintext Leak Rate:** `0%` for string literals meeting `minStringLength`
-
-</dogrulama>
 
 ## License
 

@@ -11,8 +11,6 @@
 
 ---
 
-<baglam>
-
 ## Neden unpeek?
 
 Next.js, Vite veya Webpack ile geliştirilen modern bir web uygulamasını yayına aldığınızda; istemci tarafındaki iş mantığı, iç API uç noktaları, özellik bayrakları (feature flags) ve algoritmalar Chrome DevTools veya `webcrack` / `synchrony` gibi otomatik AST çözücüler aracılığıyla açıkça okunabilir.
@@ -60,11 +58,7 @@ flowchart TD
 4. **Otomatik Source Map Kasası (`.unpeek-maps/`)**
    Üretim çıktısında `.js.map` dosyalarını bırakmak, orijinal TypeScript proje ağacınızın DevTools içinde birebir yeniden oluşturulmasına yol açar. [`protectProject`](packages/unpeek/src/cli/protect.ts), `.map` dosyalarını genel çıktı dizininden özel `.unpeek-maps/` klasörüne taşır ve tüm istemci paketlerinden `//# sourceMappingURL=` yorumlarını temizler. Böylece haritaları son kullanıcılara sunmadan Sentry veya Datadog gibi platformlara yükleyebilirsiniz.
 
-</baglam>
-
 ---
-
-<talimat>
 
 ## Hızlı Başlangıç
 
@@ -90,19 +84,33 @@ npm install -D unpeek
 npx unpeek protect
 ```
 
-#### CLI Seçenekleri
+#### CLI Komutları ve Seçenekleri
 
-| Bayrak | Açıklama | Varsayılan |
+| Komut / Bayrak | Açıklama | Varsayılan |
 | :--- | :--- | :--- |
+| `init [--dry-run]` | Proje çerçevesini otomatik algılar, `postbuild` kancasını ve `.unpeek-maps/` kasasını yapılandırır | |
+| `protect` | Üretim istemci paketlerini yerinde korur (varsayılan komut) | |
 | `--out-dir <yol>` | İstemci çıktı klasörünü açıkça belirtir (ör. `dist/assets`, `.next/static/chunks`) | Proje framework'ünden otomatik tespit |
 | `--seed <sayı>` | Deterministik 32-bit polimorfik derleme tohumu (seed) | Derleme başına rastgele |
 | `--passive` | Kademeli bozulma yerine pasif telemetri caydırıcı modunu kullan | Varsayılan: kademeli bozulma (`gradual`) |
 | `--no-maps` | `.map` dosyalarını `.unpeek-maps/` klasörüne taşımak yerine kalıcı olarak sil | `.unpeek-maps/` içine taşır |
+| `--min-string-length <sayı>` | Tembel şifreleme kasasına alınacak minimum metin uzunluğu | `4` |
+| `--private-maps-dir <dizin>` | Kaynak haritalarının taşınacağı özel kasa klasörü | `.unpeek-maps` |
+| `--no-shield` | Çalışma zamanı anti-tamper kalkanının enjekte edilmesini devre dışı bırak | Giriş paketlerine kalkan eklenir |
 | `-h, --help` | Yardım iletisini göster | |
 | `-v, --version` | Sürüm numarasını göster | |
 
 > [!NOTE]
 > `protectProject(options)` üzerinden programatik kullanım; `minStringLength`, `privateMapsDir`, `injectRuntimeShield` ve `cwd` gibi ek yapılandırma seçeneklerini destekler.
+
+> [!IMPORTANT]
+> **CommonJS Kullanıcıları İçin Dinamik `import()` Uyarısı:**
+> `unpeek` varsayılan olarak yerel ECMAScript Modülleri (`"type": "module"`) ile dağıtılmaktadır. CommonJS kullanan projelerde (`require()` veya `.cjs` yapılandırma dosyaları) `unpeek` modüllerini dinamik `import()` ile yükleyiniz:
+> ```javascript
+> // CommonJS (next.config.js / webpack.config.js / betikler)
+> const unpeek = (await import('unpeek/unplugin')).default;
+> const { protectProject, transformJavaScript } = await import('unpeek');
+> ```
 
 ### 3. Evrensel Paketleyici Eklentisi (`unpeek/unplugin`)
 
@@ -219,11 +227,7 @@ curl -fsSL https://raw.githubusercontent.com/Woffluon/unpeek/main/skills/unpeek/
   -o ~/.agents/skills/unpeek/SKILL.md
 ```
 
-</talimat>
-
 ---
-
-<dogrulama>
 
 ## Doğrulama, Testler ve Benchmarklar
 
@@ -268,8 +272,6 @@ powershell -File scripts/stage-release.ps1
 - **Gzip Boyut Artışı:** `< %15` (üretim uygulama paketlerinde)
 - **Çalışma Zamanı CPU Ek Yükü:** `< %2.00` (aralıklı çok turlu V8 JIT testi)
 - **Düz Metin Sızıntı Oranı:** `%0` (`minStringLength` kuralını karşılayan metin sabitleri için)
-
-</dogrulama>
 
 ## Lisans
 
