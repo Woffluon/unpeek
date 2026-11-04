@@ -1,63 +1,35 @@
 ---
 name: unpeek
-description: Use when protecting client-side JavaScript bundles from DevTools inspection, source map exposure, or automated deobfuscation in Vite, Next.js, Webpack, or vanilla web projects without modifying application source code.
+description: Zero-config, call-graph-aware client-side JavaScript protection, anti-reverse-engineering, and source map security for Next.js, Vite, Webpack, Rollup, and Vanilla JS applications.
+license: MIT
+metadata:
+  author: Woffluon
+  version: 1.2.0
 ---
 
-# unpeek: Client-Side JavaScript Protection Skill
+# unpeek Skill
 
-## Overview
+Zero-config, call-graph-aware client-side JavaScript protection and source map isolation toolkit with <2% runtime CPU overhead and <15% Gzip delta.
 
-unpeek hardens production browser bundles against DevTools inspection, source map leaks, and static AST deobfuscators while keeping runtime CPU overhead below 2% and Gzip growth below 15%. It operates on compiled build artifacts and bundler output chunks so application source files remain untouched.
+## Agent Persona & Language Policy
 
-## Installation & Setup
+- **Language Policy**: Always reply in the user's prompt language (e.g., Turkish if prompted in Turkish, English if prompted in English).
+- **Technical Fidelity**: Maintain exact technical terms, CLI flags, configuration parameters, and code snippets exactly as defined in the reference documents (e.g., `npx unpeek init`, `npx unpeek protect`, `deterrentMode: 'passive'`, `.unpeek-maps/`, `CustomEvent('unpeek:tamper')`).
+- **Client-Only Boundary**: Never modify or protect server/SSR bundles (`.next/server`, `ssr`). Only target compiled browser assets (`.next/static/chunks`, `dist/assets`, `build`).
 
-### Option A: Zero-Config Post-Build CLI (Recommended)
+## Quick Workflow
 
-1. Run the initializer in the project root to configure `"postbuild": "unpeek protect"` and add `.unpeek-maps/` to `.gitignore`:
-   ```bash
-   npx unpeek init
-   ```
-2. Or install `unpeek` as a dev dependency and invoke it after your production build:
-   ```bash
-   npm install -D unpeek
-   npx unpeek protect
-   ```
-   `unpeek` auto-detects Next.js (`.next/static/chunks`), Vite (`dist/assets`), Webpack (`build/static/js`), or vanilla output directories.
+1. **Initialize**: Run `npx unpeek init` to configure `"postbuild": "unpeek protect"` in `package.json` and add `.unpeek-maps/` to `.gitignore`.
+2. **Build**: Run the project's standard production build (`npm run build`).
+3. **Protect**: `unpeek protect` executes automatically post-build, extracting `.map` files into `.unpeek-maps/` and applying AST hardening.
 
-### Option B: Bundler Integration (`unplugin`)
+## Reference Navigation
 
-Attach `unpeek/unplugin` for in-memory chunk protection during the bundler `renderChunk` lifecycle:
+Direct user requests to the appropriate modular guide:
 
-```ts
-// vite.config.ts
-import { defineConfig } from 'vite';
-import unpeek from 'unpeek/unplugin';
-
-export default defineConfig({
-  plugins: [
-    unpeek.vite({
-      deterrentMode: 'gradual',
-    }),
-  ],
-});
-```
-
-For Next.js or Webpack, register `unpeek.webpack({ deterrentMode: 'gradual' })` inside `if (!dev && !isServer)` so server bundles remain unmodified.
-
-## Verification & Acceptance
-
-Verify the integration by running a production build and checking three observable outcomes:
-
-1. **Summary Metrics**: Confirm the CLI prints `[unpeek] Protection Complete` with `Processed Bundles > 0` and `Gzip Bundle Size` delta.
-2. **Source Map Isolation**: Verify `.map` files move into `.unpeek-maps/` and public `.js` chunks no longer contain `//# sourceMappingURL=`.
-3. **Plaintext Absence**: Search the output folder (`grep -R "your_secret_constant" dist/ .next/static/`) to confirm string literals (`length >= 4`) are encoded in the O(1) lazy string vault.
-
-## Troubleshooting & Operational Recipes
-
-| Scenario | Resolution |
-| :--- | :--- |
-| **SSR / Next.js Server Chunks** | Scope protection to client output (`.next/static/chunks`) or guard `unplugin` with `if (!isServer)` to preserve readable server stack traces. |
-| **Sentry / Datadog Stack Traces** | Upload `.unpeek-maps/` to Sentry or Datadog during CI, then deploy only the stripped public folder. Keep `.unpeek-maps/` in `.gitignore`. |
-| **Custom Output Folder** | Pass `--out-dir <path>` (`npx unpeek protect --out-dir build/client`) or set `outDir` in `ProtectOptions`. |
-| **Deterministic Builds** | Pass `--seed <number>` to produce reproducible polymorphic output across CI shards. |
-| **Passive Telemetry Mode** | Pass `--passive` (`npx unpeek protect --passive`) or set `deterrentMode: 'passive'` in `ProtectOptions`. |
+- **CLI & Zero-Config Setup**: Consult [Quickstart Guide](references/quickstart.md) for command syntax, postbuild hook creation, and CLI flags (`--out-dir`, `--seed`, `--passive`, `--min-string-length`, `--private-maps-dir`, `--no-shield`).
+- **Framework Integrations**: Consult [Frameworks Guide](references/frameworks.md) for Next.js (SSR vs. CSR boundary, static export `out/`), Vite, Webpack, Rollup, and subpath imports (`unpeek/vite`, `unpeek/webpack`, `unpeek/unplugin`).
+- **Core Architecture & Performance**: Consult [Architecture Guide](references/architecture.md) for AST traversal, call-graph hot-path exemption (loops, rAF, render functions), O(1) lazy string vault, cold flow guards, and anti-tamper runtime shields.
+- **Source Map Vaulting & Security**: Consult [Source Maps Guide](references/sourcemaps.md) for `.unpeek-maps/` relocation, `sourceMappingURL` stripping, Sentry/Datadog CI upload workflows, and `.dockerignore` rules.
+- **Programmatic API**: Consult [API Reference](references/api.md) for `protectProject()`, `transformJavaScript()`, `initProject()`, and TypeScript type definitions (`ProtectOptions`, `TransformOptions`, `ProtectSummary`).
+- **Operational Recipes & Troubleshooting**: Consult [Recipes Guide](references/recipes.md) for Next.js SSR hydration error solutions, Sentry/Datadog telemetry hooks, and deterministic CI seed generation.

@@ -172,7 +172,7 @@ export async function verifyWorkspaceLicense(_0x4a1) {
 export const DICTIONARY: Record<Locale, Dictionary> = {
   en: {
     meta: {
-      version: "v1.1.0",
+      version: "v1.2.0",
       license: "MIT Licensed",
     },
     nav: {
@@ -631,27 +631,46 @@ const summary: ProtectSummary = await protectProject({
         number: "06",
         title: "Using unpeek with AI Coding Agents",
         summary:
-          "Equip Claude Code, Cursor, Codex, and Windsurf with the official unpeek skill so autonomous agents never break your hot-path budgets or leak source maps.",
+          "Equip Claude Code, Cursor, Codex, Gemini CLI, GitHub Copilot, and OpenCode with the official unpeek skill via Vercel Agent Skills so autonomous agents never break hot-path budgets or leak source maps.",
         subsections: [
           {
-            title: "Installing skills/unpeek/SKILL.md & AGENTS.md",
+            title: "Vercel Agent Skills Standard Installation (`npx skills add`)",
             body: [
-              "This repository ships with a dedicated agent skill definition (`skills/unpeek/SKILL.md`) and root `AGENTS.md` operational contract. When AI coding agents work in your repository, these files instruct them on how to run `unpeek protect`, verify the `<2%` CPU and `<15%` Gzip budgets, and keep `.unpeek-maps/` out of public static directories.",
+              "unpeek ships with an official agent skill compliant with the open Vercel Agent Skills specification (`skills/unpeek/SKILL.md`) and Agent Skills Discovery Optimization (SDO) standards. It equips coding agents to automate unpeek build protection, guard SSR boundaries, and isolate private source maps.",
+              "Install the skill with a single command, install locally from repository source, or target multiple agents globally without prompts:",
             ],
             codeBlocks: [
               {
-                label: "Terminal: Copy Skill into Your Project or Global Agent Config",
+                label: "Terminal: Install via Vercel Agent Skills CLI",
                 language: "bash",
-                code: `# Copy the unpeek skill into your project's .claude/skills or skills/ directory
-mkdir -p skills/unpeek
-curl -fsSL https://raw.githubusercontent.com/Woffluon/unpeek/main/skills/unpeek/SKILL.md \\
-  -o skills/unpeek/SKILL.md`,
+                code: `# Standard installation into your project or configured agent
+npx skills add Woffluon/unpeek
+
+# Local repository installation (when developing inside unpeek)
+npx skills add .
+
+# Multi-agent targeting & global installation
+npx skills add Woffluon/unpeek --agent claude-code codex cursor gemini-cli github-copilot opencode --global --yes`,
               },
               {
-                label: "Prompt Example for Claude Code / Cursor",
+                label: "Agent Prompt: Triggering unpeek via $unpeek",
                 language: "text",
-                code: `"Read skills/unpeek/SKILL.md, integrate unpeek into our Vite build pipeline with gradual deterrent mode, and verify that our animation loop in src/canvas/renderer.ts is listed under hotFunctionsSkipped."`,
+                code: `$unpeek Protect this build with passive telemetry and seed 0x7f4a2c.`,
               },
+            ],
+          },
+          {
+            title: "Token-Optimized Modular References (`skills/unpeek/references/`)",
+            body: [
+              "To preserve agent context windows and minimize token overhead, the primary `SKILL.md` delegates specialized implementation details to 6 on-demand modular reference guides under `skills/unpeek/references/`. Agents selectively load only the reference file required for their active task:",
+            ],
+            bullets: [
+              "`quickstart`: Immediate zero-config setup, postbuild wiring, and 3-step verification loops.",
+              "`frameworks`: Framework build configurations and SSR client boundaries (Next.js, Vite, Webpack, Rollup).",
+              "`architecture`: Acorn AST parsing, transitive call-graph hot-path exemption, and FNV-1a checksums.",
+              "`sourcemaps`: `.unpeek-maps/` vault isolation, CI pipelines, and Sentry/Datadog symbol uploads.",
+              "`api`: Complete CLI flag specifications, programmatic Node.js API, and TypeScript interfaces.",
+              "`recipes`: Production hardening recipes, deterministic CI seeds, and passive telemetry troubleshooting.",
             ],
           },
         ],
@@ -668,7 +687,7 @@ curl -fsSL https://raw.githubusercontent.com/Woffluon/unpeek/main/skills/unpeek/
   },
   tr: {
     meta: {
-      version: "v1.1.0",
+      version: "v1.2.0",
       license: "MIT Lisanslı",
     },
     nav: {
@@ -1125,29 +1144,48 @@ const summary: ProtectSummary = await protectProject({
       {
         id: "agents",
         number: "06",
-        title: "AI Ajanlarla Kullanım (Claude Code, Cursor, Codex)",
+        title: "AI Ajanlarla Kullanım (Claude Code, Cursor, Codex, Gemini CLI)",
         summary:
-          "Otonom kodlama ajanlarının hot-path bütçenizi bozmaması ve source map sızdırmaması için resmi unpeek skill dosyasını projelerinize ekleyin.",
+          "Otonom kodlama ajanlarının hot-path bütçenizi bozmaması ve source map sızdırmaması için Vercel Agent Skills standardındaki resmi unpeek becerisini projelerinize ekleyin.",
         subsections: [
           {
-            title: "skills/unpeek/SKILL.md & AGENTS.md Kurulumu",
+            title: "Vercel Agent Skills Standart Kurulumu (`npx skills add`)",
             body: [
-              "Bu monorepo, yapay zeka kodlama ajanları için özel olarak hazırlanmış `skills/unpeek/SKILL.md` yetenek tanımı ve kök `AGENTS.md` operasyonel sözleşmesiyle birlikte gelir. AI ajanları deponuzda çalışırken bu dosyalar sayesinde `unpeek protect` komutunu nasıl çalıştıracaklarını, `<%2` CPU ve `<%15` Gzip bütçesini nasıl doğrulayacaklarını ve `.unpeek-maps/` klasörünü genel dağıtım dışında tutmayı öğrenir.",
+              "`unpeek`, açık Vercel Agent Skills belirtimi ve Ajan Becerileri Keşif Optimizasyonu (SDO) standartlarıyla tam uyumlu resmi bir yapay zeka ajan becerisi (`skills/unpeek/SKILL.md`) sunar. Kodlama ajanlarınıza (Claude Code, Cursor, Codex, Gemini CLI, GitHub Copilot, OpenCode) istemci paketlerini koruma, SSR sınırlarını gözetme ve `.unpeek-maps/` kasasını CI/CD hatlarına bağlama konularında rehberlik eder.",
+              "Beceriyi doğrudan GitHub üzerinden projenize ekleyebilir, yerel depo içerisinden kurabilir veya çoklu ajanları global olarak yapılandırabilirsiniz:",
             ],
             codeBlocks: [
               {
-                label: "Terminal: Skill Dosyasını Projenize Kopyalayın",
+                label: "Terminal: Vercel Agent Skills CLI ile Kurulum",
                 language: "bash",
-                code: `# unpeek skill dosyasını projenizin skills/ dizinine indirin
-mkdir -p skills/unpeek
-curl -fsSL https://raw.githubusercontent.com/Woffluon/unpeek/main/skills/unpeek/SKILL.md \\
-  -o skills/unpeek/SKILL.md`,
+                code: `# Projenize veya yapılandırılmış ajana standart kurulum
+npx skills add Woffluon/unpeek
+
+# Yerel depo kurulumu (unpeek içinde geliştirme yaparken)
+npx skills add .
+
+# Çoklu ajan hedefleme ve global kurulum
+npx skills add Woffluon/unpeek --agent claude-code codex cursor gemini-cli github-copilot opencode --global --yes`,
               },
               {
-                label: "Claude Code / Cursor İçin Örnek İstem (Prompt)",
+                label: "Ajan İstem Örneği: $unpeek ile Tetikleme",
                 language: "text",
-                code: `"skills/unpeek/SKILL.md dosyasını oku, unpeek'i gradual caydırıcı mod ile Vite derleme hattımıza entegre et ve src/canvas/renderer.ts içindeki animasyon döngümüzün hotFunctionsSkipped listesinde yer aldığını doğrula."`,
+                code: `$unpeek Protect this build with passive telemetry and seed 0x7f4a2c.`,
               },
+            ],
+          },
+          {
+            title: "Token-Optimize Modüler Referans Mimarisi (`skills/unpeek/references/`)",
+            body: [
+              "Ajanların bağlam penceresini (context window) korumak ve token tüketimini en aza indirmek için ana `SKILL.md` dosyası kompakt tutulmuş; ayrıntılı kılavuzlar `skills/unpeek/references/` dizinindeki 6 modüler rehbere ayrılmıştır. Ajanlar yalnızca ihtiyaç duydukları konuyu seçici olarak okur:",
+            ],
+            bullets: [
+              "`quickstart`: Sıfır ayarlı hızlı kurulum, postbuild betikleri ve 3 adımlı doğrulama döngüleri.",
+              "`frameworks`: Çatı bazlı yapılandırmalar ve SSR istemci sınırları (Next.js, Vite, Webpack, Rollup).",
+              "`architecture`: Acorn AST analizi, geçişken çağrı grafiği hot-path muafiyeti ve FNV-1a kalkan mimarisi.",
+              "`sourcemaps`: `.unpeek-maps/` kasasına taşıma ve Sentry/Datadog CI yükleme hatları.",
+              "`api`: Eksiksiz CLI bayrakları, programatik Node.js API ve TypeScript arayüzleri.",
+              "`recipes`: Üretim zırhlama tarifleri, deterministik tohumlar ve pasif telemetri sorun giderme adımları.",
             ],
           },
         ],

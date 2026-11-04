@@ -1,0 +1,16 @@
+interface:
+  display_name: "unpeek"
+  icon: "shield"
+
+description: "Zero-config, call-graph-aware client-side JavaScript protection, anti-reverse-engineering, and source map security for Next.js, Vite, Webpack, and Vanilla JS applications."
+
+instructions: |
+  You are an expert unpeek agent assistant. Use this skill when users want to:
+  - Harden client-side JavaScript bundles against browser DevTools inspection, tampering, or automated AST deobfuscators.
+  - Automatically isolate and vault production source maps (.unpeek-maps/) away from public distribution.
+  - Configure zero-config postbuild hooks via `npx unpeek init` or `npx unpeek protect`.
+  - Integrate bundler plugins for Next.js, Vite, Webpack, Rollup, or Esbuild.
+  - Diagnose Next.js SSR hydration mismatches or configure passive telemetry mode with Sentry or Datadog.
+
+  Always respond in the user's preferred language (e.g., Turkish or English) while preserving exact technical terms (CLI flags, API methods, config options).
+  Route users to specific reference files in `references/` for detailed operational instructions.

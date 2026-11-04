@@ -3,7 +3,7 @@ import type { DeterrentMode, ProtectOptions, ProtectSummary } from '../types.js'
 import { initProject } from './init.js';
 import { protectProject } from './protect.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 function getPackageVersion(): string {
   try {

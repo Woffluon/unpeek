@@ -199,33 +199,72 @@ npx @sentry/cli sourcemaps upload .unpeek-maps --release="$GIT_COMMIT_SHA"
 
 ---
 
-## Official AI Agent Skill Installation
+## AI Coding Agent Integration
 
-`unpeek` ships with an official, token-optimized AI Agent Skill ([`skills/unpeek/SKILL.md`](skills/unpeek/SKILL.md)) following Agent Skills Discovery Optimization (SDO) standards. Installing this skill teaches your coding agent (Claude Code, Cursor, Antigravity, OpenAI Codex, or Gemini CLI) how to configure `unpeek`, guard SSR chunks, and wire `.unpeek-maps/` into CI/CD pipelines.
+`unpeek` ships with an official AI Agent Skill ([`skills/unpeek/SKILL.md`](skills/unpeek/SKILL.md)) following the open Vercel Agent Skills specification and Agent Skills Discovery Optimization (SDO) standards. Installing this skill equips coding agents (Claude Code, Cursor, OpenAI Codex, Gemini CLI, GitHub Copilot, OpenCode) with deep domain knowledge for protecting client-side bundles, preserving hot-path performance budgets (<2% CPU, <15% Gzip), guarding SSR boundaries, and managing `.unpeek-maps/` in CI/CD pipelines.
 
-### Project-Scoped Installation (Shared with Team via Git)
+### Skill Installation
 
-Copy the skill into your repository `.agents/skills/unpeek/` directory:
+#### 1. Standard Installation (Vercel Agent Skills CLI)
+
+Install the skill directly into your project or configured agent environment:
 
 ```bash
+npx skills add Woffluon/unpeek
+```
+
+#### 2. Local Repository Installation
+
+When developing or testing directly within the `unpeek` repository:
+
+```bash
+npx skills add .
+```
+
+#### 3. Multi-Agent Targeting & Global Installation
+
+Install globally across multiple coding agents without interactive confirmation:
+
+```bash
+npx skills add Woffluon/unpeek --agent claude-code codex cursor gemini-cli github-copilot opencode --global --yes
+```
+
+#### 4. Manual / Direct Copy Fallback
+
+You can also copy the skill definition manually into project-level or global agent skill directories:
+
+```bash
+# Project-scoped (.agents/skills/unpeek/SKILL.md)
 mkdir -p .agents/skills/unpeek
 curl -fsSL https://raw.githubusercontent.com/Woffluon/unpeek/main/skills/unpeek/SKILL.md \
   -o .agents/skills/unpeek/SKILL.md
-```
 
-### Global Machine Installation (Antigravity / Gemini CLI / Claude Code)
-
-```bash
-# Antigravity & Gemini CLI
-mkdir -p ~/.gemini/config/skills/unpeek
-curl -fsSL https://raw.githubusercontent.com/Woffluon/unpeek/main/skills/unpeek/SKILL.md \
-  -o ~/.gemini/config/skills/unpeek/SKILL.md
-
-# Cross-agent standard (~/.agents/skills)
+# Global agent directories (Antigravity / Gemini CLI / Claude Code)
 mkdir -p ~/.agents/skills/unpeek
 curl -fsSL https://raw.githubusercontent.com/Woffluon/unpeek/main/skills/unpeek/SKILL.md \
   -o ~/.agents/skills/unpeek/SKILL.md
 ```
+
+### Agent Trigger Example
+
+Once installed, invoke the skill directly in any agent session using the `$unpeek` prompt:
+
+```text
+$unpeek Protect this build with passive telemetry and seed 0x7f4a2c.
+```
+
+### Token-Optimized Modular References (`skills/unpeek/references/`)
+
+To conserve agent context windows and eliminate unnecessary token consumption, the primary [`skills/unpeek/SKILL.md`](skills/unpeek/SKILL.md) remains concise while delegating specialized guidance to on-demand modular reference documents in `skills/unpeek/references/`:
+
+- **`quickstart.md`**: Immediate setup, zero-config postbuild wiring, and 3-step verification loops.
+- **`frameworks.md`**: Bundler configurations and SSR client boundaries (Next.js, Vite, Webpack, Rollup).
+- **`architecture.md`**: Acorn AST parsing, transitive call-graph hot-path exemption, and FNV-1a checksums.
+- **`sourcemaps.md`**: `.unpeek-maps/` vault isolation, CI pipelines, and Sentry/Datadog symbol uploads.
+- **`api.md`**: CLI flags, programmatic Node.js methods (`protectProject`, `transformJavaScript`), and TypeScript interfaces.
+- **`recipes.md`**: Production hardening recipes, deterministic CI seeds, and passive telemetry troubleshooting.
+
+Agents read only the relevant reference file on-demand, preventing context bloat.
 
 ---
 
