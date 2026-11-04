@@ -3,7 +3,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import type { ProtectOptions, ProtectSummary } from '../types.js';
 import { detectTargetFramework, scanClientBundles } from '../bundler/detector.js';
-import { relocateSourceMaps } from '../bundler/sourcemap-vault.js';
+import { relocateSourceMaps, SOURCE_MAP_COMMENT_REGEX } from '../bundler/sourcemap-vault.js';
 import { transformJavaScript } from '../ast/index.js';
 import { generateRuntimeShield } from '../runtime/index.js';
 
@@ -18,67 +18,99 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
       : Math.floor(Math.random() * 0x7fffffff) || 0x5f3759df;
   const keepPrivateMaps = options.keepPrivateMaps ?? true;
   const privateMapsDir = options.privateMapsDir ?? '.unpeek-maps';
-  const deterrentMode = options.deterrentMode ?? 'gradual';
+  const deterrentMode = options.deterrentMode ?? 'passive';
   const injectRuntimeShield = options.injectRuntimeShield ?? true;
   const minStringLength = options.minStringLength ?? 4;
 
-  const vaultResult = relocateSourceMaps(outDir, cwd, keepPrivateMaps, privateMapsDir);
+  const vaultResult = relocateSourceMaps(outDir, cwd, keepPrivateMaps, privateMapsDir, false);
   const clientFiles = scanClientBundles(outDir);
 
   let originalBytes = 0;
   let protectedBytes = 0;
-  let originalGzipBytes = 0;
-  let protectedGzipBytes = 0;
   let totalHotFunctionsSkipped = 0;
   let totalColdFunctionsProtected = 0;
   let totalEncryptedStrings = 0;
   let totalMangledSymbols = 0;
   let processedFiles = 0;
 
-  for (let i = 0; i < clientFiles.length; i++) {
-    const filePath = clientFiles[i];
-    const originalCode = fs.readFileSync(filePath, 'utf8');
-    const origBuf = Buffer.from(originalCode, 'utf8');
-    originalBytes += origBuf.byteLength;
-    originalGzipBytes += zlib.gzipSync(origBuf).byteLength;
+  const allOrigBufs: Buffer[] = [];
+  const allProtBufs: Buffer[] = [];
+  const stagedFiles: Array<{ tmpPath: string; finalPath: string }> = [];
 
-    const fileSeed = (seed + i * 2654435761) >>> 0;
-    const result = transformJavaScript(originalCode, {
-      seed: fileSeed,
-      minStringLength,
-      filename: path.basename(filePath),
-      injectRuntimeShield,
-      deterrentMode,
-    });
+  try {
+    for (let i = 0; i < clientFiles.length; i++) {
+      const filePath = clientFiles[i];
+      let codeToTransform = fs.readFileSync(filePath, 'utf8');
 
-    let finalCode = result.code;
-    if (injectRuntimeShield) {
-      const shield = generateRuntimeShield({
-        seed: fileSeed,
-        deterrentMode,
-        expectedIntegrityHash: result.integrityToken,
-      });
-      if (
-        shield.preambleCode &&
-        !finalCode.includes(shield.integrityCheckFnName) &&
-        !finalCode.startsWith(shield.preambleCode)
-      ) {
-        finalCode = `${shield.preambleCode}\n${finalCode}`;
+      if (codeToTransform.includes('sourceMappingURL=')) {
+        codeToTransform = codeToTransform.replace(SOURCE_MAP_COMMENT_REGEX, '');
+        vaultResult.strippedFilesCount++;
       }
+
+      const origBuf = Buffer.from(codeToTransform, 'utf8');
+      originalBytes += origBuf.byteLength;
+      allOrigBufs.push(origBuf);
+
+      const fileSeed = (seed + i * 2654435761) >>> 0;
+      const result = transformJavaScript(codeToTransform, {
+        seed: fileSeed,
+        minStringLength,
+        filename: path.basename(filePath),
+        injectRuntimeShield,
+        deterrentMode,
+      });
+
+      let finalCode = result.code;
+      if (injectRuntimeShield) {
+        const shield = generateRuntimeShield({
+          seed: fileSeed,
+          deterrentMode,
+          expectedIntegrityHash: result.integrityToken,
+        });
+        if (
+          shield.preambleCode &&
+          !finalCode.includes(shield.integrityCheckFnName) &&
+          !finalCode.startsWith(shield.preambleCode)
+        ) {
+          finalCode = `${shield.preambleCode}\n${finalCode}`;
+        }
+      }
+
+      const tmpPath = `${filePath}.unpeek.tmp`;
+      fs.writeFileSync(tmpPath, finalCode, 'utf8');
+      stagedFiles.push({ tmpPath, finalPath: filePath });
+
+      const protBuf = Buffer.from(finalCode, 'utf8');
+      protectedBytes += protBuf.byteLength;
+      allProtBufs.push(protBuf);
+
+      totalHotFunctionsSkipped += result.hotPathReport.hotFunctionsSkipped.length;
+      totalColdFunctionsProtected += result.hotPathReport.coldFunctionsProtected.length;
+      totalEncryptedStrings += result.encryptedStringsCount;
+      totalMangledSymbols += result.mangledSymbolsCount;
+      processedFiles++;
     }
 
-    fs.writeFileSync(filePath, finalCode, 'utf8');
-
-    const protBuf = Buffer.from(finalCode, 'utf8');
-    protectedBytes += protBuf.byteLength;
-    protectedGzipBytes += zlib.gzipSync(protBuf).byteLength;
-
-    totalHotFunctionsSkipped += result.hotPathReport.hotFunctionsSkipped.length;
-    totalColdFunctionsProtected += result.hotPathReport.coldFunctionsProtected.length;
-    totalEncryptedStrings += result.encryptedStringsCount;
-    totalMangledSymbols += result.mangledSymbolsCount;
-    processedFiles++;
+    for (const { tmpPath, finalPath } of stagedFiles) {
+      fs.renameSync(tmpPath, finalPath);
+    }
+  } catch (error) {
+    for (const { tmpPath } of stagedFiles) {
+      if (fs.existsSync(tmpPath)) {
+        try {
+          fs.unlinkSync(tmpPath);
+        } catch {
+          // ignore cleanup failures
+        }
+      }
+    }
+    throw error;
   }
+
+  const originalGzipBytes =
+    allOrigBufs.length > 0 ? zlib.gzipSync(Buffer.concat(allOrigBufs)).byteLength : 0;
+  const protectedGzipBytes =
+    allProtBufs.length > 0 ? zlib.gzipSync(Buffer.concat(allProtBufs)).byteLength : 0;
 
   const gzipDeltaPercent =
     originalGzipBytes > 0

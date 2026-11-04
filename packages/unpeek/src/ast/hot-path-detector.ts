@@ -181,10 +181,6 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
         }
       }
     },
-  });
-
-  // Mark functions containing any loop statement as hot
-  walk.ancestor(ast, {
     ForStatement(_node, _state, ancestors) {
       markEnclosingFunctionHot(ancestors, hotFunctionNodes);
     },

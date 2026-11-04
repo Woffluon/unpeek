@@ -9,15 +9,15 @@ const EXCLUDED_DIR_NAMES = new Set([
   '.unpeek-maps',
 ]);
 
-function hasNextServerSegment(fullPath: string): boolean {
-  const normalized = fullPath.replace(/\\/g, '/');
+function hasNextServerSegment(fullPath: string, rootDir?: string): boolean {
+  const targetPath = rootDir ? path.relative(rootDir, fullPath) : fullPath;
+  const normalized = targetPath.replace(/\\/g, '/');
+  const segments = normalized.split('/');
   return (
-    normalized.includes('/.next/server/') ||
-    normalized.endsWith('/.next/server') ||
-    normalized.includes('/server/') ||
-    normalized.includes('/ssr/') ||
-    normalized.includes('/node_modules/') ||
-    normalized.includes('/.unpeek-maps/')
+    segments.includes('server') ||
+    segments.includes('ssr') ||
+    segments.includes('node_modules') ||
+    segments.includes('.unpeek-maps')
   );
 }
 
@@ -54,13 +54,19 @@ export function detectTargetFramework(
   }
 
   const nextChunksDir = path.join(rootDir, '.next', 'static', 'chunks');
+  const nextExportChunksDir = path.join(rootDir, 'out', '_next', 'static', 'chunks');
+  const nextExportDir = path.join(rootDir, 'out');
   const distAssetsDir = path.join(rootDir, 'dist', 'assets');
   const distDir = path.join(rootDir, 'dist');
   const buildDir = path.join(rootDir, 'build');
   const publicDir = path.join(rootDir, 'public');
 
   if (!framework) {
-    if (fs.existsSync(nextChunksDir) || fs.existsSync(path.join(rootDir, '.next'))) {
+    if (
+      fs.existsSync(nextChunksDir) ||
+      fs.existsSync(path.join(rootDir, '.next')) ||
+      fs.existsSync(nextExportChunksDir)
+    ) {
       framework = 'nextjs';
     } else if (fs.existsSync(distAssetsDir)) {
       framework = 'vite';
@@ -68,7 +74,7 @@ export function detectTargetFramework(
       framework = 'webpack';
     } else if (explicitOutDir) {
       const normExplicit = explicitOutDir.replace(/\\/g, '/');
-      if (normExplicit.includes('.next')) {
+      if (normExplicit.includes('.next') || normExplicit.includes('out/_next')) {
         framework = 'nextjs';
       } else if (normExplicit.includes('dist/assets')) {
         framework = 'vite';
@@ -91,7 +97,15 @@ export function detectTargetFramework(
 
   let outDir: string;
   if (framework === 'nextjs') {
-    outDir = nextChunksDir;
+    if (fs.existsSync(nextExportChunksDir)) {
+      outDir = nextExportChunksDir;
+    } else if (fs.existsSync(nextChunksDir)) {
+      outDir = nextChunksDir;
+    } else if (fs.existsSync(nextExportDir)) {
+      outDir = nextExportDir;
+    } else {
+      outDir = nextChunksDir;
+    }
   } else if (framework === 'vite') {
     outDir = fs.existsSync(distAssetsDir) ? distAssetsDir : distDir;
   } else if (framework === 'webpack') {
@@ -103,7 +117,7 @@ export function detectTargetFramework(
       outDir = distDir;
     }
   } else {
-    const candidates = [nextChunksDir, distAssetsDir, distDir, buildDir, publicDir];
+    const candidates = [nextExportChunksDir, nextChunksDir, distAssetsDir, distDir, buildDir, publicDir];
     const existing = candidates.find((candidate) => fs.existsSync(candidate));
     outDir = existing ?? distDir;
   }
@@ -120,7 +134,7 @@ export function scanClientBundles(outDir: string): string[] {
   const results: string[] = [];
 
   function walk(currentDir: string): void {
-    if (hasNextServerSegment(currentDir)) {
+    if (hasNextServerSegment(currentDir, resolvedOutDir)) {
       return;
     }
 
@@ -137,12 +151,12 @@ export function scanClientBundles(outDir: string): string[] {
         if (EXCLUDED_DIR_NAMES.has(entry.name.toLowerCase())) {
           continue;
         }
-        if (hasNextServerSegment(fullPath)) {
+        if (hasNextServerSegment(fullPath, resolvedOutDir)) {
           continue;
         }
         walk(fullPath);
       } else if (entry.isFile()) {
-        if (hasNextServerSegment(fullPath)) {
+        if (hasNextServerSegment(fullPath, resolvedOutDir)) {
           continue;
         }
         if (entry.name.endsWith('.js') || entry.name.endsWith('.mjs')) {

@@ -5,3 +5,8 @@ allowBuilds:
   esbuild: true
   sharp: true
 verifyDepsBeforeRun: false
+overrides:
+  tinypool: ">=2.1.2"
+  glob: ">=14.0.2"
+  minimatch: ">=11.0.1"
+  postcss: ">=8.5.18"

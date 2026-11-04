@@ -1,15 +1,29 @@
+import fs from 'node:fs';
 import type { DeterrentMode, ProtectOptions, ProtectSummary } from '../types.js';
 import { initProject } from './init.js';
 import { protectProject } from './protect.js';
 
-const VERSION = '1.0.1';
+const VERSION = '1.1.0';
+
+function getPackageVersion(): string {
+  try {
+    const pkgUrl = new URL('../../package.json', import.meta.url);
+    const content = fs.readFileSync(pkgUrl, 'utf8');
+    const parsed = JSON.parse(content) as { version?: string };
+    return parsed.version ?? VERSION;
+  } catch {
+    return VERSION;
+  }
+}
+
+const RUNTIME_VERSION = getPackageVersion();
 
 function printHelp(): void {
   const helpText = `
 unpeek v${VERSION} — Call-graph-aware polymorphic AST obfuscation & runtime shield
 
 Usage:
-  unpeek init                       Configure postbuild hook & .unpeek-maps/ vault
+  unpeek init [--dry-run]           Configure postbuild hook & .unpeek-maps/ vault
   unpeek protect [options]          Protect client bundles in-place
 
 Options:
@@ -17,6 +31,9 @@ Options:
   --seed <number>                   Deterministic polymorphic seed
   --passive                         Use passive deterrent mode instead of gradual
   --no-maps                         Delete .map files instead of vaulting to .unpeek-maps/
+  --min-string-length <num>         Minimum string length for encryption vault (default: 4)
+  --private-maps-dir <dir>          Directory to store vaulted source maps (default: .unpeek-maps)
+  --no-shield                       Do not inject runtime anti-tamper deterrent shield
   -h, --help                        Show help message
   -v, --version                     Show version number
 `.trim();
@@ -59,7 +76,7 @@ function printSummaryTable(summary: ProtectSummary): void {
 }
 
 export async function runCli(args: string[]): Promise<void> {
-  if (args.includes('--help') || args.includes('-h')) {
+  if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
     printHelp();
     return;
   }
@@ -69,22 +86,25 @@ export async function runCli(args: string[]): Promise<void> {
     return;
   }
 
-  const command = args[0] && !args[0].startsWith('-') ? args[0] : 'protect';
+  const command = args[0] && !args[0].startsWith('-') ? args[0] : '';
 
   if (command === 'init') {
-    const res = initProject(process.cwd());
+    const dryRun = args.includes('--dry-run');
+    const res = initProject(process.cwd(), { dryRun });
     console.log(`[unpeek] ${res.message}`);
     return;
   }
 
-  if (command === 'protect') {
+  if (command === 'protect' || (args.length > 0 && args[0].startsWith('-'))) {
     const options: ProtectOptions = {
       cwd: process.cwd(),
     };
 
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
-      if (arg === '--out-dir' && args[i + 1]) {
+      if (arg === 'protect') {
+        continue;
+      } else if (arg === '--out-dir' && args[i + 1]) {
         options.outDir = args[++i];
       } else if (arg.startsWith('--out-dir=')) {
         options.outDir = arg.slice('--out-dir='.length);
@@ -98,6 +118,22 @@ export async function runCli(args: string[]): Promise<void> {
         if (!Number.isNaN(parsed)) {
           options.seed = parsed;
         }
+      } else if (arg === '--min-string-length' && args[i + 1]) {
+        const parsed = Number(args[++i]);
+        if (!Number.isNaN(parsed)) {
+          options.minStringLength = parsed;
+        }
+      } else if (arg.startsWith('--min-string-length=')) {
+        const parsed = Number(arg.slice('--min-string-length='.length));
+        if (!Number.isNaN(parsed)) {
+          options.minStringLength = parsed;
+        }
+      } else if (arg === '--private-maps-dir' && args[i + 1]) {
+        options.privateMapsDir = args[++i];
+      } else if (arg.startsWith('--private-maps-dir=')) {
+        options.privateMapsDir = arg.slice('--private-maps-dir='.length);
+      } else if (arg === '--no-shield') {
+        options.injectRuntimeShield = false;
       } else if (arg === '--passive') {
         options.deterrentMode = 'passive' as DeterrentMode;
       } else if (arg === '--no-maps') {
