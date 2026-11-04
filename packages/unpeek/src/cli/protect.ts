@@ -4,7 +4,7 @@ import zlib from 'node:zlib';
 import type { ProtectOptions, ProtectSummary } from '../types.js';
 import { detectTargetFramework, scanClientBundles } from '../bundler/detector.js';
 import { relocateSourceMaps, SOURCE_MAP_COMMENT_REGEX } from '../bundler/sourcemap-vault.js';
-import { transformJavaScript } from '../ast/index.js';
+import { computeFnv1aHash, transformJavaScript } from '../ast/index.js';
 import { generateRuntimeShield } from '../runtime/index.js';
 
 export async function protectProject(options: ProtectOptions = {}): Promise<ProtectSummary> {
@@ -51,7 +51,8 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
       originalBytes += origBuf.byteLength;
       allOrigBufs.push(origBuf);
 
-      const fileSeed = (seed + i * 2654435761) >>> 0;
+      const relPath = path.relative(outDir, filePath).replace(/\\/g, '/');
+      const fileSeed = computeFnv1aHash(`${relPath}:${i}`, seed);
       const result = transformJavaScript(codeToTransform, {
         seed: fileSeed,
         minStringLength,
@@ -69,6 +70,7 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
         });
         if (
           shield.preambleCode &&
+          !finalCode.includes('(function _u$') &&
           !finalCode.includes(shield.integrityCheckFnName) &&
           !finalCode.startsWith(shield.preambleCode)
         ) {

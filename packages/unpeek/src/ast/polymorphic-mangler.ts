@@ -50,75 +50,125 @@ const FUNCTION_TYPES = new Set([
   'ArrowFunctionExpression',
 ]);
 
-function collectPatternIdentifiers(pattern: any, out: any[]): void {
+const LEXICAL_SCOPE_TYPES = new Set([
+  'Program',
+  'FunctionDeclaration',
+  'FunctionExpression',
+  'ArrowFunctionExpression',
+  'BlockStatement',
+  'ForStatement',
+  'ForInStatement',
+  'ForOfStatement',
+  'SwitchStatement',
+  'CatchClause',
+  'ClassDeclaration',
+  'ClassExpression',
+]);
+
+interface PatternTarget {
+  idNode: any;
+  shorthandProp?: any;
+}
+
+interface BindingEntry {
+  origName: string;
+  shouldMangle: boolean;
+  targets: PatternTarget[];
+  mangledName: string;
+}
+
+interface ScopeRecord {
+  node: acorn.Node;
+  parent: ScopeRecord | null;
+  children: ScopeRecord[];
+  depth: number;
+  bindings: Map<string, BindingEntry>;
+  usedNames: Set<string>;
+}
+
+function collectPatternTargets(
+  pattern: any,
+  out: PatternTarget[],
+  shorthandProp?: any
+): void {
   if (!pattern) return;
   switch (pattern.type) {
     case 'Identifier':
-      out.push(pattern);
+      out.push({ idNode: pattern, shorthandProp });
       break;
     case 'AssignmentPattern':
-      collectPatternIdentifiers(pattern.left, out);
+      collectPatternTargets(pattern.left, out, shorthandProp);
       break;
     case 'RestElement':
-      collectPatternIdentifiers(pattern.argument, out);
+      collectPatternTargets(pattern.argument, out);
       break;
     case 'ArrayPattern':
       for (const el of pattern.elements || []) {
-        if (el) collectPatternIdentifiers(el, out);
+        if (el) collectPatternTargets(el, out);
       }
       break;
     case 'ObjectPattern':
       for (const prop of pattern.properties || []) {
         if (prop.type === 'Property') {
-          if (prop.shorthand) {
-            prop.shorthand = false;
-            prop.key = { ...prop.key };
-          }
-          collectPatternIdentifiers(prop.value, out);
+          collectPatternTargets(
+            prop.value,
+            out,
+            prop.shorthand ? prop : undefined
+          );
         } else if (prop.type === 'RestElement') {
-          collectPatternIdentifiers(prop.argument, out);
+          collectPatternTargets(prop.argument, out);
         }
       }
       break;
   }
 }
 
+function isMangleableName(origName: string): boolean {
+  return (
+    !RESERVED_IDENTIFIERS.has(origName) &&
+    !origName.startsWith('_u') &&
+    !origName.startsWith('_0x')
+  );
+}
+
 export function applyPolymorphicMangler(
   ast: acorn.Program,
   seed = 0x9e3779b9
 ): number {
-  const scopeMap = new Map<acorn.Node, Map<string, string>>();
-  const scopeDepthMap = new Map<acorn.Node, number>();
+  const scopeRecords = new Map<acorn.Node, ScopeRecord>();
+  const existingIdentifiers = new Set<string>();
   let counter = 0;
 
-  function makeScopedMangledName(
-    scopeDepth: number,
-    localIndex: number,
-    usedValues: Set<string>
-  ): string {
-    counter++;
-    let salt = 0;
-    while (true) {
-      const h = computeFnv1aHash(`s${scopeDepth}:i${localIndex}:${salt}`, seed);
-      const candidate = `_0x${((h & 0x1f) + localIndex + salt).toString(36)}`;
-      if (!usedValues.has(candidate)) {
-        return candidate;
-      }
-      salt++;
-    }
-  }
-
-  function countFunctionDepth(ancestors: acorn.Node[]): number {
-    let depth = 0;
+  function ensureScopeChain(ancestors: acorn.Node[]): ScopeRecord {
+    let prevScope: ScopeRecord | null = null;
     for (let i = 0; i < ancestors.length; i++) {
-      if (FUNCTION_TYPES.has(ancestors[i].type)) {
-        depth++;
+      const node = ancestors[i];
+      if (!LEXICAL_SCOPE_TYPES.has(node.type)) continue;
+      let record = scopeRecords.get(node);
+      if (!record) {
+        const isFn = FUNCTION_TYPES.has(node.type);
+        const depth: number = prevScope
+          ? prevScope.depth + (isFn ? 1 : 0)
+          : 0;
+        record = {
+          node,
+          parent: prevScope,
+          children: [],
+          depth: Math.max(1, depth),
+          bindings: new Map(),
+          usedNames: new Set(),
+        };
+        scopeRecords.set(node, record);
+        if (prevScope) {
+          prevScope.children.push(record);
+        }
       }
+      prevScope = record;
     }
-    return Math.max(1, depth);
+    return prevScope!;
   }
 
-  function findEnclosingFunction(ancestors: acorn.Node[]): acorn.Node | null {
+  function findEnclosingFunctionNode(ancestors: acorn.Node[]): acorn.Node | null {
     for (let i = ancestors.length - 1; i >= 0; i--) {
       if (FUNCTION_TYPES.has(ancestors[i].type)) {
         return ancestors[i];
@@ -127,112 +177,299 @@ export function applyPolymorphicMangler(
     return null;
   }
 
-  function registerBindingAndMutateDeclSite(
-    idNode: any,
-    bindings: Map<string, string>,
-    scopeDepth: number
+  function findEnclosingLexicalNode(ancestors: acorn.Node[]): acorn.Node {
+    for (let i = ancestors.length - 1; i >= 0; i--) {
+      if (LEXICAL_SCOPE_TYPES.has(ancestors[i].type)) {
+        return ancestors[i];
+      }
+    }
+    return ancestors[0];
+  }
+
+  function registerBindingTarget(
+    scopeNode: acorn.Node,
+    target: PatternTarget,
+    shouldMangle: boolean
   ): void {
-    const origName: string = idNode.name;
-    if (RESERVED_IDENTIFIERS.has(origName) || origName.startsWith('_u') || origName.startsWith('_0x')) {
-      return;
+    const scope = scopeRecords.get(scopeNode);
+    if (!scope) return;
+    const origName: string = target.idNode.name;
+    const canMangle = shouldMangle && isMangleableName(origName);
+    let entry = scope.bindings.get(origName);
+    if (!entry) {
+      entry = {
+        origName,
+        shouldMangle: canMangle,
+        targets: [target],
+        mangledName: origName,
+      };
+      scope.bindings.set(origName, entry);
+    } else {
+      if (!canMangle) {
+        entry.shouldMangle = false;
+      }
+      entry.targets.push(target);
     }
-    let mangled = bindings.get(origName);
-    if (!mangled) {
-      const usedValues = new Set(bindings.values());
-      mangled = makeScopedMangledName(scopeDepth, bindings.size, usedValues);
-      bindings.set(origName, mangled);
+  }
+
+  function registerBarrierName(scopeNode: acorn.Node, origName: string): void {
+    const scope = scopeRecords.get(scopeNode);
+    if (!scope) return;
+    let entry = scope.bindings.get(origName);
+    if (!entry) {
+      entry = {
+        origName,
+        shouldMangle: false,
+        targets: [],
+        mangledName: origName,
+      };
+      scope.bindings.set(origName, entry);
+    } else {
+      entry.shouldMangle = false;
     }
-    idNode.name = mangled;
   }
 
   function registerFunctionParams(fnNode: any, ancestors: acorn.Node[]): void {
-    let bindings = scopeMap.get(fnNode);
-    const depth = countFunctionDepth(ancestors);
-    scopeDepthMap.set(fnNode, depth);
-    if (!bindings) {
-      bindings = new Map();
-      scopeMap.set(fnNode, bindings);
-    }
+    ensureScopeChain(ancestors);
     for (const param of fnNode.params || []) {
-      const idNodes: any[] = [];
-      collectPatternIdentifiers(param, idNodes);
-      for (const idNode of idNodes) {
-        registerBindingAndMutateDeclSite(idNode, bindings, depth);
+      const targets: PatternTarget[] = [];
+      collectPatternTargets(param, targets);
+      for (const target of targets) {
+        registerBindingTarget(fnNode, target, true);
       }
     }
   }
 
-  // Pass 1: Collect and rename local function parameters and local variable declarations inside functions
+  // Pass 1A: Build lexical scope tree, record all existing identifiers, and collect all declarations
+  ensureScopeChain([ast]);
   walk.ancestor(ast, {
+    Identifier(node: any) {
+      if (typeof node.name === 'string') {
+        existingIdentifiers.add(node.name);
+      }
+    },
+    BlockStatement(_node: any, _state, ancestors) {
+      ensureScopeChain(ancestors);
+    },
+    ForStatement(_node: any, _state, ancestors) {
+      ensureScopeChain(ancestors);
+    },
+    ForInStatement(_node: any, _state, ancestors) {
+      ensureScopeChain(ancestors);
+    },
+    ForOfStatement(_node: any, _state, ancestors) {
+      ensureScopeChain(ancestors);
+    },
+    SwitchStatement(_node: any, _state, ancestors) {
+      ensureScopeChain(ancestors);
+    },
     FunctionDeclaration(node: any, _state, ancestors) {
       registerFunctionParams(node, ancestors);
+      if (node.id?.type === 'Identifier') {
+        const parentAncestors = ancestors.slice(0, -1);
+        const lexNode = findEnclosingLexicalNode(parentAncestors);
+        const fnNode = findEnclosingFunctionNode(parentAncestors) ?? ast;
+        registerBarrierName(lexNode, node.id.name);
+        if (lexNode === (fnNode as any).body || fnNode === ast) {
+          registerBarrierName(fnNode, node.id.name);
+        }
+        if (!scopeRecords.get(node)?.bindings.has(node.id.name)) {
+          registerBarrierName(node, node.id.name);
+        }
+      }
     },
     FunctionExpression(node: any, _state, ancestors) {
       registerFunctionParams(node, ancestors);
+      if (node.id?.type === 'Identifier') {
+        if (!scopeRecords.get(node)?.bindings.has(node.id.name)) {
+          registerBarrierName(node, node.id.name);
+        }
+      }
     },
     ArrowFunctionExpression(node: any, _state, ancestors) {
       registerFunctionParams(node, ancestors);
     },
-    VariableDeclaration(node: any, _state, ancestors) {
-      const fnScope = findEnclosingFunction(ancestors);
-      if (!fnScope) return; // Never mangle top-level / module-scope variables
-      let bindings = scopeMap.get(fnScope);
-      const depth = scopeDepthMap.get(fnScope) ?? countFunctionDepth(ancestors);
-      if (!bindings) {
-        bindings = new Map();
-        scopeMap.set(fnScope, bindings);
+    ClassDeclaration(node: any, _state, ancestors) {
+      ensureScopeChain(ancestors);
+      if (node.id?.type === 'Identifier') {
+        const parentAncestors = ancestors.slice(0, -1);
+        const lexNode = findEnclosingLexicalNode(parentAncestors);
+        registerBarrierName(lexNode, node.id.name);
+        registerBarrierName(node, node.id.name);
       }
+    },
+    ClassExpression(node: any, _state, ancestors) {
+      ensureScopeChain(ancestors);
+      if (node.id?.type === 'Identifier') {
+        registerBarrierName(node, node.id.name);
+      }
+    },
+    CatchClause(node: any, _state, ancestors) {
+      ensureScopeChain(ancestors);
+      if (node.param) {
+        const targets: PatternTarget[] = [];
+        collectPatternTargets(node.param, targets);
+        for (const target of targets) {
+          registerBindingTarget(node, target, true);
+        }
+      }
+    },
+    VariableDeclaration(node: any, _state, ancestors) {
+      ensureScopeChain(ancestors);
+      const fnScope = findEnclosingFunctionNode(ancestors);
+      if (!fnScope) {
+        for (const decl of node.declarations || []) {
+          const targets: PatternTarget[] = [];
+          collectPatternTargets(decl.id, targets);
+          for (const target of targets) {
+            registerBarrierName(ast, target.idNode.name);
+          }
+        }
+        return;
+      }
+
+      const targetScopeNode =
+        node.kind === 'var' ? fnScope : findEnclosingLexicalNode(ancestors);
+
       for (const decl of node.declarations || []) {
-        const idNodes: any[] = [];
-        collectPatternIdentifiers(decl.id, idNodes);
-        for (const idNode of idNodes) {
-          registerBindingAndMutateDeclSite(idNode, bindings, depth);
+        const targets: PatternTarget[] = [];
+        collectPatternTargets(decl.id, targets);
+        for (const target of targets) {
+          const origName = target.idNode.name;
+          // Annex B.3.5 guard: if `var x` is declared inside a `catch (x)` of the same name, keep both unmangled
+          if (node.kind === 'var') {
+            for (let i = ancestors.length - 1; i >= 0; i--) {
+              if (ancestors[i] === fnScope) break;
+              if (ancestors[i].type === 'CatchClause') {
+                const catchScope = scopeRecords.get(ancestors[i]);
+                if (catchScope?.bindings.has(origName)) {
+                  registerBarrierName(ancestors[i], origName);
+                  registerBarrierName(fnScope, origName);
+                }
+              }
+            }
+          }
+          registerBindingTarget(targetScopeNode, target, true);
         }
       }
     },
   });
 
+  function isNameUsedInScopeOrAncestors(
+    candidate: string,
+    scope: ScopeRecord
+  ): boolean {
+    if (existingIdentifiers.has(candidate)) return true;
+    let curr: ScopeRecord | null = scope;
+    while (curr) {
+      if (curr.usedNames.has(candidate) || curr.bindings.has(candidate)) {
+        return true;
+      }
+      curr = curr.parent;
+    }
+    return false;
+  }
+
+  function makeScopedMangledName(
+    scope: ScopeRecord,
+    localIndex: number
+  ): string {
+    counter++;
+    let salt = 0;
+    while (true) {
+      const h = computeFnv1aHash(`s${scope.depth}:i${localIndex}:${salt}`, seed);
+      const candidate = `_0x${((h & 0x1f) + localIndex + salt).toString(36)}`;
+      if (!isNameUsedInScopeOrAncestors(candidate, scope)) {
+        return candidate;
+      }
+      salt++;
+    }
+  }
+
+  // Pass 1B: Traverse scope tree top-down (outermost to innermost) to assign collision-free mangled names
+  function assignScopeNamesTopDown(scope: ScopeRecord): void {
+    let localIndex = 0;
+    for (const entry of scope.bindings.values()) {
+      if (!entry.shouldMangle) {
+        entry.mangledName = entry.origName;
+        scope.usedNames.add(entry.origName);
+        continue;
+      }
+      const mangled = makeScopedMangledName(scope, localIndex);
+      localIndex++;
+      entry.mangledName = mangled;
+      scope.usedNames.add(mangled);
+      for (const target of entry.targets) {
+        if (target.shorthandProp && target.shorthandProp.shorthand) {
+          target.shorthandProp.shorthand = false;
+          target.shorthandProp.key = {
+            type: 'Identifier',
+            name: entry.origName,
+          };
+        }
+        target.idNode.name = mangled;
+      }
+    }
+    for (const child of scope.children) {
+      assignScopeNamesTopDown(child);
+    }
+  }
+
+  const rootScope = scopeRecords.get(ast);
+  if (rootScope) {
+    assignScopeNamesTopDown(rootScope);
+  }
+
   if (counter === 0) return 0;
 
-  // Pass 2: Rename all matching identifier references and assignment LHS patterns within their lexical function scope
+  function resolveBinding(
+    name: string,
+    ancestors: acorn.Node[]
+  ): BindingEntry | null {
+    for (let i = ancestors.length - 1; i >= 0; i--) {
+      const scope = scopeRecords.get(ancestors[i]);
+      if (scope && scope.bindings.has(name)) {
+        return scope.bindings.get(name)!;
+      }
+    }
+    return null;
+  }
+
+  function renamePatternTargetsInScope(
+    pattern: any,
+    ancestors: acorn.Node[]
+  ): void {
+    const targets: PatternTarget[] = [];
+    collectPatternTargets(pattern, targets);
+    for (const target of targets) {
+      const origName = target.idNode.name;
+      const entry = resolveBinding(origName, ancestors);
+      if (entry && entry.shouldMangle && entry.mangledName !== origName) {
+        if (target.shorthandProp && target.shorthandProp.shorthand) {
+          target.shorthandProp.shorthand = false;
+          target.shorthandProp.key = {
+            type: 'Identifier',
+            name: origName,
+          };
+        }
+        target.idNode.name = entry.mangledName;
+      }
+    }
+  }
+
+  // Pass 2: Rename all matching identifier references and assignment LHS patterns within their lexical scope
   walk.ancestor(ast, {
     AssignmentExpression(node: any, _state, ancestors) {
-      const idNodes: any[] = [];
-      collectPatternIdentifiers(node.left, idNodes);
-      for (const idNode of idNodes) {
-        const resolved = resolveMangledName(idNode.name, ancestors, scopeMap);
-        if (resolved) {
-          idNode.name = resolved;
-        }
-      }
+      renamePatternTargetsInScope(node.left, ancestors);
     },
     ForInStatement(node: any, _state, ancestors) {
       if (node.left && node.left.type !== 'VariableDeclaration') {
-        const idNodes: any[] = [];
-        collectPatternIdentifiers(node.left, idNodes);
-        for (const idNode of idNodes) {
-          const resolved = resolveMangledName(idNode.name, ancestors, scopeMap);
-          if (resolved) idNode.name = resolved;
-        }
+        renamePatternTargetsInScope(node.left, ancestors);
       }
     },
     ForOfStatement(node: any, _state, ancestors) {
       if (node.left && node.left.type !== 'VariableDeclaration') {
-        const idNodes: any[] = [];
-        collectPatternIdentifiers(node.left, idNodes);
-        for (const idNode of idNodes) {
-          const resolved = resolveMangledName(idNode.name, ancestors, scopeMap);
-          if (resolved) idNode.name = resolved;
-        }
-      }
-    },
-    Property(node: any, _state, ancestors) {
-      if (node.shorthand && node.value?.type === 'Identifier') {
-        const resolved = resolveMangledName(node.value.name, ancestors, scopeMap);
-        if (resolved) {
-          node.shorthand = false;
-          node.key = { type: 'Identifier', name: node.value.name };
-        }
+        renamePatternTargetsInScope(node.left, ancestors);
       }
     },
     Identifier(node: any, _state, ancestors) {
@@ -279,27 +516,20 @@ export function applyPolymorphicMangler(
         return;
       }
 
-      const resolved = resolveMangledName(node.name, ancestors, scopeMap);
-      if (resolved) {
-        node.name = resolved;
+      const entry = resolveBinding(node.name, ancestors);
+      if (entry && entry.shouldMangle && entry.mangledName !== node.name) {
+        if (
+          parent.type === 'Property' &&
+          parent.shorthand &&
+          parent.value === node
+        ) {
+          parent.shorthand = false;
+          parent.key = { type: 'Identifier', name: node.name };
+        }
+        node.name = entry.mangledName;
       }
     },
   });
 
   return counter;
-}
-
-function resolveMangledName(
-  name: string,
-  ancestors: acorn.Node[],
-  scopeMap: Map<acorn.Node, Map<string, string>>
-): string | null {
-  for (let i = ancestors.length - 1; i >= 0; i--) {
-    const anc = ancestors[i];
-    const bindings = scopeMap.get(anc);
-    if (bindings && bindings.has(name)) {
-      return bindings.get(name)!;
-    }
-  }
-  return null;
 }

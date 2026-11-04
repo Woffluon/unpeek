@@ -275,4 +275,108 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
       console.log = originalLog;
     }
   });
+
+  it('produces collision-free vault identifiers across 30+ multi-chunk Next.js classic scripts loaded in the same global VM context and supports idempotent re-runs', async () => {
+    const vm = await import('node:vm');
+    fs.writeFileSync(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        name: 'multi-chunk-next-app',
+        dependencies: { next: '15.5.0', react: '19.0.0' },
+      }),
+      'utf8'
+    );
+
+    const chunksDir = path.join(tmpDir, '.next', 'static', 'chunks');
+    const appDir = path.join(chunksDir, 'app');
+    fs.mkdirSync(appDir, { recursive: true });
+
+    const chunkNames = [
+      'polyfills-42372ed130431b0a.js',
+      'webpack-677160c2d1ce62f5.js',
+      'framework-f0a2efa2019b01a7.js',
+      'main-c013b02ac2717da0.js',
+      '13-dacea0f379bbc545.js',
+      '139.2966eb18406f1320.js',
+      '151-c4986517955e6d80.js',
+      '188.da98216831c78842.js',
+      '1be152e0-6b8fbcb99441011b.js',
+      '339-0b6f060c02420ff0.js',
+      '417-2f19c74cf18f5409.js',
+      '523-f9be729b7b26fc29.js',
+      '627-d3096e5d9caec66f.js',
+      '70f66c45.bf8882ef10687667.js',
+      '743-67f5f7b6fce883be.js',
+      '774.5f1484a4770e64d9.js',
+      '789-fe85c4dde55d938f.js',
+      '7f2e7b14-70e9d0b062716050.js',
+      'app/layout-180463917d21f4bf.js',
+      'app/error-995d9a5e5fd7dc5b.js',
+      'app/not-found-43ea21ec77027ff2.js',
+      'app/page-38cada3719695704.js',
+    ];
+
+    for (let i = 0; i < chunkNames.length; i++) {
+      const fullPath = path.join(chunksDir, chunkNames[i]);
+      const chunkCode = `
+        (self.webpackChunk_N_E = self.webpackChunk_N_E || []).push([
+          [${i}],
+          {
+            ${i}: function(module, exports) {
+              function getChunkSecret(prefix) {
+                const secret = "CHUNK_SECRET_PAYLOAD_${i}_" + "${chunkNames[i]}";
+                return prefix + ":" + secret;
+              }
+              exports.run = getChunkSecret;
+            }
+          }
+        ]);
+      `;
+      fs.writeFileSync(fullPath, chunkCode, 'utf8');
+    }
+
+    // First protect run
+    const summary1 = await protectProject({
+      cwd: tmpDir,
+      seed: 1597463007,
+    });
+    expect(summary1.processedFiles).toBe(chunkNames.length);
+
+    // Second protect run (idempotency check)
+    const summary2 = await protectProject({
+      cwd: tmpDir,
+      seed: 987654321,
+    });
+    expect(summary2.totalEncryptedStrings).toBe(0);
+
+    // Evaluate all protected chunks in a single shared browser-like global context
+    const sharedWindow: Record<string, any> = { webpackChunk_N_E: [] };
+    sharedWindow.self = sharedWindow;
+    sharedWindow.window = sharedWindow;
+    const browserCtx = vm.createContext(sharedWindow);
+
+    const vaultVarNames = new Set<string>();
+    for (const relName of chunkNames) {
+      const fullPath = path.join(chunksDir, relName);
+      const code = fs.readFileSync(fullPath, 'utf8');
+      const match = code.match(/\bvar (_uC[a-z0-9]+)\b/);
+      expect(match).not.toBeNull();
+      vaultVarNames.add(match![1]);
+
+      // Must execute in shared global scope without SyntaxError: Identifier has already been declared
+      expect(() => vm.runInContext(code, browserCtx)).not.toThrow();
+    }
+
+    // All chunks must have unique vault variable names
+    expect(vaultVarNames.size).toBe(chunkNames.length);
+    expect(sharedWindow.webpackChunk_N_E.length).toBe(chunkNames.length);
+
+    // Verify each chunk's module still decrypts its own exact string
+    for (let i = 0; i < chunkNames.length; i++) {
+      const entry = sharedWindow.webpackChunk_N_E[i];
+      const modExports: Record<string, any> = {};
+      entry[1][i]({}, modExports);
+      expect(modExports.run('OK')).toBe(`OK:CHUNK_SECRET_PAYLOAD_${i}_${chunkNames[i]}`);
+    }
+  });
 });
