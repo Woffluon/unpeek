@@ -3,6 +3,7 @@
 import Link from "next/link";
 import React, { useEffect, useRef, useState } from "react";
 import type { Dictionary, DocSection } from "@/content/i18n";
+import { HighlightedCode } from "@/components/syntax-highlight";
 
 interface DocsReaderProps {
   dict: Dictionary;
@@ -186,7 +187,7 @@ export function DocsReader({ dict }: DocsReaderProps) {
                             </button>
                           </div>
                           <pre className="code-scroll overflow-x-auto bg-carbon p-4 text-[11.5px] leading-6 text-carbon-text/90">
-                            <code>{cb.code}</code>
+                            <HighlightedCode code={cb.code} language={cb.language} />
                           </pre>
                         </div>
                       );

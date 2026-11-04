@@ -8,6 +8,7 @@ import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { CallGraphLab } from "@/components/call-graph-lab";
 import { SourceTicker } from "@/components/source-ticker";
+import { HighlightedCode } from "@/components/syntax-highlight";
 
 // Bars share one scale per row: the signal bar is the measured unpeek figure
 // drawn against the legacy upper bound, so its width is the real ratio.
@@ -479,7 +480,7 @@ export default function HomePage() {
                   <div className="px-4 py-6 sm:px-6 sm:py-8">
                     <code className="block font-mono text-[20px] leading-tight text-carbon-text sm:text-[28px]">
                       <span className="text-carbon-text/55">$ </span>
-                      {dict.installSection.command}
+                      <HighlightedCode code={dict.installSection.command} language="bash" />
                     </code>
                   </div>
                 </div>
