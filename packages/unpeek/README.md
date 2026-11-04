@@ -2,12 +2,12 @@
 
 **Zero-config, call-graph-aware polymorphic JavaScript protection and runtime anti-tamper toolkit with <2% CPU overhead.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-emerald.svg)](https://github.com/Woffluon/unpeek/blob/main/LICENSE)
-[![CPU Overhead](https://img.shields.io/badge/CPU_Overhead-%3C2%25-10b981.svg)](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/benchmarks/overhead.bench.ts)
-[![Gzip Delta](https://img.shields.io/badge/Gzip_Delta-%3C15%25-06b6d4.svg)](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/benchmarks/overhead.bench.ts)
+[![License: MIT](https://img.shields.io/badge/License-MIT-emerald.svg)](LICENSE)
+[![CPU Overhead](https://img.shields.io/badge/CPU_Overhead-%3C2%25-10b981.svg)](packages/unpeek/benchmarks/overhead.bench.ts)
+[![Gzip Delta](https://img.shields.io/badge/Gzip_Delta-%3C15%25-06b6d4.svg)](packages/unpeek/benchmarks/overhead.bench.ts)
 [![Interactive Playground](https://img.shields.io/badge/Playground-Live_Demo-6366f1.svg)](https://woffluon.github.io/unpeek)
 
-English | [Türkçe](https://github.com/Woffluon/unpeek/blob/main/README.tr.md) · [Live Interactive Playground](https://woffluon.github.io/unpeek) · [Agent Architecture Guide](https://github.com/Woffluon/unpeek/blob/main/AGENTS.md) · [AI Skill](https://github.com/Woffluon/unpeek/blob/main/skills/unpeek/SKILL.md)
+English | [Türkçe](./README.tr.md) · [Live Interactive Playground](https://woffluon.github.io/unpeek) · [Agent Architecture Guide](./AGENTS.md) · [AI Skill](./skills/unpeek/SKILL.md)
 
 ---
 
@@ -50,13 +50,13 @@ flowchart TD
 ```
 
 1. **Call-Graph Hot-Path Exemption (`<2%` CPU Budget)**
-   Before modifying an AST node, [`detectHotPaths`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/ast/index.ts) traverses the file call graph. Functions containing loops (`for`, `while`, `do-while`, `for-of`), array higher-order callbacks (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` tickers, and React/UI render components (`useState`, `useEffect`, `createElement`) are flagged as hot paths. `unpeek` mangles identifiers and encrypts string constants across the entire bundle, while injecting opaque control-flow predicates exclusively into cold functions (such as license checks, request signers, and auth validators). V8 JIT optimization inside hot loops remains untouched.
+   Before modifying an AST node, [`detectHotPaths`](packages/unpeek/src/ast/index.ts) traverses the file call graph. Functions containing loops (`for`, `while`, `do-while`, `for-of`), array higher-order callbacks (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` tickers, and React/UI render components (`useState`, `useEffect`, `createElement`) are flagged as hot paths. `unpeek` mangles identifiers and encrypts string constants across the entire bundle, while injecting opaque control-flow predicates exclusively into cold functions (such as license checks, request signers, and auth validators). V8 JIT optimization inside hot loops remains untouched.
 2. **O(1) Lazy String Vault (`<15%` Gzip Budget)**
    Plaintext string literals (`minStringLength >= 4`) are encrypted at build time with a polymorphic XOR stream cipher keyed by a per-build 32-bit seed. Instead of decrypting every string on page startup, the injected vault helper decodes each string lazily on its first access and caches the plaintext result in its array slot. Subsequent reads resolve in O(1) time through direct array indexing.
 3. **Self-Defending `Function.prototype.toString()` Integrity and Passive Deterrent**
-   When an analyst formats a protected chunk using DevTools Pretty-Print (`{}`) or edits a branch instruction in the Sources panel, the formatted source alters `Function.prototype.toString()`. [`verifyCodeIntegrity`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/runtime/index.ts) validates a seeded 32-bit FNV-1a checksum against the function source representation with zero false positives on untouched minified code, triggering gradual state degradation (`deterrentMode: 'gradual'`) rather than an obvious crash point that attackers can patch out.
+   When an analyst formats a protected chunk using DevTools Pretty-Print (`{}`) or edits a branch instruction in the Sources panel, the formatted source alters `Function.prototype.toString()`. [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts) validates a seeded 32-bit FNV-1a checksum against the function source representation with zero false positives on untouched minified code, triggering gradual state degradation (`deterrentMode: 'gradual'`) rather than an obvious crash point that attackers can patch out.
 4. **Automatic Source Map Vault (`.unpeek-maps/`)**
-   Leaving `.js.map` files in a public build directory reconstructs your original TypeScript project tree inside DevTools. [`protectProject`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/cli/protect.ts) extracts `.map` files from your public build directory into a private `.unpeek-maps/` folder and strips `//# sourceMappingURL=` comments from every client bundle so you can upload maps to Sentry or Datadog without serving them to end users.
+   Leaving `.js.map` files in a public build directory reconstructs your original TypeScript project tree inside DevTools. [`protectProject`](packages/unpeek/src/cli/protect.ts) extracts `.map` files from your public build directory into a private `.unpeek-maps/` folder and strips `//# sourceMappingURL=` comments from every client bundle so you can upload maps to Sentry or Datadog without serving them to end users.
 
 ---
 
@@ -114,7 +114,7 @@ npx unpeek protect
 
 ### 3. Universal Bundler Plugin (`unpeek/unplugin`)
 
-For in-memory chunk transformations during the bundler build lifecycle rather than a post-build CLI pass, use [`unpeek/unplugin`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/bundler/unplugin.ts):
+For in-memory chunk transformations during the bundler build lifecycle rather than a post-build CLI pass, use [`unpeek/unplugin`](packages/unpeek/src/bundler/unplugin.ts):
 
 #### Vite (`vite.config.ts`)
 
@@ -201,7 +201,7 @@ npx @sentry/cli sourcemaps upload .unpeek-maps --release="$GIT_COMMIT_SHA"
 
 ## Official AI Agent Skill Installation
 
-`unpeek` ships with an official, token-optimized AI Agent Skill ([`skills/unpeek/SKILL.md`](https://github.com/Woffluon/unpeek/blob/main/skills/unpeek/SKILL.md)) following Agent Skills Discovery Optimization (SDO) standards. Installing this skill teaches your coding agent (Claude Code, Cursor, Antigravity, OpenAI Codex, or Gemini CLI) how to configure `unpeek`, guard SSR chunks, and wire `.unpeek-maps/` into CI/CD pipelines.
+`unpeek` ships with an official, token-optimized AI Agent Skill ([`skills/unpeek/SKILL.md`](skills/unpeek/SKILL.md)) following Agent Skills Discovery Optimization (SDO) standards. Installing this skill teaches your coding agent (Claude Code, Cursor, Antigravity, OpenAI Codex, or Gemini CLI) how to configure `unpeek`, guard SSR chunks, and wire `.unpeek-maps/` into CI/CD pipelines.
 
 ### Project-Scoped Installation (Shared with Team via Git)
 
@@ -231,6 +231,8 @@ curl -fsSL https://raw.githubusercontent.com/Woffluon/unpeek/main/skills/unpeek/
 
 ## Verification, Testing & Benchmarks
 
+This monorepo is managed with `pnpm` and verified against strict semantic equivalence, deobfuscation resistance, and runtime overhead budgets:
+
 ```bash
 # Install workspace dependencies
 pnpm install
@@ -244,11 +246,27 @@ pnpm --filter unpeek run test:coverage
 # Run the V8 VM CPU overhead (<2%) and Gzip delta (<15%) benchmark
 pnpm bench
 
-# Run strict TypeScript typechecking
+# Run strict TypeScript typechecking across packages/unpeek and apps/web
 pnpm typecheck
+
+# Build the core package and static interactive web playground
+pnpm build
 ```
 
-### Benchmark Output Reference ([`benchmarks/overhead.bench.ts`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/benchmarks/overhead.bench.ts))
+### Monorepo Scripts & Release Integrity
+
+```bash
+# Verify Conventional Commit version calculation
+powershell -File scripts/test-versioning.ps1
+
+# Validate release readiness against planned commit message
+powershell -File scripts/validate-version.ps1 -Message "fix: description"
+
+# Stage release artifacts and compute SHA-256 manifests
+powershell -File scripts/stage-release.ps1
+```
+
+### Benchmark Output Reference ([`packages/unpeek/benchmarks/overhead.bench.ts`](packages/unpeek/benchmarks/overhead.bench.ts))
 
 - **Build / Transform Time:** `< 3000 ms`
 - **Gzip Size Delta:** `< 15%` on production application bundles
@@ -257,4 +275,4 @@ pnpm typecheck
 
 ## License
 
-Released under the [MIT License](https://github.com/Woffluon/unpeek/blob/main/LICENSE).
+Released under the [MIT License](./LICENSE).
