@@ -5,11 +5,12 @@ description: Use when protecting client-side JavaScript bundles from DevTools in
 
 # unpeek: Client-Side JavaScript Protection Skill
 
-<baglam>
-unpeek hardens production browser bundles against DevTools inspection, source map leaks, and static AST deobfuscators while keeping runtime CPU overhead below 2% and Gzip growth below 15%. It operates on compiled build artifacts and bundler output chunks so application source files remain untouched.
-</baglam>
+## Overview
 
-<kurulum_adimlari>
+unpeek hardens production browser bundles against DevTools inspection, source map leaks, and static AST deobfuscators while keeping runtime CPU overhead below 2% and Gzip growth below 15%. It operates on compiled build artifacts and bundler output chunks so application source files remain untouched.
+
+## Installation & Setup
+
 ### Option A: Zero-Config Post-Build CLI (Recommended)
 
 1. Run the initializer in the project root to configure `"postbuild": "unpeek protect"` and add `.unpeek-maps/` to `.gitignore`:
@@ -42,15 +43,14 @@ export default defineConfig({
 ```
 
 For Next.js or Webpack, register `unpeek.webpack({ deterrentMode: 'gradual' })` inside `if (!dev && !isServer)` so server bundles remain unmodified.
-</kurulum_adimlari>
 
-<dogrulama>
+## Verification & Acceptance
+
 Verify the integration by running a production build and checking three observable outcomes:
 
 1. **Summary Metrics**: Confirm the CLI prints `[unpeek] Protection Complete` with `Processed Bundles > 0` and `Gzip Bundle Size` delta.
 2. **Source Map Isolation**: Verify `.map` files move into `.unpeek-maps/` and public `.js` chunks no longer contain `//# sourceMappingURL=`.
 3. **Plaintext Absence**: Search the output folder (`grep -R "your_secret_constant" dist/ .next/static/`) to confirm string literals (`length >= 4`) are encoded in the O(1) lazy string vault.
-</dogrulama>
 
 ## Troubleshooting & Operational Recipes
 

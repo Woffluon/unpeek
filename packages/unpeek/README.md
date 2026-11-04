@@ -84,19 +84,33 @@ npm install -D unpeek
 npx unpeek protect
 ```
 
-#### CLI Options
+#### CLI Commands & Options
 
-| Flag | Description | Default |
+| Command / Flag | Description | Default |
 | :--- | :--- | :--- |
+| `init [--dry-run]` | Automatically detect project framework, configure `postbuild` script, and create `.unpeek-maps/` vault | |
+| `protect` | Protect production client bundles in-place (default command) | |
 | `--out-dir <path>` | Explicit client output directory override (e.g., `dist/assets`, `.next/static/chunks`) | Auto-detected from project framework |
 | `--seed <number>` | Deterministic 32-bit polymorphic build seed | Random per build |
 | `--passive` | Use passive deterrent mode instead of gradual state degradation | Default: gradual degradation |
 | `--no-maps` | Permanently delete `.map` files instead of moving them to `.unpeek-maps/` | Moves to `.unpeek-maps/` |
+| `--min-string-length <num>` | Minimum string length for lazy encryption vault | `4` |
+| `--private-maps-dir <dir>` | Directory to store vaulted private source maps | `.unpeek-maps` |
+| `--no-shield` | Do not inject runtime anti-tamper deterrent shield | Shield injected into entry chunks |
 | `-h, --help` | Show CLI help message | |
 | `-v, --version` | Show CLI version number | |
 
 > [!NOTE]
 > Programmatic execution through `protectProject(options)` supports additional fine-grained options, including `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, and `cwd`.
+
+> [!IMPORTANT]
+> **CommonJS Users (Dynamic `import()`):**
+> Because `unpeek` is distributed with native ECMAScript Modules (`"type": "module"`), in CommonJS environments (`.cjs` files or `require()` scripts) load `unpeek` using dynamic `import()`:
+> ```javascript
+> // CommonJS (next.config.js / webpack.config.js / scripts)
+> const unpeek = (await import('unpeek/unplugin')).default;
+> const { protectProject, transformJavaScript } = await import('unpeek');
+> ```
 
 ### 3. Universal Bundler Plugin (`unpeek/unplugin`)
 
