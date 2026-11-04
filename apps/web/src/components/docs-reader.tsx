@@ -1,175 +1,239 @@
 "use client";
 
-import React, { useState } from "react";
-import { Check, Copy, BookOpen, TerminalWindow } from "@phosphor-icons/react";
+import Link from "next/link";
+import React, { useEffect, useRef, useState } from "react";
 import type { Dictionary, DocSection } from "@/content/i18n";
 
 interface DocsReaderProps {
   dict: Dictionary;
-  activeSectionId?: string;
 }
 
-export function DocsReader({ dict, activeSectionId }: DocsReaderProps) {
-  const [selectedId, setSelectedId] = useState<string>(
-    activeSectionId || dict.docsSections[0]?.id || "quickstart"
-  );
+export function DocsReader({ dict }: DocsReaderProps) {
+  const sections = dict.docsSections;
+  const [selectedId, setSelectedId] = useState<string>(sections[0]?.id ?? "");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const copyTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimer.current) window.clearTimeout(copyTimer.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const articles = Array.from(document.querySelectorAll<HTMLElement>("[data-doc-section]"));
+    if (articles.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        const id = visible[0]?.target.getAttribute("data-doc-section");
+        if (id) setSelectedId(id);
+      },
+      { rootMargin: "-96px 0px -65% 0px", threshold: 0 }
+    );
+
+    articles.forEach((article) => observer.observe(article));
+    return () => observer.disconnect();
+  }, [dict]);
 
   const handleCopy = (code: string, key: string) => {
-    if (typeof navigator !== "undefined" && navigator.clipboard) {
-      navigator.clipboard.writeText(code);
-      setCopiedKey(key);
-      setTimeout(() => setCopiedKey(null), 1800);
-    }
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    navigator.clipboard.writeText(code);
+    setCopiedKey(key);
+    if (copyTimer.current) window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopiedKey(null), 1600);
   };
 
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 border border-zinc-800 bg-[#0d0d10]">
-      {/* Left Sidebar Navigation */}
-      <aside className="lg:col-span-4 xl:col-span-3 border-b lg:border-b-0 lg:border-r border-zinc-800 p-6 bg-[#09090b]">
-        <div className="lg:sticky lg:top-24 space-y-6">
-          <div className="flex items-center gap-2.5 pb-4 border-b border-zinc-800">
-            <BookOpen size={18} weight="regular" className="text-emerald-400" />
-            <span className="font-mono text-xs text-zinc-300 font-medium">
-              {dict.docsHeader.sidebarTitle}
-            </span>
-          </div>
+  const currentIndex = Math.max(
+    0,
+    sections.findIndex((section) => section.id === selectedId)
+  );
+  const prev = currentIndex > 0 ? sections[currentIndex - 1] : null;
+  const next = currentIndex < sections.length - 1 ? sections[currentIndex + 1] : null;
 
-          <nav aria-label={dict.docsHeader.sidebarTitle} className="space-y-1">
-            {dict.docsSections.map((sec: DocSection) => {
-              const isCurrent = selectedId === sec.id;
-              return (
-                <a
-                  key={sec.id}
-                  href={`#doc-${sec.id}`}
-                  onClick={() => setSelectedId(sec.id)}
-                  className={`group flex items-start gap-3 px-3 py-2.5 text-left transition-colors border-l-2 ${
-                    isCurrent
-                      ? "border-emerald-500 bg-zinc-900/90 text-zinc-100"
-                      : "border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/40"
-                  }`}
-                >
-                  <span
-                    className={`font-mono text-xs mt-0.5 ${
-                      isCurrent ? "text-emerald-400" : "text-zinc-500 group-hover:text-zinc-400"
-                    }`}
-                  >
-                    {sec.number}
-                  </span>
-                  <span className="text-sm font-medium leading-snug">{sec.title}</span>
-                </a>
-              );
-            })}
+  const navItemClass = (active: boolean) =>
+    `flex items-baseline gap-3 border-l-2 py-2 pl-3 text-[13px] transition-colors duration-150 ${
+      active ? "border-ink text-ink" : "border-transparent text-ink-2 hover:text-ink"
+    }`;
+
+  return (
+    <div className="grid grid-cols-1 gap-0 border-t border-rule lg:grid-cols-[248px_minmax(0,1fr)]">
+      <aside className="border-b border-rule py-6 lg:border-b-0 lg:border-r lg:pr-6">
+        <details className="lg:hidden">
+          <summary className="flex cursor-pointer list-none items-center justify-between border border-rule px-3 py-2 font-mono text-[11px] uppercase tracking-[0.04em] text-ink-2 [&::-webkit-details-marker]:hidden">
+            {dict.docsHeader.sidebarTitle}
+            <span className="tnum text-ink-3">
+              {String(sections.length).padStart(2, "0")}
+            </span>
+          </summary>
+
+          <nav aria-label={dict.docsHeader.sidebarTitle} className="mt-3 space-y-0.5">
+            {sections.map((section: DocSection) => (
+              <a
+                key={section.id}
+                href={`#doc-${section.id}`}
+                onClick={() => setSelectedId(section.id)}
+                aria-current={selectedId === section.id ? "true" : undefined}
+                className={navItemClass(selectedId === section.id)}
+              >
+                <span className="tnum font-mono text-[10.5px] text-ink-3">{section.number}</span>
+                <span className="leading-snug">{section.title}</span>
+              </a>
+            ))}
           </nav>
-        </div>
+        </details>
+
+        <nav
+          aria-label={dict.docsHeader.sidebarTitle}
+          className="sticky top-24 hidden space-y-3 lg:block"
+        >
+          {sections.map((section: DocSection) => (
+            <div key={section.id}>
+              <a
+                href={`#doc-${section.id}`}
+                onClick={() => setSelectedId(section.id)}
+                aria-current={selectedId === section.id ? "true" : undefined}
+                className={navItemClass(selectedId === section.id)}
+              >
+                <span className="tnum font-mono text-[10.5px] text-ink-3">{section.number}</span>
+                <span className="leading-snug">{section.title}</span>
+              </a>
+
+              {selectedId === section.id && section.subsections.length > 0 && (
+                <ol className="mt-1 mb-1 space-y-0.5 border-l border-rule pl-6">
+                  {section.subsections.map((sub, index) => (
+                    <li key={index}>
+                      <a
+                        href={`#doc-${section.id}-${index}`}
+                        className="block py-1 text-[11.5px] leading-5 text-ink-3 transition-colors duration-150 hover:text-ink"
+                      >
+                        {sub.title}
+                      </a>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          ))}
+        </nav>
       </aside>
 
-      {/* Main Documentation Content Stream */}
-      <div className="lg:col-span-8 xl:col-span-9 divide-y divide-zinc-800">
-        {dict.docsSections.map((section: DocSection) => (
+      <div className="lg:px-8 xl:px-10">
+        {sections.map((section: DocSection) => (
           <article
             key={section.id}
             id={`doc-${section.id}`}
-            onMouseEnter={() => setSelectedId(section.id)}
-            className="p-6 md:p-10 lg:p-12 scroll-mt-20 space-y-8"
+            data-doc-section={section.id}
+            className="scroll-mt-24 border-b border-rule py-10 last:border-b-0"
           >
-            {/* Section Header */}
-            <header className="space-y-3 border-b border-zinc-800/80 pb-6">
-              <div className="flex items-center gap-2.5 font-mono text-xs text-emerald-400">
-                <span>SECTION {section.number}</span>
-                <span className="text-zinc-700">/</span>
-                <span className="text-zinc-400">#{section.id}</span>
+            <header className="measure">
+              <div className="flex items-center gap-2 font-mono text-[11px] text-ink-3">
+                <span className="tnum">{section.number}</span>
+                <span>/</span>
+                <span>#{section.id}</span>
               </div>
-              <h3 className="text-2xl md:text-3xl font-semibold tracking-tight text-zinc-100">
-                {section.title}
-              </h3>
-              <p className="text-zinc-400 text-base leading-relaxed max-w-[68ch]">
-                {section.summary}
-              </p>
+              <h2 className="heading mt-3 text-[30px] text-ink sm:text-[34px]">{section.title}</h2>
+              <p className="mt-3 text-[15px] leading-7 text-ink-2">{section.summary}</p>
             </header>
 
-            {/* Subsections */}
-            <div className="space-y-10">
-              {section.subsections.map((sub, subIdx) => (
-                <div key={subIdx} className="space-y-4">
-                  <h4 className="text-lg font-medium text-zinc-100 tracking-tight">
-                    {sub.title}
-                  </h4>
+            <div className="mt-8 space-y-9">
+              {section.subsections.map((sub, subIdx) => {
+                const subId = `${section.id}-${subIdx}`;
+                return (
+                  <div key={subId} id={`doc-${subId}`} className="scroll-mt-24 space-y-3">
+                    <h3 className="text-[18px] font-medium leading-snug tracking-[-0.01em] text-ink">
+                      {sub.title}
+                    </h3>
 
-                  <div className="space-y-3">
-                    {sub.body.map((paragraph, pIdx) => (
-                      <p
-                        key={pIdx}
-                        className="text-sm md:text-base text-zinc-400 leading-relaxed max-w-[68ch]"
-                      >
-                        {paragraph}
-                      </p>
-                    ))}
-                  </div>
-
-                  {sub.bullets && sub.bullets.length > 0 && (
-                    <div className="grid grid-cols-1 gap-2.5 pt-2">
-                      {sub.bullets.map((bullet, bIdx) => (
-                        <div
-                          key={bIdx}
-                          className="flex items-start gap-3 p-3.5 border border-zinc-800/90 bg-[#09090b]"
-                        >
-                          <span className="font-mono text-xs text-emerald-400 mt-0.5 select-none">
-                            0{bIdx + 1}
-                          </span>
-                          <p className="text-sm text-zinc-300 leading-relaxed">{bullet}</p>
-                        </div>
+                    <div className="measure space-y-3">
+                      {sub.body.map((paragraph, pIdx) => (
+                        <p key={pIdx} className="text-[15px] leading-7 text-ink-2">
+                          {paragraph}
+                        </p>
                       ))}
                     </div>
-                  )}
 
-                  {sub.codeBlocks &&
-                    sub.codeBlocks.map((cb, cIdx) => {
+                    {sub.bullets && sub.bullets.length > 0 && (
+                      <ul className="measure space-y-2.5">
+                        {sub.bullets.map((bullet, bIdx) => (
+                          <li key={bIdx} className="flex gap-3 text-[14px] leading-6 text-ink-2">
+                            <span className="mt-[9px] h-1 w-1 shrink-0 bg-signal" aria-hidden="true" />
+                            <span>{bullet}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    {sub.codeBlocks?.map((cb, cIdx) => {
                       const blockKey = `${section.id}-${subIdx}-${cIdx}`;
                       const isCopied = copiedKey === blockKey;
                       return (
-                        <div
-                          key={blockKey}
-                          className="border border-zinc-800 bg-[#09090b] overflow-hidden mt-4"
-                        >
-                          <div className="flex items-center justify-between px-4 py-2.5 border-b border-zinc-800 bg-zinc-950">
-                            <div className="flex items-center gap-2">
-                              <TerminalWindow
-                                size={15}
-                                weight="regular"
-                                className="text-emerald-400"
-                              />
-                              <span className="font-mono text-xs text-zinc-300">{cb.label}</span>
-                            </div>
+                        <div key={blockKey} className="mt-4 overflow-hidden border border-rule">
+                          <div className="flex items-center justify-between gap-3 border-b border-carbon-rule bg-carbon px-3 py-2">
+                            <span className="font-mono text-[11px] text-carbon-text/60">
+                              {cb.label}
+                            </span>
                             <button
                               type="button"
                               onClick={() => handleCopy(cb.code, blockKey)}
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono text-zinc-300 hover:text-zinc-100 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 transition-colors active:scale-[0.98]"
+                              className="rounded-[3px] px-2 py-1 font-mono text-[10.5px] text-carbon-text/70 transition-colors duration-150 hover:bg-carbon-2 hover:text-carbon-text active:scale-[0.98]"
                             >
-                              {isCopied ? (
-                                <>
-                                  <Check size={13} weight="bold" className="text-emerald-400" />
-                                  <span className="text-emerald-400">{dict.hero.copiedLabel}</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Copy size={13} weight="regular" />
-                                  <span>{dict.hero.copyLabel}</span>
-                                </>
-                              )}
+                              {isCopied ? dict.hero.copiedLabel : dict.hero.copyLabel}
                             </button>
                           </div>
-                          <pre className="p-4 text-xs md:text-sm font-mono text-zinc-200 overflow-x-auto leading-relaxed">
+                          <pre className="code-scroll overflow-x-auto bg-carbon p-4 text-[11.5px] leading-6 text-carbon-text/90">
                             <code>{cb.code}</code>
                           </pre>
                         </div>
                       );
                     })}
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
           </article>
         ))}
+
+        <nav
+          aria-label={dict.docsHeader.sidebarTitle}
+          className="grid grid-cols-1 gap-0 sm:grid-cols-2"
+        >
+          {prev ? (
+            <Link
+              href={`#doc-${prev.id}`}
+              onClick={() => setSelectedId(prev.id)}
+              className="group border-b border-rule py-4 sm:border-b-0 sm:border-r sm:pr-6"
+            >
+              <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-ink-3">
+                {dict.docsHeader.previousLabel}
+              </span>
+              <span className="mt-1 block text-[13px] leading-5 text-ink-2 transition-colors duration-150 group-hover:text-ink">
+                {prev.title}
+              </span>
+            </Link>
+          ) : (
+            <span className="hidden sm:block" />
+          )}
+
+          {next ? (
+            <Link
+              href={`#doc-${next.id}`}
+              onClick={() => setSelectedId(next.id)}
+              className="group border-b border-rule py-4 sm:border-b-0 sm:pl-6 sm:text-right"
+            >
+              <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-ink-3">
+                {dict.docsHeader.nextLabel}
+              </span>
+              <span className="mt-1 block text-[13px] leading-5 text-ink-2 transition-colors duration-150 group-hover:text-ink">
+                {next.title}
+              </span>
+            </Link>
+          ) : null}
+        </nav>
       </div>
     </div>
   );

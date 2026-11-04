@@ -1,13 +1,20 @@
 # unpeek
 
-**Sıfır yapılandırma gerektiren, çağrı grafiği (call-graph) farkındalıklı, <%2 CPU ek yüküne sahip polimorfik JavaScript koruma ve çalışma zamanı (runtime) müdahale önleme aracı.**
+\\	ext
+  ▛▀▀▜  unpeek
+  ▙▄▄▟  client bundle protection
+\
+**Bakılacak bir şey yok. Yavaşlayacak hiçbir şey yok.**
 
-[![Lisans: MIT](https://img.shields.io/badge/Lisans-MIT-emerald.svg)](LICENSE)
-[![CPU Ek Yükü](https://img.shields.io/badge/CPU_Ek_Y%C3%BCk%C3%BC-%3C2%25-10b981.svg)](packages/unpeek/benchmarks/overhead.bench.ts)
-[![Gzip Artışı](https://img.shields.io/badge/Gzip_Art%C4%B1%C5%9F%C4%B1-%3C15%25-06b6d4.svg)](packages/unpeek/benchmarks/overhead.bench.ts)
-[![Canlı Demo](https://img.shields.io/badge/Playground-Canl%C4%B1_Demo-6366f1.svg)](https://woffluon.github.io/unpeek)
+Sıfır yapılandırma gerektiren, çağrı grafiği (call-graph) farkındalıklı, <%2 CPU ek yükü ve <%15 Gzip bütçesine sahip istemci tarafı JavaScript koruma ve çalışma zamanı (runtime) müdahale önleme aracı.
 
-[English](./README.md) | Türkçe · [Canlı İnteraktif Playground](https://woffluon.github.io/unpeek) · [Ajan Mimari Kılavuzu](./AGENTS.md) · [Yapay Zeka Becerisi (SKILL.md)](./skills/unpeek/SKILL.md)
+[![Lisans: MIT](https://img.shields.io/badge/Lisans-MIT-111111.svg?style=flat-square)](LICENSE)
+[![Sıcak Yol CPU](https://img.shields.io/badge/S%C4%B1cak%20Yol%20CPU-%3C2%25-FF3300.svg?style=flat-square)](packages/unpeek/benchmarks/overhead.bench.ts)
+[![Gzip Artışı](https://img.shields.io/badge/Gzip%20Art%C4%B1%C5%9F%C4%B1-%3C15%25-111111.svg?style=flat-square)](packages/unpeek/benchmarks/overhead.bench.ts)
+[![Canlı Demo](https://img.shields.io/badge/Showcase-Canl%C4%B1%20Demo-FF3300.svg?style=flat-square)](https://woffluon.github.io/unpeek)
+[![Dokümantasyon](https://img.shields.io/badge/Docs-Detayl%C4%B1%20Referans-111111.svg?style=flat-square)](https://woffluon.github.io/unpeek/docs)
+
+[English](./README.md) | Türkçe · [İnteraktif Vitrin](https://woffluon.github.io/unpeek) · [Dokümantasyon](https://woffluon.github.io/unpeek/docs) · [Ajan Mimari Kılavuzu](./AGENTS.md) · [Yapay Zeka Becerisi (SKILL.md)](./skills/unpeek/SKILL.md)
 
 ---
 

@@ -3,7 +3,7 @@ import type { DeterrentMode, ProtectOptions, ProtectSummary } from '../types.js'
 import { initProject } from './init.js';
 import { protectProject } from './protect.js';
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 
 function getPackageVersion(): string {
   try {
@@ -18,25 +18,58 @@ function getPackageVersion(): string {
 
 const RUNTIME_VERSION = getPackageVersion();
 
+const MARK_TOP = '  \u259B\u2580\u2580\u259C';
+const MARK_BOTTOM = '  \u2599\u2584\u2584\u259F';
+const RULE = '\u2500';
+const LABEL_WIDTH = 19;
+
+function colorEnabled(): boolean {
+  if (process.env.NO_COLOR) return false;
+  if (process.env.TERM === 'dumb') return false;
+  return Boolean(process.stdout.isTTY);
+}
+
+function paint(code: string, text: string): string {
+  return colorEnabled() ? `\u001b[${code}m${text}\u001b[0m` : text;
+}
+
+function dim(text: string): string {
+  return paint('2', text);
+}
+
+function brandBlock(): string {
+  return [
+    `${MARK_TOP}  ${paint('1', `unpeek ${RUNTIME_VERSION}`)}`,
+    `${MARK_BOTTOM}  ${dim('client bundle protection')}`,
+  ].join('\n');
+}
+
+function sectionBlock(title: string, rows: Array<[string, string]>): string {
+  const fill = Math.max(2, 46 - title.length);
+  const header = `  ${dim(title)} ${dim(RULE.repeat(fill))}`;
+  const body = rows.map(([label, value]) => `  ${dim(label.padEnd(LABEL_WIDTH))}  ${value}`);
+  return [header, ...body].join('\n');
+}
+
 function printHelp(): void {
-  const helpText = `
-unpeek v${VERSION} — Call-graph-aware polymorphic AST obfuscation & runtime shield
-
-Usage:
-  unpeek init [--dry-run]           Configure postbuild hook & .unpeek-maps/ vault
-  unpeek protect [options]          Protect client bundles in-place
-
-Options:
-  --out-dir <dir>                   Explicit client output directory
-  --seed <number>                   Deterministic polymorphic seed
-  --passive                         Use passive deterrent mode instead of gradual
-  --no-maps                         Delete .map files instead of vaulting to .unpeek-maps/
-  --min-string-length <num>         Minimum string length for encryption vault (default: 4)
-  --private-maps-dir <dir>          Directory to store vaulted source maps (default: .unpeek-maps)
-  --no-shield                       Do not inject runtime anti-tamper deterrent shield
-  -h, --help                        Show help message
-  -v, --version                     Show version number
-`.trim();
+  const helpText = [
+    brandBlock(),
+    '',
+    '  Usage:',
+    '    unpeek init [--dry-run]        wire postbuild and the .unpeek-maps/ vault',
+    '    unpeek protect [options]       protect client bundles in place',
+    '',
+    '  Options:',
+    '    --out-dir <dir>                explicit client output directory',
+    '    --seed <number>                deterministic polymorphic seed',
+    '    --passive                      passive deterrent mode instead of gradual',
+    '    --no-maps                      delete .map files instead of vaulting them',
+    '    --min-string-length <num>      minimum string length for the vault (default: 4)',
+    '    --private-maps-dir <dir>       vault directory (default: .unpeek-maps)',
+    '    --no-shield                    skip the runtime anti-tamper shield',
+    '    -h, --help                     show help',
+    '    -v, --version                  show version',
+  ].join('\n');
   console.log(helpText);
 }
 
@@ -47,32 +80,85 @@ function formatBytes(bytes: number): string {
 
 function printSummaryTable(summary: ProtectSummary): void {
   const sign = summary.gzipDeltaPercent > 0 ? '+' : '';
-  const rows: Array<[string, string]> = [
-    ['Framework', summary.framework],
-    ['Client OutDir', summary.outDir],
-    ['Processed Bundles', String(summary.processedFiles)],
-    ['Vaulted Source Maps', String(summary.movedSourceMaps)],
-    ['Cold Functions Protected', String(summary.totalColdFunctionsProtected)],
-    ['Hot Functions Skipped (0% Tax)', String(summary.totalHotFunctionsSkipped)],
-    ['Encrypted Strings', String(summary.totalEncryptedStrings)],
-    ['Mangled Symbols', String(summary.totalMangledSymbols)],
-    [
-      'Gzip Bundle Size',
-      `${formatBytes(summary.originalGzipBytes)} -> ${formatBytes(summary.protectedGzipBytes)} (${sign}${summary.gzipDeltaPercent}%)`,
-    ],
-    ['Elapsed Time', `${summary.elapsedMs} ms`],
-  ];
+  const gzip = `${formatBytes(summary.originalGzipBytes)} -> ${formatBytes(summary.protectedGzipBytes)}  ${sign}${summary.gzipDeltaPercent}%`;
 
-  const col1Width = Math.max(...rows.map(([k]) => k.length), 16);
-  const col2Width = Math.max(...rows.map(([, v]) => v.length), 20);
-  const divider = `+-${'-'.repeat(col1Width)}-+-${'-'.repeat(col2Width)}-+`;
+  console.log('');
+  console.log(brandBlock());
+  console.log('');
+  console.log(
+    sectionBlock('PROJECT', [
+      ['framework', summary.framework],
+      ['output', summary.outDir],
+      ['bundles', String(summary.processedFiles)],
+    ])
+  );
+  console.log('');
+  console.log(
+    sectionBlock('CALL GRAPH', [
+      ['hot path exempt', `${summary.totalHotFunctionsSkipped}  ${dim('0% tax')}`],
+      ['cold path protected', String(summary.totalColdFunctionsProtected)],
+    ])
+  );
+  console.log('');
+  console.log(
+    sectionBlock('TRANSFORM', [
+      ['string vault', `${summary.totalEncryptedStrings} literals  ${dim('O(1) memo')}`],
+      ['symbol mangling', `${summary.totalMangledSymbols} bindings`],
+    ])
+  );
+  console.log('');
+  console.log(
+    sectionBlock('OUTPUT', [
+      ['source maps', `${summary.movedSourceMaps} moved -> .unpeek-maps/`],
+      ['gzip', gzip],
+      ['elapsed', `${summary.elapsedMs} ms`],
+    ])
+  );
+  console.log('');
+  console.log(`  ${dim('done. maps are private. hot path untouched.')}`);
+}
 
-  console.log('\n[unpeek] Protection Complete');
-  console.log(divider);
-  for (const [label, value] of rows) {
-    console.log(`| ${label.padEnd(col1Width)} | ${value.padEnd(col2Width)} |`);
+function printInitResult(
+  result: {
+    framework?: string;
+    updatedPackageJson: boolean;
+    updatedGitignore: boolean;
+    message: string;
+  },
+  dryRun: boolean
+): void {
+  const postbuild = result.updatedPackageJson
+    ? dryRun
+      ? 'would be added'
+      : 'unpeek protect (added)'
+    : 'already configured';
+  const vault = result.updatedGitignore
+    ? dryRun
+      ? 'would be ignored'
+      : '.unpeek-maps/ (added)'
+    : 'already ignored';
+
+  console.log('');
+  console.log(brandBlock());
+  console.log('');
+  console.log(
+    sectionBlock('PROJECT', [
+      ['framework', result.framework ?? 'unknown'],
+      ['postbuild', postbuild],
+      ['vault', vault],
+    ])
+  );
+  console.log('');
+  if (dryRun) {
+    console.log(`  ${dim(result.message)}`);
+  } else if (result.updatedPackageJson || result.updatedGitignore) {
+    console.log(`  ${dim('postbuild wired. maps stay private from the first build.')}`);
+  } else {
+    console.log(`  ${dim(result.message)}`);
   }
-  console.log(divider);
+  if (!dryRun) {
+    console.log(`  ${dim('run your build to protect the first bundle.')}`);
+  }
 }
 
 export async function runCli(args: string[]): Promise<void> {
@@ -91,7 +177,7 @@ export async function runCli(args: string[]): Promise<void> {
   if (command === 'init') {
     const dryRun = args.includes('--dry-run');
     const res = initProject(process.cwd(), { dryRun });
-    console.log(`[unpeek] ${res.message}`);
+    printInitResult(res, dryRun);
     return;
   }
 
