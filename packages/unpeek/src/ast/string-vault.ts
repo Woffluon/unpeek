@@ -9,7 +9,7 @@ const DIRECTIVE_STRINGS = new Set([
 ]);
 
 const HELPER_TEMPLATE = (acorn.parse(
-  `const _ = [].map(function f(a) {
+  `var _ = [].map(function f(a) {
   var s = "";
   for (var j = 0; j < a.length; j++) {
     s += String.fromCharCode(a.charCodeAt(j) ^ (((0 ^ ((a._u || /\\n/.test(f) * 14) | ((j & 1) * 0))) & 30) | 1));
@@ -75,8 +75,23 @@ export function applyStringVault(
   minStringLength = 4,
   hotExemptNodes?: WeakSet<acorn.Node>
 ): StringVaultResult {
-  const suffix = ((seed >>> 0) % 0xff).toString(36);
-  const cacheVarName = `_uC${suffix}`;
+  const alreadyVaulted = ast.body.some(
+    (stmt: any) =>
+      stmt.type === 'VariableDeclaration' &&
+      stmt.declarations?.some(
+        (d: any) =>
+          d.id?.type === 'Identifier' &&
+          typeof d.id.name === 'string' &&
+          d.id.name.startsWith('_uC')
+      )
+  );
+  if (alreadyVaulted) {
+    return {
+      encryptedStringsCount: 0,
+      integrityToken: computeFnv1aHash('already-vaulted', seed),
+    };
+  }
+
   const mask = ((seed >>> 0) & 0x1e) | 3;
   const step = (((seed >>> 5) & 7) * 2) + 3;
 
@@ -150,6 +165,11 @@ export function applyStringVault(
     };
   }
 
+  const serializedTable = JSON.stringify(encryptedPayloads);
+  const integrityToken = computeFnv1aHash(serializedTable, seed);
+  const suffix = computeFnv1aHash(`vault:${seed}`, integrityToken).toString(36);
+  const cacheVarName = `_uC${suffix}`;
+
   for (const { node } of targetsToReplace) {
     const idx = stringToIndex.get(node.value)!;
     node.type = 'MemberExpression';
@@ -168,10 +188,7 @@ export function applyStringVault(
     delete node.raw;
   }
 
-  const serializedTable = JSON.stringify(encryptedPayloads);
-  const integrityToken = computeFnv1aHash(serializedTable, seed);
-
-  // Decrypt once into const _uC array at module initialization so V8 marks the ContextCell kConst
+  // Decrypt once into _uC array at module initialization for O(1) indexed reads
   const helperStmt = createVaultHelperAst(
     cacheVarName,
     encryptedPayloads,

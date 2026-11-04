@@ -1,6 +1,6 @@
 import { createUnplugin } from 'unplugin';
 import type { ProtectOptions } from '../types.js';
-import { transformJavaScript } from '../ast/index.js';
+import { computeFnv1aHash, transformJavaScript } from '../ast/index.js';
 import { generateRuntimeShield } from '../runtime/index.js';
 
 export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options = {}) => {
@@ -28,8 +28,9 @@ export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options 
       }
 
       const shouldInjectShield = injectRuntimeShield && (chunk.isEntry ?? true);
+      const chunkSeed = computeFnv1aHash(chunk.fileName, baseSeed);
       const result = transformJavaScript(code, {
-        seed: baseSeed,
+        seed: chunkSeed,
         minStringLength,
         filename: chunk.fileName,
         injectRuntimeShield: shouldInjectShield,
@@ -39,12 +40,13 @@ export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options 
       let finalCode = result.code;
       if (shouldInjectShield) {
         const shield = generateRuntimeShield({
-          seed: baseSeed,
+          seed: chunkSeed,
           deterrentMode,
           expectedIntegrityHash: result.integrityToken,
         });
         if (
           shield.preambleCode &&
+          !finalCode.includes('(function _u$') &&
           !finalCode.includes(shield.integrityCheckFnName) &&
           !finalCode.startsWith(shield.preambleCode)
         ) {

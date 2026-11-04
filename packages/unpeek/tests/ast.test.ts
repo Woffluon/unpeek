@@ -214,5 +214,159 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(withShield.code).toContain('__unpeek');
       expect(withShield.code.endsWith(withoutShield.code)).toBe(true);
     });
+
+    it('is idempotent when transformJavaScript is called multiple times on already-protected code', () => {
+      const code = `
+        function verifyToken(inputKey) {
+          const expected = "UNPEEK_IDEMPOTENT_SECRET_2026";
+          return inputKey === expected ? "VALID_TOKEN" : "INVALID_TOKEN";
+        }
+        return verifyToken("UNPEEK_IDEMPOTENT_SECRET_2026");
+      `;
+      const firstPass = transformJavaScript(code, {
+        seed: 0x112233,
+        injectRuntimeShield: true,
+      });
+      const secondPassSameSeed = transformJavaScript(firstPass.code, {
+        seed: 0x112233,
+        injectRuntimeShield: true,
+      });
+      const secondPassDiffSeed = transformJavaScript(firstPass.code, {
+        seed: 0x998877,
+        injectRuntimeShield: true,
+      });
+
+      expect(secondPassSameSeed.code).toBe(firstPass.code);
+      expect(secondPassSameSeed.encryptedStringsCount).toBe(0);
+      expect(secondPassDiffSeed.code).toBe(firstPass.code);
+      expect(new Function(secondPassDiffSeed.code)()).toBe('VALID_TOKEN');
+    });
+
+    it('preserves lexical block scoping for let/const in loops, catch clauses, recursive named FunctionExpressions, local classes, and shorthand properties', () => {
+      const complexScopedCode = `
+        const outerModuleApi = {
+          handleMutable(v) {
+            return "MUTABLE_OK:" + v;
+          }
+        };
+
+        function runComplexScopeSuite(e, items) {
+          const o = outerModuleApi;
+          let acc = 0;
+
+          // 1. Block-scoped let inside for-of with same original name 'o' must not corrupt outer 'o'
+          for (const entry of items) {
+            const { tree: o = 10 } = entry;
+            acc += o;
+          }
+
+          // 2. try/catch with block-scoped 'let e' inside try and 'catch (e)' parameter
+          let caughtMsg = "";
+          try {
+            const e = "TRY_BLOCK_LOCAL_STRING";
+            if (e.length > 0) {
+              throw new Error("CATCH_CLAUSE_PAYLOAD");
+            }
+          } catch (e) {
+            caughtMsg = e.message;
+          }
+
+          // 3. Recursive named FunctionExpression with id 'e' shadowing outer parameter 'e'
+          const factorial = function e(n) {
+            return n <= 1 ? 1 : n * e(n - 1);
+          };
+
+          // 4. Local class 't' with method containing 'for (let t of ...)' returning 'new t(...)'
+          class t {
+            constructor(vals) {
+              this.vals = vals;
+            }
+            filterPositive() {
+              const out = [];
+              for (const t of this.vals) {
+                if (t > 0) out.push(t);
+              }
+              return new t(out);
+            }
+          }
+
+          // 5. Shorthand object literal property { acc } must keep key 'acc'
+          const summaryObj = { acc };
+          const filtered = new t([-1, 2, 3]).filterPositive();
+
+          return [
+            o.handleMutable(e),
+            summaryObj.acc,
+            caughtMsg,
+            factorial(5),
+            filtered.vals.join(",")
+          ].join("|");
+        }
+
+        return runComplexScopeSuite("INIT_ARG", [{ tree: 5 }, { tree: 7 }, {}]);
+      `;
+
+      const transformed = transformJavaScript(complexScopedCode, {
+        seed: 0xabcdef,
+        minStringLength: 4,
+      });
+
+      const expected = new Function(complexScopedCode)();
+      const actual = new Function(transformed.code)();
+      expect(actual).toBe(expected);
+      expect(actual).toBe('MUTABLE_OK:INIT_ARG|22|CATCH_CLAUSE_PAYLOAD|120|2,3');
+    });
+
+    it('prevents inner function parameter mangled names from colliding with outer scope mangled variables (React Scheduler pattern)', () => {
+      const schedulerPatternCode = `
+        function createSchedulerModule() {
+          var queue = [],
+            timers = [],
+            idCounter = 1,
+            currentTask = null,
+            priority = 3,
+            isPerformingWork = false,
+            isHostCallbackScheduled = false,
+            isHostTimeoutScheduled = false;
+
+          function advanceTimers(currentTime) {
+            if (currentTime > 0) {
+              queue.push(currentTime + idCounter + priority);
+            }
+          }
+
+          function handleTimeout(currentTime) {
+            isHostTimeoutScheduled = false;
+            advanceTimers(currentTime);
+            if (!isHostCallbackScheduled && queue.length > 0) {
+              isHostCallbackScheduled = true;
+            }
+            return {
+              receivedTime: currentTime,
+              timeoutFlag: isHostTimeoutScheduled,
+              callbackFlag: isHostCallbackScheduled,
+              workFlag: isPerformingWork,
+              task: currentTask,
+              timersCount: timers.length
+            };
+          }
+
+          isHostTimeoutScheduled = true;
+          return handleTimeout(4200);
+        }
+        return JSON.stringify(createSchedulerModule());
+      `;
+
+      const transformed = transformJavaScript(schedulerPatternCode, {
+        seed: 0x743beef,
+      });
+
+      const origRes = JSON.parse(new Function(schedulerPatternCode)());
+      const transRes = JSON.parse(new Function(transformed.code)());
+      expect(transRes).toEqual(origRes);
+      expect(transRes.receivedTime).toBe(4200);
+      expect(transRes.timeoutFlag).toBe(false);
+      expect(transRes.callbackFlag).toBe(true);
+    });
   });
 });

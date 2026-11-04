@@ -13,6 +13,33 @@ import { generateRuntimeShield } from '../runtime/index.js';
 export { detectHotPaths } from './hot-path-detector.js';
 export { computeFnv1aHash } from './string-vault.js';
 
+function isAstAlreadyProtected(ast: any): boolean {
+  if (!ast || !Array.isArray(ast.body)) return false;
+  return ast.body.some((stmt: any) => {
+    if (
+      stmt.type === 'VariableDeclaration' &&
+      stmt.declarations?.some(
+        (d: any) =>
+          d.id?.type === 'Identifier' &&
+          typeof d.id.name === 'string' &&
+          d.id.name.startsWith('_uC')
+      )
+    ) {
+      return true;
+    }
+    if (
+      stmt.type === 'ExpressionStatement' &&
+      stmt.expression?.type === 'CallExpression' &&
+      stmt.expression.callee?.type === 'FunctionExpression' &&
+      typeof stmt.expression.callee.id?.name === 'string' &&
+      stmt.expression.callee.id.name.startsWith('_u$')
+    ) {
+      return true;
+    }
+    return false;
+  });
+}
+
 export function transformJavaScript(
   code: string,
   options: TransformOptions = {}
@@ -35,7 +62,7 @@ export function transformJavaScript(
   }
 
   const ast = parseJavaScriptAst(code);
-  if (!ast) {
+  if (!ast || isAstAlreadyProtected(ast)) {
     return {
       code,
       encryptedStringsCount: 0,
