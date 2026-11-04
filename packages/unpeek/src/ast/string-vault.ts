@@ -9,10 +9,10 @@ const DIRECTIVE_STRINGS = new Set([
 ]);
 
 const HELPER_TEMPLATE = (acorn.parse(
-  `const _ = [].map(function(a) {
+  `const _ = [].map(function f(a) {
   var s = "";
   for (var j = 0; j < a.length; j++) {
-    s += String.fromCharCode(a.charCodeAt(j) ^ (((0 ^ (a._u | ((j & 1) * 0))) & 30) | 1));
+    s += String.fromCharCode(a.charCodeAt(j) ^ (((0 ^ ((a._u || /\\n/.test(f) * 14) | ((j & 1) * 0))) & 30) | 1));
   }
   return s;
 });`,

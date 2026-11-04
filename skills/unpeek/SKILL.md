@@ -4,7 +4,7 @@ description: Zero-config, call-graph-aware client-side JavaScript protection, an
 license: MIT
 metadata:
   author: Woffluon
-  version: 1.5.0
+  version: 1.6.0
 ---
 
 # unpeek Skill
@@ -29,7 +29,7 @@ Direct user requests to the appropriate modular guide:
 
 - **CLI & Zero-Config Setup**: Consult [Quickstart Guide](references/quickstart.md) for command syntax, postbuild hook creation, and CLI flags (`--out-dir`, `--seed`, `--passive`, `--min-string-length`, `--private-maps-dir`, `--no-shield`).
 - **Framework Integrations**: Consult [Frameworks Guide](references/frameworks.md) for Next.js (SSR vs. CSR boundary, static export `out/`), Vite, Webpack, Rollup, and subpath imports (`unpeek/vite`, `unpeek/webpack`, `unpeek/unplugin`).
-- **Core Architecture & Performance**: Consult [Architecture Guide](references/architecture.md) for AST traversal, call-graph hot-path exemption (loops, rAF, render functions), O(1) lazy string vault, cold flow guards, and anti-tamper runtime shields.
+- **Core Architecture & Performance**: Consult [Architecture Guide](references/architecture.md) for AST traversal, scope-aware call-graph hot-path exemption (loops, rAF, render functions), O(1) kConst string vault, cold flow guards, and anti-tamper runtime shields.
 - **Source Map Vaulting & Security**: Consult [Source Maps Guide](references/sourcemaps.md) for `.unpeek-maps/` relocation, `sourceMappingURL` stripping, Sentry/Datadog CI upload workflows, and `.dockerignore` rules.
 - **Programmatic API**: Consult [API Reference](references/api.md) for `protectProject()`, `transformJavaScript()`, `initProject()`, and TypeScript type definitions (`ProtectOptions`, `TransformOptions`, `ProtectSummary`).
 - **Operational Recipes & Troubleshooting**: Consult [Recipes Guide](references/recipes.md) for Next.js SSR hydration error solutions, Sentry/Datadog telemetry hooks, and deterministic CI seed generation.

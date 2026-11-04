@@ -177,7 +177,7 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(res.encryptedStringsCount).toBe(0);
     });
 
-    it('preserves directives, object property keys, and uses O(1) lazy inline caching on repeated string accesses', () => {
+    it('preserves directives, object property keys, and uses O(1) kConst array caching on repeated string accesses', () => {
       const code = `
         "use strict";
         function buildConfig(envName) {

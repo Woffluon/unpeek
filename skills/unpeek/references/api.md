@@ -79,7 +79,7 @@ export interface ProtectOptions {
   deterrentMode?: DeterrentMode; // 'gradual' | 'passive'
   /** Inject runtime integrity and DevTools shield into entry chunks (default: true) */
   injectRuntimeShield?: boolean;
-  /** Minimum string length to encrypt in the O(1) lazy string vault (default: 4) */
+  /** Minimum string length to encrypt in the O(1) kConst string vault (default: 4) */
   minStringLength?: number;
 }
 ```

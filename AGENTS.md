@@ -5,7 +5,7 @@ unpeek is a zero-config, call-graph-aware client-side JavaScript protection and 
 </project_context>
 
 <engineering_principles>
-1. Think before implementing: Formulate verifiable assumptions and inspect repository evidence first. When .codegraph/ is present, query CodeGraph (codegraph_explore) for call-path and symbol analysis before broad text scans.
+1. Think before implementing: Formulate verifiable assumptions and inspect repository evidence first.
 2. Surgical and minimal changes: Modify only the files and lines necessary for the assigned task. Preserve untouched code, existing formatting, and uncommitted user edits to keep review diffs clean and prevent merge friction.
 3. Preserve performance and size budgets: Maintain call-graph hot-path exemption (loops, array higher-order callbacks, requestAnimationFrame, UI render functions, and their callers) and O(1) const-array string vaults so runtime CPU overhead stays below 2% and Gzip size delta stays below 15%.
 4. Clean your own artifacts: Remove unused imports, variables, and temporary helpers introduced by your changes. Document pre-existing technical debt separately rather than refactoring it without request.

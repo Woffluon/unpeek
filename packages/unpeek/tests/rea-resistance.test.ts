@@ -135,5 +135,57 @@ describe('Reverse Engineering & Deobfuscation Resistance (Acceptance Thresholds)
     vm.runInContext(`${tamperedSnippet}\n;globalThis.secretOut = coldCheckSecret();`, tamperedCtx);
     expect(tamperedCtx.window.__unpeek_tampered).toBe(true);
     expect(tamperedCtx.secretOut).not.toBe('COLD_VAULT_SECRET_TOKEN');
+
+    // 3. Even if an attacker freezes/locks String.prototype._u = 0, self-entangled vault helper still detects formatting (\n) and corrupts keys
+    const lockedProtoCtx: Record<string, any> = {
+      window: {},
+    };
+    lockedProtoCtx.globalThis = lockedProtoCtx;
+    vm.createContext(lockedProtoCtx);
+    vm.runInContext(
+      `Object.defineProperty(String.prototype, '_u', { value: 0, writable: false, configurable: false });\n${tamperedSnippet}\n;globalThis.lockedOut = coldCheckSecret();`,
+      lockedProtoCtx
+    );
+    expect(lockedProtoCtx.window.__unpeek_tampered).toBe(true);
+    expect(lockedProtoCtx.lockedOut).not.toBe('COLD_VAULT_SECRET_TOKEN');
+  });
+
+  it('resolves lexical scope collisions and tracks object-namespace helper methods in the static call graph', () => {
+    const scopedCode = `
+      const vecMath = {
+        step(v) {
+          const hotVecTag = "HOT_VEC_METHOD_LITERAL";
+          return hotVecTag + ":" + v;
+        }
+      };
+
+      function coldScopeContainer() {
+        function localHelper() {
+          return "COLD_SCOPED_SECRET_VALUE";
+        }
+        return localHelper();
+      }
+
+      function hotRenderTicker(frames) {
+        function localHelper(f) {
+          return vecMath.step(f);
+        }
+        let acc = "";
+        for (let i = 0; i < frames.length; i++) {
+          acc += localHelper(frames[i]);
+        }
+        return acc;
+      }
+    `;
+
+    const res = transformJavaScript(scopedCode, {
+      seed: 0x515151,
+      minStringLength: 4,
+    });
+
+    // Hot object method literal stays unencrypted because hotRenderTicker -> localHelper -> vecMath.step
+    expect(res.code).toContain('HOT_VEC_METHOD_LITERAL');
+    // Cold function's identically-named `localHelper` is NOT mistakenly exempted by the hot `localHelper`
+    expect(res.code).not.toContain('COLD_SCOPED_SECRET_VALUE');
   });
 });
