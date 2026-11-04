@@ -163,5 +163,42 @@ describe('Runtime Integrity Guard & DevTools Deterrent', () => {
       passiveContext.console.log('still-logged');
       expect(passiveLogSpy).toHaveBeenCalledWith('still-logged');
     });
+
+    it('defaults deterrentMode to passive and dispatches unpeek:tamper CustomEvent on tamper detection', () => {
+      // 1. Verify default deterrentMode is passive
+      const defaultShield = generateRuntimeShield({ seed: 42 });
+      expect(defaultShield.preambleCode).not.toContain("['log','debug','info','table','dir']");
+
+      // 2. Verify window.dispatchEvent is called with CustomEvent
+      const dispatchSpy = vi.fn();
+      let dispatchedEvent: unknown = null;
+      class MockCustomEvent {
+        type: string;
+        constructor(type: string) {
+          this.type = type;
+        }
+      }
+
+      const windowObj: Record<string, unknown> = {
+        dispatchEvent: (evt: unknown) => {
+          dispatchedEvent = evt;
+          dispatchSpy(evt);
+        },
+      };
+
+      const context = vm.createContext({
+        window: windowObj,
+        CustomEvent: MockCustomEvent,
+        console: { log: vi.fn(), debug: vi.fn(), info: vi.fn(), table: vi.fn(), dir: vi.fn() },
+      });
+
+      // Pretty-printed snippet triggers tamper detection
+      const tamperedSnippet = defaultShield.preambleCode.replace(/\{/g, '{\n  ');
+      vm.runInContext(tamperedSnippet, context);
+
+      expect(windowObj.__unpeek_tampered).toBe(true);
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      expect((dispatchedEvent as any)?.type).toBe('unpeek:tamper');
+    });
   });
 });

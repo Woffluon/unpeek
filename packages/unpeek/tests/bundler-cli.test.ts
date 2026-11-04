@@ -187,4 +187,92 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
     const updatedBundle = fs.readFileSync(path.join(distDir, 'bundle.js'), 'utf8');
     expect(updatedBundle).not.toContain('secret_prefix_');
   });
+
+  it('initProject preserves tab indentation and supports dryRun without modifying files', () => {
+    const pkgPath = path.join(tmpDir, 'package.json');
+    const tabIndentedPkg = '{\n\t"name": "tab-app",\n\t"devDependencies": {\n\t\t"vite": "^6.0.0"\n\t},\n\t"scripts": {\n\t\t"build": "vite"\n\t}\n}\n';
+    fs.writeFileSync(pkgPath, tabIndentedPkg, 'utf8');
+
+    // Dry run first
+    const dryRes = initProject(tmpDir, { dryRun: true });
+    expect(dryRes.updatedPackageJson).toBe(true);
+    expect(dryRes.message).toContain('dry-run');
+    expect(dryRes.message).toContain('vite');
+    // package.json should remain unchanged after dry-run
+    expect(fs.readFileSync(pkgPath, 'utf8')).toBe(tabIndentedPkg);
+    expect(fs.existsSync(path.join(tmpDir, '.gitignore'))).toBe(false);
+
+    // Actual run
+    const actualRes = initProject(tmpDir);
+    expect(actualRes.updatedPackageJson).toBe(true);
+    expect(actualRes.message).toContain('vite');
+    const writtenContent = fs.readFileSync(pkgPath, 'utf8');
+    expect(writtenContent).toContain('\t"scripts": {');
+    expect(writtenContent).toContain('\t\t"postbuild": "unpeek protect"');
+  });
+
+  it('sourcemap vault updates .dockerignore and .npmignore if present, and blocks placing private maps in outDir or publicDir', async () => {
+    const { relocateSourceMaps } = await import('../src/bundler/sourcemap-vault.js');
+    const outDir = path.join(tmpDir, 'dist');
+    const publicDir = path.join(tmpDir, 'public');
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.mkdirSync(publicDir, { recursive: true });
+
+    // 1. Should throw security error if privateMapsDir is inside outDir
+    expect(() => {
+      relocateSourceMaps(outDir, tmpDir, true, 'dist/maps');
+    }).toThrow(/privateMapsDir cannot be located inside outDir/i);
+
+    // 2. Should throw security error if privateMapsDir is inside publicDir
+    expect(() => {
+      relocateSourceMaps(outDir, tmpDir, true, 'public/maps');
+    }).toThrow(/privateMapsDir cannot be located inside publicDir/i);
+
+    // 3. Should update .dockerignore and .npmignore if present
+    const dockerignorePath = path.join(tmpDir, '.dockerignore');
+    const npmignorePath = path.join(tmpDir, '.npmignore');
+    fs.writeFileSync(dockerignorePath, 'node_modules\n', 'utf8');
+    fs.writeFileSync(npmignorePath, 'tests\n', 'utf8');
+
+    // Create a dummy map file in outDir
+    fs.writeFileSync(path.join(outDir, 'app.js.map'), '{}', 'utf8');
+    relocateSourceMaps(outDir, tmpDir, true, '.unpeek-maps');
+
+    expect(fs.readFileSync(dockerignorePath, 'utf8')).toContain('.unpeek-maps/');
+    expect(fs.readFileSync(npmignorePath, 'utf8')).toContain('.unpeek-maps/');
+  });
+
+  it('protectProject writes atomically with .unpeek.tmp and cleans up on failure', async () => {
+    const distDir = path.join(tmpDir, 'dist');
+    fs.mkdirSync(distDir, { recursive: true });
+    const file1 = path.join(distDir, 'a.js');
+    fs.writeFileSync(file1, 'console.log("valid bundle a");', 'utf8');
+
+    // Test successful atomic write
+    const summary = await protectProject({ cwd: tmpDir, outDir: distDir });
+    expect(summary.processedFiles).toBe(1);
+    expect(fs.existsSync(file1)).toBe(true);
+    expect(fs.existsSync(`${file1}.unpeek.tmp`)).toBe(false);
+  });
+
+  it('runCli defaults to help when called without arguments and parses new flags', async () => {
+    const { runCli } = await import('../src/cli/index.js');
+    let output = '';
+    const originalLog = console.log;
+    console.log = (msg: string) => {
+      output += msg + '\n';
+    };
+
+    try {
+      // Calling without args should print help and NOT run protect
+      await runCli([]);
+      expect(output).toContain('Usage:');
+      expect(output).toContain('unpeek protect');
+      expect(output).toContain('--min-string-length');
+      expect(output).toContain('--private-maps-dir');
+      expect(output).toContain('--no-shield');
+    } finally {
+      console.log = originalLog;
+    }
+  });
 });

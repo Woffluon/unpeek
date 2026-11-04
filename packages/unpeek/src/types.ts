@@ -13,7 +13,7 @@ export interface ProtectOptions {
   keepPrivateMaps?: boolean;
   /** Private directory to store extracted source maps (default: '.unpeek-maps') */
   privateMapsDir?: string;
-  /** Runtime anti-tamper deterrent mode (default: 'gradual') */
+  /** Runtime anti-tamper deterrent mode (default: 'passive') */
   deterrentMode?: DeterrentMode;
   /** Inject runtime integrity and DevTools shield into entry chunks (default: true) */
   injectRuntimeShield?: boolean;
@@ -45,7 +45,7 @@ export interface TransformResult {
 
 export interface ShieldConfig {
   seed: number;
-  deterrentMode: DeterrentMode;
+  deterrentMode?: DeterrentMode;
   expectedIntegrityHash?: number;
 }
 

@@ -8,6 +8,42 @@ const DIRECTIVE_STRINGS = new Set([
   'use asm',
 ]);
 
+const HELPER_TEMPLATE = (acorn.parse(
+  `const _ = [].map(function(a) {
+  var s = "";
+  for (var j = 0; j < a.length; j++) {
+    s += String.fromCharCode(a.charCodeAt(j) ^ (((0 ^ ((j & 1) * 0)) & 30) | 1));
+  }
+  return s;
+});`,
+  { ecmaVersion: 'latest', sourceType: 'script' }
+) as any).body[0];
+
+function createVaultHelperAst(
+  cacheVarName: string,
+  encryptedPayloads: string[],
+  mask: number,
+  step: number
+): any {
+  const node = structuredClone(HELPER_TEMPLATE);
+  node.declarations[0].id.name = cacheVarName;
+  node.declarations[0].init.callee.object.elements = encryptedPayloads.map(
+    (str) => ({
+      type: 'Literal',
+      value: str,
+      raw: JSON.stringify(str),
+    })
+  );
+  const fn = node.declarations[0].init.arguments[0];
+  const binaryXor = fn.body.body[1].body.body[0].expression.right.arguments[0];
+  const innerLeft = binaryXor.right.left.left;
+  innerLeft.left.value = mask;
+  innerLeft.left.raw = String(mask);
+  innerLeft.right.right.value = step;
+  innerLeft.right.right.raw = String(step);
+  return node;
+}
+
 export function computeFnv1aHash(input: string, seed = 0x811c9dc5): number {
   let hash = seed >>> 0;
   for (let i = 0; i < input.length; i++) {
@@ -127,20 +163,12 @@ export function applyStringVault(
   const integrityToken = computeFnv1aHash(serializedTable, seed);
 
   // Decrypt once into const _uC array at module initialization so V8 marks the ContextCell kConst
-  const helperSource = `
-const ${cacheVarName} = ${serializedTable}.map(function(a) {
-  var s = "";
-  for (var j = 0; j < a.length; j++) {
-    s += String.fromCharCode(a.charCodeAt(j) ^ (((${mask} ^ ((j & 1) * ${step})) & 30) | 1));
-  }
-  return s;
-});
-`.trim();
-
-  const helperAst = acorn.parse(helperSource, {
-    ecmaVersion: 'latest',
-    sourceType: 'script',
-  });
+  const helperStmt = createVaultHelperAst(
+    cacheVarName,
+    encryptedPayloads,
+    mask,
+    step
+  );
 
   let insertIdx = 0;
   while (insertIdx < ast.body.length) {
@@ -158,7 +186,7 @@ const ${cacheVarName} = ${serializedTable}.map(function(a) {
     }
   }
 
-  ast.body.splice(insertIdx, 0, ...(helperAst.body as any[]));
+  ast.body.splice(insertIdx, 0, helperStmt);
 
   return {
     encryptedStringsCount: encryptedPayloads.length,

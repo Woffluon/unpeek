@@ -172,7 +172,7 @@ export async function verifyWorkspaceLicense(_0x4a1) {
 export const DICTIONARY: Record<Locale, Dictionary> = {
   en: {
     meta: {
-      version: "v1.0.1",
+      version: "v1.1.0",
       license: "MIT Licensed",
     },
     nav: {
@@ -379,7 +379,7 @@ npx unpeek protect --seed 482910
             title: "Next.js (App Router & Pages Router)",
             body: [
               "In Next.js projects, unpeek strictly targets `.next/static/chunks` (and `.next/static/` client assets) while leaving `.next/server` completely untouched. This guarantees that React Server Components (RSC), API routes, and Node.js server actions suffer zero startup or execution overhead.",
-              "Both `postbuild` CLI execution and the `unpeek/webpack` plugin are supported.",
+              "Both `postbuild` CLI execution and the `unpeek/unplugin` adapter are supported.",
             ],
             codeBlocks: [
               {
@@ -396,19 +396,40 @@ npx unpeek protect --seed 482910
   }
 }`,
               },
+              {
+                label: "next.config.mjs: unplugin Webpack Integration",
+                language: "javascript",
+                code: `import unpeek from "unpeek/unplugin";
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  webpack(config, { dev, isServer }) {
+    if (!dev && !isServer) {
+      config.plugins.push(
+        unpeek.webpack({
+          deterrentMode: "gradual",
+        })
+      );
+    }
+    return config;
+  },
+};
+
+export default nextConfig;`,
+              },
             ],
           },
           {
             title: "Vite & Rollup (CLI or unplugin)",
             body: [
-              "For Vite applications, unpeek automatically detects the `dist/` output directory. If you prefer in-memory bundle transformation during the Vite build phase rather than a postbuild pass, use the first-class `unpeek/vite` plugin.",
+              "For Vite applications, unpeek automatically detects the `dist/` output directory. If you prefer in-memory bundle transformation during the Vite build phase rather than a postbuild pass, use the first-class `unpeek/vite` plugin or `unpeek/unplugin`.",
             ],
             codeBlocks: [
               {
                 label: "vite.config.ts: Native Vite Plugin Integration",
                 language: "typescript",
                 code: `import { defineConfig } from "vite";
-import { vitePlugin } from "unpeek";
+import { vitePlugin } from "unpeek/vite";
 
 export default defineConfig({
   build: {
@@ -429,18 +450,18 @@ export default defineConfig({
           {
             title: "Webpack & Vanilla JS Targets",
             body: [
-              "For Webpack 5 builds, import `webpackPlugin` from `unpeek` or pass `--out-dir build/static/js` to the CLI. For Vanilla JS projects, point `--out-dir` to your public asset folder.",
+              "For Webpack 5 builds, import `unpeek` from `unpeek/unplugin` (or `webpackPlugin` from `unpeek/webpack`) or pass `--out-dir build/static/js` to the CLI. For Vanilla JS projects, point `--out-dir` to your public asset folder.",
             ],
             codeBlocks: [
               {
                 label: "webpack.config.js: Webpack Plugin",
                 language: "javascript",
-                code: `import { webpackPlugin } from "unpeek";
+                code: `import unpeek from "unpeek/unplugin";
 
 export default {
   mode: "production",
   plugins: [
-    webpackPlugin({
+    unpeek.webpack({
       deterrentMode: "passive",
       minStringLength: 5,
     }),
@@ -548,7 +569,7 @@ export default {
               {
                 label: "CLI Reference",
                 language: "bash",
-                code: `unpeek init
+                code: `unpeek init [--dry-run]
   Detects framework, configures package.json "postbuild", and updates .gitignore.
 
 unpeek protect [options]
@@ -556,6 +577,9 @@ unpeek protect [options]
   --seed <number>            Deterministic 32-bit polymorphic seed
   --passive                  Use passive telemetry deterrent mode instead of gradual
   --no-maps                  Delete .map files instead of moving to .unpeek-maps/
+  --min-string-length <num>  Minimum string length for encryption vault (default: 4)
+  --private-maps-dir <dir>   Directory to store vaulted source maps (default: .unpeek-maps)
+  --no-shield                Do not inject runtime anti-tamper deterrent shield
   -h, --help                 Show help message
   -v, --version              Show version number`,
               },
@@ -644,7 +668,7 @@ curl -fsSL https://raw.githubusercontent.com/Woffluon/unpeek/main/skills/unpeek/
   },
   tr: {
     meta: {
-      version: "v1.0.1",
+      version: "v1.1.0",
       license: "MIT Lisanslı",
     },
     nav: {
@@ -851,7 +875,7 @@ npx unpeek protect --seed 482910
             title: "Next.js (App Router & Pages Router)",
             body: [
               "Next.js projelerinde unpeek yalnızca `.next/static/chunks` (istemci tarafı paketleri) dizinini hedef alır ve `.next/server` klasörüne kesinlikle dokunmaz. Bu sayede React Server Components (RSC), API rotaları ve Server Actions tarafında sıfır başlangıç veya çalışma zamanı yükü oluşur.",
-              "Hem `postbuild` CLI kullanımı hem de `unpeek/webpack` eklentisi tam desteklenir.",
+              "Hem `postbuild` CLI kullanımı hem de `unpeek/unplugin` eklentisi tam desteklenir.",
             ],
             codeBlocks: [
               {
@@ -868,19 +892,40 @@ npx unpeek protect --seed 482910
   }
 }`,
               },
+              {
+                label: "next.config.mjs: unplugin Webpack Entegrasyonu",
+                language: "javascript",
+                code: `import unpeek from "unpeek/unplugin";
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  webpack(config, { dev, isServer }) {
+    if (!dev && !isServer) {
+      config.plugins.push(
+        unpeek.webpack({
+          deterrentMode: "gradual",
+        })
+      );
+    }
+    return config;
+  },
+};
+
+export default nextConfig;`,
+              },
             ],
           },
           {
             title: "Vite & Rollup (CLI veya unplugin)",
             body: [
-              "Vite uygulamalarında unpeek `dist/` çıktı klasörünü otomatik algılar. Dönüşümü postbuild aşaması yerine doğrudan Vite paketleme aşamasında bellek içinde yapmak isterseniz `vitePlugin` eklentisini kullanabilirsiniz.",
+              "Vite uygulamalarında unpeek `dist/` çıktı klasörünü otomatik algılar. Dönüşümü postbuild aşaması yerine doğrudan Vite paketleme aşamasında bellek içinde yapmak isterseniz `unpeek/vite` veya `unpeek/unplugin` eklentisini kullanabilirsiniz.",
             ],
             codeBlocks: [
               {
                 label: "vite.config.ts: Doğrudan Vite Eklenti Entegrasyonu",
                 language: "typescript",
                 code: `import { defineConfig } from "vite";
-import { vitePlugin } from "unpeek";
+import { vitePlugin } from "unpeek/vite";
 
 export default defineConfig({
   build: {
@@ -901,18 +946,18 @@ export default defineConfig({
           {
             title: "Webpack & Vanilla JS Hedefleri",
             body: [
-              "Webpack 5 projelerinde `webpackPlugin` eklentisini içe aktarabilir veya CLI'a `--out-dir build/static/js` parametresi geçebilirsiniz. Vanilla JS projelerinde `--out-dir` ile statik JS klasörünüzü belirtmeniz yeterlidir.",
+              "Webpack 5 projelerinde `unpeek/unplugin` (veya `unpeek/webpack`) üzerinden eklentiyi içe aktarabilir ya da CLI'a `--out-dir build/static/js` parametresi geçebilirsiniz. Vanilla JS projelerinde `--out-dir` ile statik JS klasörünüzü belirtmeniz yeterlidir.",
             ],
             codeBlocks: [
               {
                 label: "webpack.config.js: Webpack Eklentisi",
                 language: "javascript",
-                code: `import { webpackPlugin } from "unpeek";
+                code: `import unpeek from "unpeek/unplugin";
 
 export default {
   mode: "production",
   plugins: [
-    webpackPlugin({
+    unpeek.webpack({
       deterrentMode: "passive",
       minStringLength: 5,
     }),
@@ -1020,7 +1065,7 @@ export default {
               {
                 label: "CLI Referansı",
                 language: "bash",
-                code: `unpeek init
+                code: `unpeek init [--dry-run]
   Framework'ü algılar, package.json "postbuild" betiğini ekler ve .gitignore'u günceller.
 
 unpeek protect [options]
@@ -1028,6 +1073,9 @@ unpeek protect [options]
   --seed <number>            Deterministik 32-bit polimorfik tohum (seed)
   --passive                  Kademeli bozulma yerine pasif telemetri caydırıcı modunu kullan
   --no-maps                  .map dosyalarını .unpeek-maps/ yerine kalıcı olarak sil
+  --min-string-length <num>  Tembel şifreleme kasasına alınacak minimum metin uzunluğu (varsayılan: 4)
+  --private-maps-dir <dir>   Kaynak haritalarının taşınacağı özel kasa klasörü (varsayılan: .unpeek-maps)
+  --no-shield                Çalışma zamanı anti-tamper kalkanı enjeksiyonunu devre dışı bırak
   -h, --help                 Yardım mesajını göster
   -v, --version              Sürüm numarasını göster`,
               },

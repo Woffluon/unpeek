@@ -20,7 +20,7 @@ export function computeIntegrityHash(source: string, seed = 0): number {
  * by comparing its un-normalized Function.prototype.toString() FNV-1a hash.
  */
 export function verifyCodeIntegrity(
-  fnOrSource: Function | string,
+  fnOrSource: ((...args: any[]) => any) | string,
   expectedHash: number,
   seed = 0,
 ): boolean {

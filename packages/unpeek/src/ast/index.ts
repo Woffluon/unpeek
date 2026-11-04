@@ -8,6 +8,7 @@ import {
 import { applyStringVault, computeFnv1aHash } from './string-vault.js';
 import { applyPolymorphicMangler } from './polymorphic-mangler.js';
 import { applyColdFlowGuard } from './cold-flow-guard.js';
+import { generateRuntimeShield } from '../runtime/index.js';
 
 export { detectHotPaths } from './hot-path-detector.js';
 export { computeFnv1aHash } from './string-vault.js';
@@ -67,8 +68,20 @@ export function transformJavaScript(
   // 5. Generate compact single-line JavaScript output
   const outputCode = generate(ast, { indent: '', lineEnd: '' });
 
+  let finalCode = outputCode;
+  if (options.injectRuntimeShield) {
+    const shield = generateRuntimeShield({
+      seed,
+      deterrentMode: options.deterrentMode ?? 'gradual',
+      expectedIntegrityHash: integrityToken,
+    });
+    if (shield.preambleCode) {
+      finalCode = `${shield.preambleCode}\n${finalCode}`;
+    }
+  }
+
   return {
-    code: outputCode,
+    code: finalCode,
     encryptedStringsCount,
     mangledSymbolsCount,
     hotPathReport,

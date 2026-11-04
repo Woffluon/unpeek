@@ -174,5 +174,19 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(res.encryptedStringsCount).toBe(2);
       expect(new Function(res.code)()).toBe(true);
     });
+
+    it('injects runtime shield preamble when injectRuntimeShield option is true', () => {
+      const code = 'function hello() { return "world"; } hello();';
+      const withoutShield = transformJavaScript(code, {
+        injectRuntimeShield: false,
+      });
+      const withShield = transformJavaScript(code, {
+        injectRuntimeShield: true,
+      });
+
+      expect(withoutShield.code).not.toContain('__unpeek');
+      expect(withShield.code).toContain('__unpeek');
+      expect(withShield.code.endsWith(withoutShield.code)).toBe(true);
+    });
   });
 });

@@ -7,12 +7,30 @@ function createOpaqueGuardStatement(seed: number, fnIndex: number): any {
   const b = (a ^ 0x1357) & 0xffff;
   const wrongVal = ((a ^ b) & 7) ^ 5; // Guaranteed never equal to ((a ^ b) & 7)
 
-  const guardCode = `if (((${a} ^ ${b}) & 7) === ${wrongVal}) return;`;
-  const parsed = acorn.parse(guardCode, {
-    ecmaVersion: 'latest',
-    allowReturnOutsideFunction: true,
-  });
-  return parsed.body[0];
+  return {
+    type: 'IfStatement',
+    test: {
+      type: 'BinaryExpression',
+      operator: '===',
+      left: {
+        type: 'BinaryExpression',
+        operator: '&',
+        left: {
+          type: 'BinaryExpression',
+          operator: '^',
+          left: { type: 'Literal', value: a, raw: String(a) },
+          right: { type: 'Literal', value: b, raw: String(b) },
+        },
+        right: { type: 'Literal', value: 7, raw: '7' },
+      },
+      right: { type: 'Literal', value: wrongVal, raw: String(wrongVal) },
+    },
+    consequent: {
+      type: 'ReturnStatement',
+      argument: null,
+    },
+    alternate: null,
+  };
 }
 
 export function applyColdFlowGuard(

@@ -1,7 +1,7 @@
 {
   "name": "unpeek-monorepo",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Zero-config, near-zero-overhead (<2% CPU) client-side JavaScript protection & anti-reverse-engineering toolkit.",
   "repository": {
     "type": "git",
@@ -9,6 +9,9 @@
   },
   "license": "MIT",
   "packageManager": "pnpm@11.10.0",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "build": "pnpm --filter unpeek build && pnpm --filter web build",
     "build:pkg": "pnpm --filter unpeek build",
