@@ -17,6 +17,7 @@ const ARRAY_HOF_METHODS = new Set([
   'forEach',
   'flatMap',
   'find',
+  'findIndex',
   'some',
   'every',
 ]);
@@ -34,6 +35,7 @@ const UI_HOOK_OR_RENDER_CALLS = new Set([
   '_jsxs',
   'createElement',
   'requestAnimationFrame',
+  'cancelAnimationFrame',
 ]);
 
 const FUNCTION_NODE_TYPES = new Set([
@@ -98,6 +100,16 @@ function isPascalCaseComponent(name: string): boolean {
   return /^[A-Z][a-zA-Z0-9]*$/.test(name);
 }
 
+function findEnclosingScopeNode(ancestors: acorn.Node[], selfNode: acorn.Node): acorn.Node {
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    const anc = ancestors[i];
+    if (anc !== selfNode && (FUNCTION_NODE_TYPES.has(anc.type) || anc.type === 'Program')) {
+      return anc;
+    }
+  }
+  return ancestors[0];
+}
+
 export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
   const hotFunctionNodes = new WeakSet<acorn.Node>();
   const coldFunctionNodes = new WeakSet<acorn.Node>();
@@ -105,43 +117,98 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
   const directHotNodes = new Set<acorn.Node>();
   const allFunctions: { node: acorn.Node; name: string }[] = [];
   const fnByName = new Map<string, acorn.Node>();
+  const scopeFunctions = new Map<acorn.Node, Map<string, acorn.Node>>();
+  const fnScopeChain = new Map<acorn.Node, acorn.Node[]>();
   const callerToCallees = new Map<acorn.Node, Set<string>>();
+
+  function registerFunctionNode(node: acorn.Node, ancestors: acorn.Node[]): void {
+    const name = getFunctionLabel(node, ancestors);
+    allFunctions.push({ node, name });
+    fnByName.set(name, node);
+
+    const enclosingScope = findEnclosingScopeNode(ancestors, node);
+    let localMap = scopeFunctions.get(enclosingScope);
+    if (!localMap) {
+      localMap = new Map<string, acorn.Node>();
+      scopeFunctions.set(enclosingScope, localMap);
+    }
+    localMap.set(name, node);
+
+    // Also register object namespace method key (e.g. const mathObj = { step(x) {} } -> "mathObj.step")
+    const parent = ancestors[ancestors.length - 2] as any;
+    const grandParent = ancestors[ancestors.length - 3] as any;
+    const greatGrandParent = ancestors[ancestors.length - 4] as any;
+    if (
+      parent?.type === 'Property' &&
+      parent.key?.type === 'Identifier' &&
+      grandParent?.type === 'ObjectExpression' &&
+      greatGrandParent?.type === 'VariableDeclarator' &&
+      greatGrandParent.id?.type === 'Identifier'
+    ) {
+      const qualified = `${greatGrandParent.id.name}.${parent.key.name}`;
+      fnByName.set(qualified, node);
+      localMap.set(qualified, node);
+    }
+
+    const chain: acorn.Node[] = [];
+    for (let i = ancestors.length - 1; i >= 0; i--) {
+      if (FUNCTION_NODE_TYPES.has(ancestors[i].type) || ancestors[i].type === 'Program') {
+        chain.push(ancestors[i]);
+      }
+    }
+    fnScopeChain.set(node, chain);
+
+    if (isPascalCaseComponent(name)) {
+      hotFunctionNodes.add(node);
+      directHotNodes.add(node);
+    }
+  }
+
+  function resolveCalleeNode(callerNode: acorn.Node, calleeKey: string): acorn.Node | undefined {
+    const chain = fnScopeChain.get(callerNode);
+    if (chain) {
+      for (const scopeNode of chain) {
+        const localMap = scopeFunctions.get(scopeNode);
+        const found = localMap?.get(calleeKey);
+        if (found) return found;
+      }
+    }
+    return fnByName.get(calleeKey);
+  }
 
   walk.ancestor(ast, {
     FunctionDeclaration(node, _state, ancestors) {
-      const name = getFunctionLabel(node, ancestors);
-      allFunctions.push({ node, name });
-      fnByName.set(name, node);
-      if (isPascalCaseComponent(name)) {
-        hotFunctionNodes.add(node);
-        directHotNodes.add(node);
-      }
+      registerFunctionNode(node, ancestors);
     },
     FunctionExpression(node, _state, ancestors) {
-      const name = getFunctionLabel(node, ancestors);
-      allFunctions.push({ node, name });
-      fnByName.set(name, node);
-      if (isPascalCaseComponent(name)) {
-        hotFunctionNodes.add(node);
-        directHotNodes.add(node);
-      }
+      registerFunctionNode(node, ancestors);
     },
     ArrowFunctionExpression(node, _state, ancestors) {
-      const name = getFunctionLabel(node, ancestors);
-      allFunctions.push({ node, name });
-      fnByName.set(name, node);
-      if (isPascalCaseComponent(name)) {
-        hotFunctionNodes.add(node);
-        directHotNodes.add(node);
-      }
+      registerFunctionNode(node, ancestors);
     },
     CallExpression(node: any, _state, ancestors) {
       const callee = node.callee;
       let calleeName = '';
       let memberProp = '';
+      let qualifiedCall = '';
 
       if (callee?.type === 'Identifier') {
         calleeName = callee.name;
+        qualifiedCall = calleeName;
+      } else if (
+        callee?.type === 'MemberExpression' &&
+        !callee.computed &&
+        callee.property?.type === 'Identifier'
+      ) {
+        memberProp = callee.property.name;
+        if (callee.object?.type === 'Identifier') {
+          qualifiedCall = `${callee.object.name}.${memberProp}`;
+        } else if (callee.object?.type === 'ThisExpression') {
+          qualifiedCall = memberProp;
+        }
+      }
+
+      if (qualifiedCall || memberProp) {
         for (let i = ancestors.length - 1; i >= 0; i--) {
           if (FUNCTION_NODE_TYPES.has(ancestors[i].type)) {
             let set = callerToCallees.get(ancestors[i]);
@@ -149,23 +216,22 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
               set = new Set();
               callerToCallees.set(ancestors[i], set);
             }
-            set.add(calleeName);
+            if (qualifiedCall) set.add(qualifiedCall);
+            if (memberProp && !ARRAY_HOF_METHODS.has(memberProp)) {
+              set.add(memberProp);
+            }
             break;
           }
         }
-      } else if (
-        callee?.type === 'MemberExpression' &&
-        !callee.computed &&
-        callee.property?.type === 'Identifier'
-      ) {
-        memberProp = callee.property.name;
       }
 
       // Check if arguments are hot callbacks (.map, .filter, .reduce, .forEach, .flatMap, requestAnimationFrame)
       if (
         ARRAY_HOF_METHODS.has(memberProp) ||
         calleeName === 'requestAnimationFrame' ||
-        memberProp === 'requestAnimationFrame'
+        memberProp === 'requestAnimationFrame' ||
+        calleeName === 'cancelAnimationFrame' ||
+        memberProp === 'cancelAnimationFrame'
       ) {
         for (const arg of node.arguments || []) {
           if (FUNCTION_NODE_TYPES.has(arg.type)) {
@@ -221,7 +287,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
       const calleeNames = callerToCallees.get(callerNode);
       if (!calleeNames) continue;
       for (const cName of calleeNames) {
-        const targetNode = fnByName.get(cName);
+        const targetNode = resolveCalleeNode(callerNode, cName);
         if (targetNode && !forwardHotSet.has(targetNode)) {
           forwardHotSet.add(targetNode);
           hotFunctionNodes.add(targetNode);
@@ -239,7 +305,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
     for (const [callerNode, calleeNames] of callerToCallees.entries()) {
       if (hotFunctionNodes.has(callerNode)) continue;
       for (const cName of calleeNames) {
-        const targetNode = fnByName.get(cName);
+        const targetNode = resolveCalleeNode(callerNode, cName);
         if (targetNode && hotFunctionNodes.has(targetNode)) {
           hotFunctionNodes.add(callerNode);
           changed = true;

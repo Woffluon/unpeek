@@ -35,8 +35,8 @@ Mevcut araçlar geliştiricileri zor bir ödünleşime zorlar:
 | Yetenek | Standart Küçültücüler (`Terser` / `SWC`) | Geleneksel AST Karmaşıklaştırıcılar | `unpeek` |
 | :--- | :--- | :--- | :--- |
 | **Çalışma Zamanı CPU Ek Yükü** | ~%0 | %15 ile %85 (arayüz döngülerini yavaşlatır) | **< %2.0** (Çağrı Grafiği Hot-Path Muafiyeti) |
-| **Gzip Paket Büyümesi** | %0 (Referans) | +%45 ile +%300 | **< %15** (O(1) Tembel Metin Kasası) |
-| **Metin ve API Uç Noktası Şifreleme** | Pakette düz metin (plaintext) | Başlangıçta tam dizi çözme (yüksek CPU) | **Polimorfik XOR + O(1) Önbellekli Kasa** |
+| **Gzip Paket Büyümesi** | %0 (Referans) | +%45 ile +%300 | **< %15** (O(1) `kConst` Sabit-Dizi Metin Kasası) |
+| **Metin ve API Uç Noktası Şifreleme** | Pakette düz metin (plaintext) | Başlangıçta tam dizi çözme (yüksek CPU) | **Polimorfik Periyot-2 XOR + O(1) `kConst` Kasa** |
 | **DevTools Pretty-Print (`{}`) Koruması** | Yok | `debugger` döngüleri (kolayca devre dışı bırakılır) | **`Function.prototype.toString()` FNV-1a Bütünlük Doğrulaması** |
 | **Source Map Yalıtımı** | Manuel CI betikleri | Manuel yapılandırma | **Otomatik `.unpeek-maps/` Kasası + Yorum Temizliği** |
 | **Statik Deobfuscator Direnci** | Yok | Sabit şablonlar (`webcrack` tarafından tanınır) | **Derleme Başına Polimorfik AST Tohumu (Seed)** |
@@ -53,7 +53,7 @@ flowchart TD
   E --> F["AST Sıcak Yol Analizi (detectHotPaths)"]
   F -->|Döngüler, Dizi Fonksiyonları, UI Render| G["Sıcak Yol: %0 Vergi (Opak Akış Atlanır)"]
   F -->|Soğuk Fonksiyonlar: Yetki, Lisans, İmza| H["Soğuk Yol: Opak Kontrol Akışı Koruması"]
-  G --> I["Polimorfik Metin Kasası (O(1) Tembel XOR)"]
+  G --> I["Polimorfik Metin Kasası (O(1) kConst XOR)"]
   H --> I
   I --> J["Tanımlayıcı ve Sembol Maskeleme"]
   J --> K["Çalışma Zamanı Bütünlük Kalkanı (FNV-1a Özeti)"]
@@ -63,7 +63,7 @@ flowchart TD
 1. **Çağrı Grafiği (Call-Graph) Hot-Path Muafiyeti (`<%2` CPU Bütçesi)**
    [`detectHotPaths`](packages/unpeek/src/ast/index.ts), tek bir AST düğümünü değiştirmeden önce dosyanın çağrı grafiğini çift yönlü tarar. Döngü içeren fonksiyonlar (`for`, `while`, `do-while`, `for-of`), dizi yüksek mertebe geri çağrıları (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` zamanlayıcıları, React/UI bileşenleri (`useState`, `useEffect`, `createElement`) ve sıcak döngülerden çağrılan tüm yardımcı fonksiyonlar sıcak yol (hot path) olarak işaretlenir. `unpeek` sıcak döngüleri ve yardımcılarını hem opak kontrol akışı korumalarından hem de metin kasası dönüşümünden muaf tutar; korumayı yalnızca soğuk fonksiyonlara (lisans doğrulama, istek imzalama, yetki kontrolü gibi) uygular. Sıcak döngülerdeki V8 JIT optimizasyonu doğal hızında çalışmayı sürdürür.
 2. **O(1) Sabit-Dizi Metin Kasası ve Kalkan Dolanıklığı (`<%15` Gzip Bütçesi)**
-   Soğuk metin sabitleri (`minStringLength >= 4`), derleme zamanında LZ77/Gzip sıkıştırılabilirliğini koruyan periyot-2 polimorfik bir XOR akış şifresiyle kodlanır. Modül başlangıcında enjekte edilen `const _uC` kasası metinleri tek seferde V8 `kConst` sabit dizi hücrelerine çözer ve XOR anahtarını çalışma zamanı bütünlük kalkanına bağlar. Sonraki tüm okumalar doğrudan dizi indeksleme ile O(1) sürede tamamlanır.
+   Soğuk metin sabitleri (`minStringLength >= 4`), derleme zamanında LZ77/Gzip sıkıştırılabilirliğini koruyan periyot-2 polimorfik bir XOR akış şifresiyle kodlanır. Modül başlangıcında enjekte edilen `const _uC` kasası metinleri tek seferde V8 `kConst` sabit dizi hücrelerine çözer ve XOR anahtarını hem çalışma zamanı bütünlük kalkanına (`String.prototype._u`) hem de çözücü fonksiyonun kendi biçimlendirme kontrolüne (`/\n/.test(f)`) ikili olarak bağlar. Sonraki tüm okumalar doğrudan dizi indeksleme ile O(1) sürede tamamlanır.
 3. **Öz-Savunmalı `Function.prototype.toString()` Bütünlük Kontrolü ve Pasif Caydırıcı**
    Bir analist korumalı bir dosyayı DevTools Pretty-Print (`{}`) ile biçimlendirdiğinde veya Sources panelinde bir koşulu değiştirdiğinde, biçimlendirilen kod `Function.prototype.toString()` çıktısını değiştirir. [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts), dokunulmamış küçültülmüş kodda sıfır yanlış pozitif oranıyla 32-bit FNV-1a özetini doğrular ve saldırganların doğrudan yamayabileceği ani bir çökme yerine kademeli durum bozulması (`deterrentMode: 'gradual'`) başlatır.
 4. **Otomatik Source Map Kasası (`.unpeek-maps/`)**
@@ -105,7 +105,7 @@ npx unpeek protect
 | `--seed <sayı>` | Deterministik 32-bit polimorfik derleme tohumu (seed) | Derleme başına rastgele |
 | `--passive` | Kademeli bozulma yerine pasif telemetri caydırıcı modunu kullan | Varsayılan: kademeli bozulma (`gradual`) |
 | `--no-maps` | `.map` dosyalarını `.unpeek-maps/` klasörüne taşımak yerine kalıcı olarak sil | `.unpeek-maps/` içine taşır |
-| `--min-string-length <sayı>` | Tembel şifreleme kasasına alınacak minimum metin uzunluğu | `4` |
+| `--min-string-length <sayı>` | O(1) `kConst` şifreleme kasasına alınacak minimum metin uzunluğu | `4` |
 | `--private-maps-dir <dizin>` | Kaynak haritalarının taşınacağı özel kasa klasörü | `.unpeek-maps` |
 | `--no-shield` | Çalışma zamanı anti-tamper kalkanının enjekte edilmesini devre dışı bırak | Giriş paketlerine kalkan eklenir |
 | `-h, --help` | Yardım iletisini göster | |

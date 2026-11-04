@@ -35,8 +35,8 @@ Existing tools force an uncomfortable trade-off:
 | Capability | Standard Minifiers (`Terser` / `SWC`) | Legacy AST Obfuscators | `unpeek` |
 | :--- | :--- | :--- | :--- |
 | **Runtime CPU Overhead** | ~0% | 15% to 85% (throttles UI loops) | **< 2.0%** (Call-Graph Hot-Path Exemption) |
-| **Gzip Bundle Growth** | 0% (Baseline) | +45% to +300% | **< 15%** (O(1) Lazy String Vault) |
-| **String & Endpoint Encryption** | Plaintext in bundle | Eager array rotation (high CPU) | **Polymorphic XOR + O(1) Memoized Vault** |
+| **Gzip Bundle Growth** | 0% (Baseline) | +45% to +300% | **< 15%** (O(1) `kConst` String Vault) |
+| **String & Endpoint Encryption** | Plaintext in bundle | Eager array rotation (high CPU) | **Polymorphic Period-2 XOR + O(1) `kConst` Vault** |
 | **DevTools Pretty-Print (`{}`) Defense** | None | `debugger` infinite loops (easily bypassed) | **`Function.prototype.toString()` FNV-1a Integrity** |
 | **Source Map Isolation** | Manual CI scripts | Manual configuration | **Automatic `.unpeek-maps/` Vault + Comment Strip** |
 | **Static Deobfuscator Resistance** | None | Fixed templates (fingerprinted by deobfuscators) | **Per-Build Polymorphic AST Seed** |
@@ -53,7 +53,7 @@ flowchart TD
   E --> F["AST Hot-Path Traversal (detectHotPaths)"]
   F -->|Loops, Array Callbacks, UI Renders| G["Hot Path: 0% Tax (Skip Opaque Predicates)"]
   F -->|Cold Functions: Auth, Licensing, Signers| H["Cold Path: Opaque Control-Flow Predicates"]
-  G --> I["Polymorphic String Vault (O(1) Lazy XOR)"]
+  G --> I["Polymorphic String Vault (O(1) kConst XOR)"]
   H --> I
   I --> J["Identifier and Symbol Mangling"]
   J --> K["Runtime Integrity Shield (FNV-1a Checksum)"]
@@ -63,7 +63,7 @@ flowchart TD
 1. **Call-Graph Hot-Path Exemption (`<2%` CPU Budget)**
    Before modifying an AST node, [`detectHotPaths`](packages/unpeek/src/ast/index.ts) traverses the file call graph bidirectionally. Functions containing loops (`for`, `while`, `do-while`, `for-of`), array higher-order callbacks (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` tickers, React/UI render components (`useState`, `useEffect`, `createElement`), and all helper callees invoked from hot loops are flagged as hot paths. `unpeek` exempts hot loops and their callees from both opaque control-flow predicates and string vault rewriting, while protecting cold functions (such as license checks, request signers, and auth validators). V8 JIT optimization inside hot loops remains untouched.
 2. **O(1) Const-Array String Vault & Tamper Entanglement (`<15%` Gzip Budget)**
-   Cold string literals (`minStringLength >= 4`) are encrypted at build time with a period-2 polymorphic XOR stream cipher keyed by a per-build 32-bit seed that preserves LZ77/Gzip compressibility. At module initialization, the injected `const _uC` vault decodes strings once into a V8 `kConst` array slot so every subsequent read resolves in O(1) constant time via direct array indexing, while entangling the XOR key with the runtime integrity state.
+   Cold string literals (`minStringLength >= 4`) are encrypted at build time with a period-2 polymorphic XOR stream cipher keyed by a per-build 32-bit seed that preserves LZ77/Gzip compressibility. At module initialization, the injected `const _uC` vault decodes strings once into a V8 `kConst` array slot so every subsequent read resolves in O(1) constant time via direct array indexing, while dual-entangling the XOR key with both the runtime integrity state (`String.prototype._u`) and self-verifying decoder formatting (`/\n/.test(f)`).
 3. **Self-Defending `Function.prototype.toString()` Integrity and Passive Deterrent**
    When an analyst formats a protected chunk using DevTools Pretty-Print (`{}`) or edits a branch instruction in the Sources panel, the formatted source alters `Function.prototype.toString()`. [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts) validates a seeded 32-bit FNV-1a checksum against the function source representation with zero false positives on untouched minified code, triggering gradual state degradation (`deterrentMode: 'gradual'`) rather than an obvious crash point that attackers can patch out.
 4. **Automatic Source Map Vault (`.unpeek-maps/`)**
@@ -105,7 +105,7 @@ npx unpeek protect
 | `--seed <number>` | Deterministic 32-bit polymorphic build seed | Random per build |
 | `--passive` | Use passive deterrent mode instead of gradual state degradation | Default: gradual degradation |
 | `--no-maps` | Permanently delete `.map` files instead of moving them to `.unpeek-maps/` | Moves to `.unpeek-maps/` |
-| `--min-string-length <num>` | Minimum string length for lazy encryption vault | `4` |
+| `--min-string-length <num>` | Minimum string length for O(1) `kConst` encryption vault | `4` |
 | `--private-maps-dir <dir>` | Directory to store vaulted private source maps | `.unpeek-maps` |
 | `--no-shield` | Do not inject runtime anti-tamper deterrent shield | Shield injected into entry chunks |
 | `-h, --help` | Show CLI help message | |

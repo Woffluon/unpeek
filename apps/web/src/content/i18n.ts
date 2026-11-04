@@ -170,9 +170,9 @@ export function validateLicense(key: string) {
   return check(key, salt, endpoint);
 }`,
   protected: `// license-guard.js, protected output
-const _uC = ["uNp33k_v4","https://api.unpeek.dev/v1/license"].map(function(a) {
+const _uC = ["uNp33k_v4","https://api.unpeek.dev/v1/license"].map(function f(a) {
   let s = "", j = 0;
-  for (; j < a.length; j++) s += String.fromCharCode(a.charCodeAt(j) ^ (((27 ^ (a._u | ((j & 1) * 27))) & 30) | 1));
+  for (; j < a.length; j++) s += String.fromCharCode(a.charCodeAt(j) ^ (((27 ^ ((a._u || /\\n/.test(f) * 14) | ((j & 1) * 27))) & 30) | 1));
   return s;
 });
 
@@ -195,7 +195,7 @@ export function validateLicense(_0x4a1) {
 export const DICTIONARY: Record<Locale, Dictionary> = {
   en: {
     meta: {
-      version: "v1.5.0",
+      version: "v1.6.0",
       license: "MIT License",
     },
     nav: {
@@ -207,7 +207,7 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
     },
     hero: {
       eyebrow: "CALL-GRAPH AWARE JS PROTECTION",
-      metaRight: "v1.5.0 / MIT / npm",
+      metaRight: "v1.6.0 / MIT / npm",
       headlineTop: "Nothing to peek at.",
       headlineBottom: "Nothing to slow down.",
       subtext:
@@ -514,7 +514,7 @@ export default {
         number: "03",
         title: "Architecture & Hot-Path Exemption Engine",
         summary:
-          "Deep dive into how unpeek achieves <2% CPU overhead through static call-graph analysis, O(1) lazy string vaults, and FNV-1a integrity verification.",
+          "Deep dive into how unpeek achieves <2% CPU overhead through scope-aware static call-graph analysis, O(1) kConst string vaults, and dual-entangled FNV-1a integrity verification.",
         subsections: [
           {
             title: "Static Call-Graph & Transitive Hot-Path Exemption",
@@ -532,7 +532,7 @@ export default {
             title: "O(1) kConst String Vault & Tamper-Entangled Keys",
             body: [
               "In cold-path functions (authentication handshakes, license validators, API client builders, feature-flag evaluators), string literals of length >= `minStringLength` (default `4`) are extracted at build time.",
-              "Each string is encoded using a polymorphic XOR cipher parameterized by the build's 32-bit `seed` and entangled with the runtime integrity state (`String.prototype._u`). At module evaluation time, the injected `const _uC = [...].map(...)` array decodes each string once into a V8 `kConst` array. Subsequent cold-path accesses resolve via direct `_uC[index]` indexing in O(1) constant time with zero call or allocation overhead.",
+              "Each string is encoded using a polymorphic XOR cipher parameterized by the build's 32-bit `seed` and dual-entangled with both the runtime integrity state (`String.prototype._u`) and self-verifying decoder formatting (`/\n/.test(f)`). At module evaluation time, the injected `const _uC = [...].map(...)` array decodes each string once into a V8 `kConst` array. Subsequent cold-path accesses resolve via direct `_uC[index]` indexing in O(1) constant time with zero call or allocation overhead.",
             ],
           },
           {
@@ -817,7 +817,7 @@ unpeek protect --no-shield`,
   },
   tr: {
     meta: {
-      version: "v1.5.0",
+      version: "v1.6.0",
       license: "MIT Lisansı",
     },
     nav: {
@@ -829,7 +829,7 @@ unpeek protect --no-shield`,
     },
     hero: {
       eyebrow: "ÇAĞRI GRAFİĞİ FARKINDALIKLI JS KORUMASI",
-      metaRight: "v1.5.0 / MIT / npm",
+      metaRight: "v1.6.0 / MIT / npm",
       headlineTop: "Bakacak bir şey yok.",
       headlineBottom: "Yavaşlayacak bir şey yok.",
       subtext:
@@ -1136,7 +1136,7 @@ export default {
         number: "03",
         title: "Mimari & Hot-Path Muafiyet Motoru",
         summary:
-          "Statik çağrı grafiği analizi, O(1) lazy string kasası ve FNV-1a bütünlük doğrulaması ile <%2 CPU ek yükü hedefinin teknik detayları.",
+          "Kapsam-duyarlı statik çağrı grafiği analizi, O(1) kConst string kasası ve ikili kenetlenmiş FNV-1a bütünlük doğrulaması ile <%2 CPU ek yükü hedefinin teknik detayları.",
         subsections: [
           {
             title: "Statik Çağrı Grafiği (Call-Graph) & Çift Yönlü Hot-Path Muafiyeti",
@@ -1154,7 +1154,7 @@ export default {
             title: "O(1) kConst String Kasası & Kalkan Bağımlı Anahtarlar",
             body: [
               "Cold-path fonksiyonlarında (kimlik doğrulama, lisans kontrolü, API istemci kurulumu, özellik bayrakları) uzunluğu `minStringLength` (varsayılan `4`) ve üzeri olan tüm string sabitleri derleme anında ayrıştırılır.",
-              "Her string, derlemenin 32-bitlik `seed` değeriyle parametrelenmiş ve çalışma zamanı bütünlük durumuyla (`String.prototype._u`) kenetlenmiş polimorfik bir XOR şifresiyle kodlanır. Modül ilk yüklendiğinde `const _uC = [...].map(...)` dizisi tüm sabitleri tek seferde çözerek V8 `kConst` önbelleğine yazar. Sonraki tüm erişimler `_uC[indis]` üzerinden fonksiyon çağrısı veya bellek tahsisi olmadan O(1) sabit zamanda gerçekleşir.",
+              "Her string, derlemenin 32-bitlik `seed` değeriyle parametrelenmiş ve hem çalışma zamanı bütünlük durumuyla (`String.prototype._u`) hem de çözücü fonksiyonun kendi biçimlendirme kontrolüyle (`/\n/.test(f)`) ikili olarak kenetlenmiş polimorfik bir XOR şifresiyle kodlanır. Modül ilk yüklendiğinde `const _uC = [...].map(...)` dizisi tüm sabitleri tek seferde çözerek V8 `kConst` önbelleğine yazar. Sonraki tüm erişimler `_uC[indis]` üzerinden fonksiyon çağrısı veya bellek tahsisi olmadan O(1) sabit zamanda gerçekleşir.",
             ],
           },
           {
@@ -1236,7 +1236,7 @@ unpeek protect [options]
   --seed <number>            Deterministik 32-bit polimorfik tohum (seed)
   --passive                  Kademeli bozulma yerine pasif telemetri caydırıcı modunu kullan
   --no-maps                  .map dosyalarını .unpeek-maps/ yerine kalıcı olarak sil
-  --min-string-length <num>  Tembel şifreleme kasasına alınacak minimum metin uzunluğu (varsayılan: 4)
+  --min-string-length <num>  O(1) kConst şifreleme kasasına alınacak minimum metin uzunluğu (varsayılan: 4)
   --private-maps-dir <dir>   Kaynak haritalarının taşınacağı özel kasa klasörü (varsayılan: .unpeek-maps)
   --no-shield                Çalışma zamanı anti-tamper kalkanı enjeksiyonunu devre dışı bırak
   -h, --help                 Yardım mesajını göster

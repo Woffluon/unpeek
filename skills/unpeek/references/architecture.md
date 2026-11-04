@@ -12,7 +12,7 @@ The transformation engine operates directly on JavaScript AST nodes via **Acorn*
 2. **Call-Graph Hot-Path Detection**: Functions are classified into hot paths (0% overhead) and cold paths.
 3. **Cold Flow Guard Injection**: Polymorphic opaque predicates and dead-end control flow branches are inserted into cold paths only.
 4. **Polymorphic Scope Mangling**: Local parameters and function-scoped variables are systematically mangled using seed-derived alphanumeric identifiers.
-5. **O(1) Lazy String Vault**: String literals meeting length thresholds are encrypted into an indexed vault.
+5. **O(1) `kConst` String Vault**: String literals meeting length thresholds are encrypted into an indexed `kConst` array vault with dual tamper entanglement.
 6. **Single-Line Generation**: AST is rendered into minified, single-line JavaScript code.
 
 ---
@@ -48,7 +48,7 @@ String literals in cold paths (`length >= minStringLength`, default: 4; hot loop
 
 - **FNV-1a & Polymorphic XOR**: Strings are encrypted at build time using a 32-bit FNV-1a hash key derived from the build seed.
 - **V8 `kConst` Pre-Decoded Array (`_uC`)**: An encoded string pool is injected once per module (`const _uC = [...].map(...)`) and evaluated once at module load, allowing V8 TurboFan to treat `_uC[index]` lookups as constant O(1) array loads with zero runtime function-call overhead.
-- **Tamper Key Entanglement (`a._u`)**: The XOR key derivation embeds `a._u` (`String.prototype._u`). In an untampered runtime `a._u` is `undefined` (`| 0`), yielding the exact plaintext; if the runtime shield detects tampering or DevTools pretty-printing, it sets `String.prototype._u = 14`, corrupting vault decryption keys automatically.
+- **Tamper Key Entanglement (`a._u` & `/\n/.test(f)`)**: The XOR key derivation embeds both `a._u` (`String.prototype._u`) and self-verifying decoder formatting (`/\n/.test(f)`). In an untampered runtime `a._u` is `undefined` (`| 0`), yielding the exact plaintext; if the runtime shield detects tampering or DevTools pretty-printing, it sets `String.prototype._u = 14`, and even if `String.prototype` is frozen, pretty-printing the decoder function corrupts vault decryption keys automatically.
 
 ---
 
