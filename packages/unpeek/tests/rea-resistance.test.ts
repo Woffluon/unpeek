@@ -86,4 +86,54 @@ describe('Reverse Engineering & Deobfuscation Resistance (Acceptance Thresholds)
     const shield = generateRuntimeShield({ seed: 42, deterrentMode: 'gradual' });
     expect(() => vm.runInNewContext(shield.preambleCode, {})).not.toThrow();
   });
+
+  it('exempts string literals inside hot loops and hot helper callees while entangling cold string vault decryption with the runtime tamper flag', () => {
+    const code = `
+      function hotStepHelper(val) {
+        const hotTag = "HOT_LOOP_HELPER_LABEL";
+        return hotTag + ":" + val;
+      }
+      function renderHotLoop(items) {
+        let out = "";
+        for (let i = 0; i < items.length; i++) {
+          out += "HOT_INLINE_LITERAL:" + hotStepHelper(items[i]);
+        }
+        return out;
+      }
+      function coldCheckSecret() {
+        return "COLD_VAULT_SECRET_TOKEN";
+      }
+    `;
+
+    const res = transformJavaScript(code, {
+      seed: 0x424242,
+      minStringLength: 4,
+      injectRuntimeShield: true,
+      deterrentMode: 'passive',
+    });
+
+    // Hot loop literal and hot helper literal stay unencrypted for zero-overhead loop execution
+    expect(res.code).toContain('HOT_INLINE_LITERAL:');
+    expect(res.code).toContain('HOT_LOOP_HELPER_LABEL');
+    // Cold secret is encrypted into the vault
+    expect(res.code).not.toContain('COLD_VAULT_SECRET_TOKEN');
+
+    // 1. Clean execution resolves cold secret accurately
+    const cleanCtx: Record<string, any> = { window: {} };
+    cleanCtx.globalThis = cleanCtx;
+    vm.createContext(cleanCtx);
+    vm.runInContext(`${res.code}\n;globalThis.secretOut = coldCheckSecret();`, cleanCtx);
+    expect(cleanCtx.secretOut).toBe('COLD_VAULT_SECRET_TOKEN');
+
+    // 2. Tampered execution (e.g. Pretty-Print or String.prototype._uT tamper entanglement) corrupts the vault key silently
+    const tamperedSnippet = res.code.replace(/\{/g, '{\n  ');
+    const tamperedCtx: Record<string, any> = {
+      window: {},
+    };
+    tamperedCtx.globalThis = tamperedCtx;
+    vm.createContext(tamperedCtx);
+    vm.runInContext(`${tamperedSnippet}\n;globalThis.secretOut = coldCheckSecret();`, tamperedCtx);
+    expect(tamperedCtx.window.__unpeek_tampered).toBe(true);
+    expect(tamperedCtx.secretOut).not.toBe('COLD_VAULT_SECRET_TOKEN');
+  });
 });

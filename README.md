@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner.svg">
-    <img src="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner.svg" alt="unpeek - call-graph aware client-side javascript protection" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner-light.svg">
+    <img src="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner-light.svg" alt="unpeek - call-graph aware client-side javascript protection" width="100%">
   </picture>
 </p>
 
@@ -61,9 +61,9 @@ flowchart TD
 ```
 
 1. **Call-Graph Hot-Path Exemption (`<2%` CPU Budget)**
-   Before modifying an AST node, [`detectHotPaths`](packages/unpeek/src/ast/index.ts) traverses the file call graph. Functions containing loops (`for`, `while`, `do-while`, `for-of`), array higher-order callbacks (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` tickers, and React/UI render components (`useState`, `useEffect`, `createElement`) are flagged as hot paths. `unpeek` mangles identifiers and encrypts string constants across the entire bundle, while injecting opaque control-flow predicates exclusively into cold functions (such as license checks, request signers, and auth validators). V8 JIT optimization inside hot loops remains untouched.
-2. **O(1) Lazy String Vault (`<15%` Gzip Budget)**
-   Plaintext string literals (`minStringLength >= 4`) are encrypted at build time with a polymorphic XOR stream cipher keyed by a per-build 32-bit seed. Instead of decrypting every string on page startup, the injected vault helper decodes each string lazily on its first access and caches the plaintext result in its array slot. Subsequent reads resolve in O(1) time through direct array indexing.
+   Before modifying an AST node, [`detectHotPaths`](packages/unpeek/src/ast/index.ts) traverses the file call graph bidirectionally. Functions containing loops (`for`, `while`, `do-while`, `for-of`), array higher-order callbacks (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` tickers, React/UI render components (`useState`, `useEffect`, `createElement`), and all helper callees invoked from hot loops are flagged as hot paths. `unpeek` exempts hot loops and their callees from both opaque control-flow predicates and string vault rewriting, while protecting cold functions (such as license checks, request signers, and auth validators). V8 JIT optimization inside hot loops remains untouched.
+2. **O(1) Const-Array String Vault & Tamper Entanglement (`<15%` Gzip Budget)**
+   Cold string literals (`minStringLength >= 4`) are encrypted at build time with a period-2 polymorphic XOR stream cipher keyed by a per-build 32-bit seed that preserves LZ77/Gzip compressibility. At module initialization, the injected `const _uC` vault decodes strings once into a V8 `kConst` array slot so every subsequent read resolves in O(1) constant time via direct array indexing, while entangling the XOR key with the runtime integrity state.
 3. **Self-Defending `Function.prototype.toString()` Integrity and Passive Deterrent**
    When an analyst formats a protected chunk using DevTools Pretty-Print (`{}`) or edits a branch instruction in the Sources panel, the formatted source alters `Function.prototype.toString()`. [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts) validates a seeded 32-bit FNV-1a checksum against the function source representation with zero false positives on untouched minified code, triggering gradual state degradation (`deterrentMode: 'gradual'`) rather than an obvious crash point that attackers can patch out.
 4. **Automatic Source Map Vault (`.unpeek-maps/`)**

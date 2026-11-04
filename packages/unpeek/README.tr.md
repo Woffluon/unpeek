@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner.svg">
-    <img src="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner.svg" alt="unpeek - call-graph aware client-side javascript protection" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner-light.svg">
+    <img src="https://raw.githubusercontent.com/Woffluon/unpeek/main/assets/banner-light.svg" alt="unpeek - call-graph aware client-side javascript protection" width="100%">
   </picture>
 </p>
 
@@ -61,9 +61,9 @@ flowchart TD
 ```
 
 1. **Çağrı Grafiği (Call-Graph) Hot-Path Muafiyeti (`<%2` CPU Bütçesi)**
-   [`detectHotPaths`](packages/unpeek/src/ast/index.ts), tek bir AST düğümünü değiştirmeden önce dosyanın çağrı grafiğini tarar. Döngü içeren fonksiyonlar (`for`, `while`, `do-while`, `for-of`), dizi yüksek mertebe geri çağrıları (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` zamanlayıcıları ve React/UI bileşenleri (`useState`, `useEffect`, `createElement`) sıcak yol (hot path) olarak işaretlenir. `unpeek` tüm paketteki yerel tanımlayıcıları maskeler ve metin sabitlerini şifreler; opak kontrol akışı korumalarını ise yalnızca soğuk fonksiyonlara (lisans doğrulama, istek imzalama, yetki kontrolü gibi) enjekte eder. Sıcak döngülerdeki V8 JIT optimizasyonu doğal hızında çalışmayı sürdürür.
-2. **O(1) Tembel Metin Kasası (Lazy String Vault, `<%15` Gzip Bütçesi)**
-   Düz metin sabitleri (`minStringLength >= 4`), derleme zamanında 32-bitlik polimorfik bir tohum (seed) ile anahtarlanan XOR akış şifresiyle kodlanır. Sayfa açılışında tüm metinleri aynı anda çözmek yerine, enjekte edilen kasa yardımcısı her metni ilk erişildiğinde tembel (lazy) olarak çözer ve düz metin sonucunu kendi dizi hücresine önbellekler. Sonraki tüm okumalar doğrudan dizi indeksleme ile O(1) sürede tamamlanır.
+   [`detectHotPaths`](packages/unpeek/src/ast/index.ts), tek bir AST düğümünü değiştirmeden önce dosyanın çağrı grafiğini çift yönlü tarar. Döngü içeren fonksiyonlar (`for`, `while`, `do-while`, `for-of`), dizi yüksek mertebe geri çağrıları (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` zamanlayıcıları, React/UI bileşenleri (`useState`, `useEffect`, `createElement`) ve sıcak döngülerden çağrılan tüm yardımcı fonksiyonlar sıcak yol (hot path) olarak işaretlenir. `unpeek` sıcak döngüleri ve yardımcılarını hem opak kontrol akışı korumalarından hem de metin kasası dönüşümünden muaf tutar; korumayı yalnızca soğuk fonksiyonlara (lisans doğrulama, istek imzalama, yetki kontrolü gibi) uygular. Sıcak döngülerdeki V8 JIT optimizasyonu doğal hızında çalışmayı sürdürür.
+2. **O(1) Sabit-Dizi Metin Kasası ve Kalkan Dolanıklığı (`<%15` Gzip Bütçesi)**
+   Soğuk metin sabitleri (`minStringLength >= 4`), derleme zamanında LZ77/Gzip sıkıştırılabilirliğini koruyan periyot-2 polimorfik bir XOR akış şifresiyle kodlanır. Modül başlangıcında enjekte edilen `const _uC` kasası metinleri tek seferde V8 `kConst` sabit dizi hücrelerine çözer ve XOR anahtarını çalışma zamanı bütünlük kalkanına bağlar. Sonraki tüm okumalar doğrudan dizi indeksleme ile O(1) sürede tamamlanır.
 3. **Öz-Savunmalı `Function.prototype.toString()` Bütünlük Kontrolü ve Pasif Caydırıcı**
    Bir analist korumalı bir dosyayı DevTools Pretty-Print (`{}`) ile biçimlendirdiğinde veya Sources panelinde bir koşulu değiştirdiğinde, biçimlendirilen kod `Function.prototype.toString()` çıktısını değiştirir. [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts), dokunulmamış küçültülmüş kodda sıfır yanlış pozitif oranıyla 32-bit FNV-1a özetini doğrular ve saldırganların doğrudan yamayabileceği ani bir çökme yerine kademeli durum bozulması (`deterrentMode: 'gradual'`) başlatır.
 4. **Otomatik Source Map Kasası (`.unpeek-maps/`)**

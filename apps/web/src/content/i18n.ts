@@ -170,16 +170,11 @@ export function validateLicense(key: string) {
   return check(key, salt, endpoint);
 }`,
   protected: `// license-guard.js, protected output
-const _v = [[119,88,69,89,72,21,84],[92,71,89,78,78,66,118]];
-const _m = new Map();
-function _d(i, k) {
-  if (_m.has(i)) return _m.get(i);
-  const b = _v[i];
-  let s = "";
-  for (let j = 0; j < b.length; j++) s += String.fromCharCode(b[j] ^ ((k + j * 17) & 0xff));
-  _m.set(i, s);
+const _uC = ["uNp33k_v4","https://api.unpeek.dev/v1/license"].map(function(a) {
+  let s = "", j = 0;
+  for (; j < a.length; j++) s += String.fromCharCode(a.charCodeAt(j) ^ (((27 ^ (a._u | ((j & 1) * 27))) & 30) | 1));
   return s;
-}
+});
 
 // hot path exempted by the call graph
 export function renderFrame(t) {
@@ -188,18 +183,19 @@ export function renderFrame(t) {
   }
 }
 
-// cold path protected: O(1) vault + mangling + FNV-1a
+// cold path protected: O(1) kConst vault + mangling + FNV-1a
 export function validateLicense(_0x4a1) {
-  const _0x8b2 = _d(1, 0x1b);
-  const _0x9c4 = _d(2, 0x1b);
-  return check(_0x4a1, _0x9c4, _0x8b2);
+  if (((912 ^ (419 | !String)) & 7) === 3) return null;
+  const _0x8b2 = _uC[0];
+  const _0x9c4 = _uC[1];
+  return check(_0x4a1, _0x8b2, _0x9c4);
 }`,
 };
 
 export const DICTIONARY: Record<Locale, Dictionary> = {
   en: {
     meta: {
-      version: "v1.4.0",
+      version: "v1.5.0",
       license: "MIT License",
     },
     nav: {
@@ -211,7 +207,7 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
     },
     hero: {
       eyebrow: "CALL-GRAPH AWARE JS PROTECTION",
-      metaRight: "v1.2.0 / MIT / npm",
+      metaRight: "v1.5.0 / MIT / npm",
       headlineTop: "Nothing to peek at.",
       headlineBottom: "Nothing to slow down.",
       subtext:
@@ -318,7 +314,7 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
         },
         {
           metric: "String decode",
-          unpeek: "O(1) memoized map",
+          unpeek: "O(1) kConst array vault",
           legacyObfuscator: "O(N) per call",
           plainMinifier: "Plaintext in bundle",
         },
@@ -524,26 +520,26 @@ export default {
             title: "Static Call-Graph & Transitive Hot-Path Exemption",
             body: [
               "Why do traditional JavaScript obfuscators ruin application responsiveness? Because they blindly transform every AST node: turning a 60fps animation loop or virtual DOM diffing helper into thousands of string-array lookups and switch-case state machines.",
-              "unpeek solves this by constructing a static call graph of every module before applying any transformation:",
+              "unpeek solves this by constructing a bidirectional static call graph of every module before applying any transformation:",
             ],
             bullets: [
-              "Direct Hot Detection: Any function containing `for`, `while`, `do...while`, `for...in`, or `for...of` loops, or invoking `requestAnimationFrame`, `setInterval`, or typed-array math is flagged as directly hot.",
-              "Transitive Propagation: If Function A is flagged as hot and calls Function B inside its body, Function B is transitively marked hot across the call graph.",
-              "Zero-Overhead Bypass: All hot-marked functions bypass string encryption and control mutations completely, preserving native JIT compilation in V8, SpiderMonkey, and JavaScriptCore.",
+              "Direct Hot Detection: Any function containing `for`, `while`, `do...while`, `for...in`, or `for...of` loops, array higher-order callbacks (`.map`, `.filter`, `.forEach`, `.reduce`), `requestAnimationFrame`, or React/UI render primitives is flagged as directly hot.",
+              "Bidirectional Transitive Propagation: If a hot function calls a helper (top-down, e.g., `renderFrame -> lerp -> stepParticles`), or if an outer wrapper calls a hot function (bottom-up), the entire chain is transitively exempted across the call graph.",
+              "Zero-Overhead Bypass: All hot-marked functions and loop bodies bypass string encryption, lexical mangling, and control mutations completely, preserving native JIT compilation in V8, SpiderMonkey, and JavaScriptCore.",
             ],
           },
           {
-            title: "O(1) Lazy String Vault & Polymorphic Seeds",
+            title: "O(1) kConst String Vault & Tamper-Entangled Keys",
             body: [
               "In cold-path functions (authentication handshakes, license validators, API client builders, feature-flag evaluators), string literals of length >= `minStringLength` (default `4`) are extracted at build time.",
-              "Each string is encoded using a polymorphic byte stream cipher parameterized by the build's 32-bit `seed`. At runtime, the injected `_u0x` vault helper decodes each string only on its first access and caches the plaintext in a `Map`. Subsequent calls resolve in O(1) constant time with zero allocation overhead.",
+              "Each string is encoded using a polymorphic XOR cipher parameterized by the build's 32-bit `seed` and entangled with the runtime integrity state (`String.prototype._u`). At module evaluation time, the injected `const _uC = [...].map(...)` array decodes each string once into a V8 `kConst` array. Subsequent cold-path accesses resolve via direct `_uC[index]` indexing in O(1) constant time with zero call or allocation overhead.",
             ],
           },
           {
             title: "32-bit FNV-1a Integrity & DevTools Shield",
             body: [
-              "Entry chunks receive a compact runtime shield (`injectRuntimeShield: true`). It computes a 32-bit FNV-1a hash (`offset_basis = 2166136261`) over normalized function source representations (`Function.prototype.toString()`) and monitors execution timing drift indicative of automated DevTools breakpoint stepping.",
-              "Two deterrent modes are available: `gradual` (introduces subtle asynchronous jitter and state entropy when tampering is confirmed) and `passive` (records integrity telemetry flags without altering execution flow).",
+              "Entry chunks receive a compact runtime shield (`injectRuntimeShield: true`). It verifies native function integrity (`Function.prototype.toString()`), binds the 32-bit FNV-1a integrity token (`offset_basis = 2166136261`), and poisons the string vault key (`String.prototype._u = 14`) if tampering or pretty-printing is detected.",
+              "Two deterrent modes are available: `gradual` (corrupts tampered vault keys and progressively silences console inspection) and `passive` (sets `window.__unpeek_tampered = true` and dispatches `CustomEvent('unpeek:tamper')` for telemetry without altering console behavior).",
             ],
           },
         ],
@@ -821,7 +817,7 @@ unpeek protect --no-shield`,
   },
   tr: {
     meta: {
-      version: "v1.4.0",
+      version: "v1.5.0",
       license: "MIT Lisansı",
     },
     nav: {
@@ -833,7 +829,7 @@ unpeek protect --no-shield`,
     },
     hero: {
       eyebrow: "ÇAĞRI GRAFİĞİ FARKINDALIKLI JS KORUMASI",
-      metaRight: "v1.2.0 / MIT / npm",
+      metaRight: "v1.5.0 / MIT / npm",
       headlineTop: "Bakacak bir şey yok.",
       headlineBottom: "Yavaşlayacak bir şey yok.",
       subtext:
@@ -940,7 +936,7 @@ unpeek protect --no-shield`,
         },
         {
           metric: "String çözümü",
-          unpeek: "O(1) önbellekli map",
+          unpeek: "O(1) kConst dizi kasası",
           legacyObfuscator: "Her çağrıda O(N)",
           plainMinifier: "Pakette düz metin",
         },
@@ -1143,29 +1139,29 @@ export default {
           "Statik çağrı grafiği analizi, O(1) lazy string kasası ve FNV-1a bütünlük doğrulaması ile <%2 CPU ek yükü hedefinin teknik detayları.",
         subsections: [
           {
-            title: "Statik Çağrı Grafiği (Call-Graph) & Geçişken Hot-Path Muafiyeti",
+            title: "Statik Çağrı Grafiği (Call-Graph) & Çift Yönlü Hot-Path Muafiyeti",
             body: [
               "Geleneksel JavaScript obfuscator'ları neden uygulama akıcılığını bozar? Çünkü AST içindeki her düğümü körlemesine dönüştürerek 60fps animasyon döngülerini veya sanal DOM hesaplamalarını binlerce dizi aramasına ve switch-case bloğuna çevirirler.",
-              "unpeek, herhangi bir dönüşüm uygulamadan önce her modülün statik çağrı grafiğini çıkararak bu sorunu kökten çözer:",
+              "unpeek, herhangi bir dönüşüm uygulamadan önce her modülün çift yönlü statik çağrı grafiğini çıkararak bu sorunu kökten çözer:",
             ],
             bullets: [
-              "Doğrudan Hot Tespiti: `for`, `while`, `do...while`, `for...in`, `for...of` döngüleri içeren veya `requestAnimationFrame`, `setInterval` çağıran her fonksiyon doğrudan 'hot' olarak işaretlenir.",
-              "Geçişken (Transitive) Yayılım: Hot olarak işaretlenen A fonksiyonu gövdesi içinde B fonksiyonunu çağırıyorsa, B fonksiyonu da çağrı grafiği boyunca otomatik olarak hot statüsü kazanır.",
-              "Sıfır Ek Yüklü Bypass: Hot işaretli tüm fonksiyonlar string şifreleme ve kontrol akışı dönüşümlerinden tamamen muaf tutulur; V8, SpiderMonkey ve JavaScriptCore JIT optimizasyonları bozulmadan kalır.",
+              "Doğrudan Hot Tespiti: `for`, `while`, `do...while`, `for...in`, `for...of` döngüleri içeren, dizi yüksek mertebe geri çağrılarını (`.map`, `.filter`, `.forEach`, `.reduce`) veya `requestAnimationFrame` ve UI render fonksiyonlarını barındıran her fonksiyon doğrudan 'hot' olarak işaretlenir.",
+              "Çift Yönlü Geçişken Yayılım: Hot olarak işaretlenen bir fonksiyonun çağırdığı tüm alt yardımcılar (yukarıdan aşağıya, örn. `renderFrame -> lerp -> stepParticles`) ve hot fonksiyonları çağıran üst sarmalayıcılar (aşağıdan yukarıya) çağrı grafiği boyunca otomatik olarak muafiyet kazanır.",
+              "Sıfır Ek Yüklü Bypass: Hot işaretli tüm fonksiyonlar ve döngü gövdeleri string şifreleme, değişken yeniden adlandırma ve kontrol akışı dönüşümlerinden tamamen muaf tutulur; V8, SpiderMonkey ve JavaScriptCore JIT optimizasyonları bozulmadan kalır.",
             ],
           },
           {
-            title: "O(1) Lazy String Kasası & Polimorfik Tohumlama",
+            title: "O(1) kConst String Kasası & Kalkan Bağımlı Anahtarlar",
             body: [
               "Cold-path fonksiyonlarında (kimlik doğrulama, lisans kontrolü, API istemci kurulumu, özellik bayrakları) uzunluğu `minStringLength` (varsayılan `4`) ve üzeri olan tüm string sabitleri derleme anında ayrıştırılır.",
-              "Her string, derlemenin 32-bitlik `seed` değeriyle parametrelenmiş polimorfik bir bayt akış şifresiyle kodlanır. Çalışma zamanında `_u0x` kasa yardımcısı her string'i yalnızca ilk erişimde çözer ve düz metni bir `Map` nesnesinde önbelleğe alır. Sonraki tüm çağrılar bellek tahsisi yapmadan O(1) sabit zamanda sonuç döndürür.",
+              "Her string, derlemenin 32-bitlik `seed` değeriyle parametrelenmiş ve çalışma zamanı bütünlük durumuyla (`String.prototype._u`) kenetlenmiş polimorfik bir XOR şifresiyle kodlanır. Modül ilk yüklendiğinde `const _uC = [...].map(...)` dizisi tüm sabitleri tek seferde çözerek V8 `kConst` önbelleğine yazar. Sonraki tüm erişimler `_uC[indis]` üzerinden fonksiyon çağrısı veya bellek tahsisi olmadan O(1) sabit zamanda gerçekleşir.",
             ],
           },
           {
             title: "32-bit FNV-1a Bütünlük & DevTools Kalkanı",
             body: [
-              "Giriş paketlerine hafif bir çalışma zamanı kalkanı (`injectRuntimeShield: true`) eklenir. Bu kalkan, normalize edilmiş fonksiyon kaynak metinleri (`Function.prototype.toString()`) üzerinde 32-bit FNV-1a özeti (`offset_basis = 2166136261`) hesaplar ve DevTools breakpoint adımlamasına işaret eden zaman sapmalarını izler.",
-              "İki caydırıcı mod sunulur: `gradual` (müdahale doğrulandığında kademeli asenkron gecikme ve durum entropisi uygular) ve `passive` (çalışma akışını bozmadan yalnızca bütünlük telemetri bayrağını kaydeder).",
+              "Giriş paketlerine hafif bir çalışma zamanı kalkanı (`injectRuntimeShield: true`) eklenir. Bu kalkan, yerel fonksiyon bütünlüğünü (`Function.prototype.toString()`) ve 32-bit FNV-1a bütünlük jetonunu (`offset_basis = 2166136261`) doğrular; kodun yeniden biçimlendirildiği (pretty-print) veya kancalandığı tespit edilirse string kasası anahtarını (`String.prototype._u = 14`) zehirler.",
+              "İki caydırıcı mod sunulur: `gradual` (müdahale doğrulandığında kasa anahtarını bozar ve konsol çıktısını kademeli olarak susturur) ve `passive` (konsol davranışını değiştirmeden `window.__unpeek_tampered = true` bayrağını ve `CustomEvent('unpeek:tamper')` telemetri olayını tetikler).",
             ],
           },
         ],

@@ -2,7 +2,8 @@ import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
 
 function createOpaqueGuardStatement(seed: number, fnIndex: number): any {
-  // Deterministic polymorphic constants where ((A ^ B) & 7) === Expected
+  // Deterministic polymorphic constants where (((A ^ B) & 7) | !String) === wrongVal
+  // `!String` is 0 at runtime (V8 Constant-Folded by TurboFan) while defeating AST literal constant-folders
   const a = ((seed >>> 0) + Math.imul(fnIndex + 1, 0x45d9f3b)) & 0xffff;
   const b = (a ^ 0x1357) & 0xffff;
   const wrongVal = ((a ^ b) & 7) ^ 5; // Guaranteed never equal to ((a ^ b) & 7)
@@ -19,7 +20,17 @@ function createOpaqueGuardStatement(seed: number, fnIndex: number): any {
           type: 'BinaryExpression',
           operator: '^',
           left: { type: 'Literal', value: a, raw: String(a) },
-          right: { type: 'Literal', value: b, raw: String(b) },
+          right: {
+            type: 'BinaryExpression',
+            operator: '|',
+            left: { type: 'Literal', value: b, raw: String(b) },
+            right: {
+              type: 'UnaryExpression',
+              operator: '!',
+              prefix: true,
+              argument: { type: 'Identifier', name: 'String' },
+            },
+          },
         },
         right: { type: 'Literal', value: 7, raw: '7' },
       },

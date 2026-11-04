@@ -46,6 +46,7 @@ export interface HotPathAnalysis {
   report: HotPathReport;
   hotFunctionNodes: WeakSet<acorn.Node>;
   coldFunctionNodes: WeakSet<acorn.Node>;
+  hotExemptNodes: WeakSet<acorn.Node>;
 }
 
 export function parseJavaScriptAst(code: string): acorn.Program | null {
@@ -100,6 +101,8 @@ function isPascalCaseComponent(name: string): boolean {
 export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
   const hotFunctionNodes = new WeakSet<acorn.Node>();
   const coldFunctionNodes = new WeakSet<acorn.Node>();
+  const hotExemptNodes = new WeakSet<acorn.Node>();
+  const directHotNodes = new Set<acorn.Node>();
   const allFunctions: { node: acorn.Node; name: string }[] = [];
   const fnByName = new Map<string, acorn.Node>();
   const callerToCallees = new Map<acorn.Node, Set<string>>();
@@ -111,6 +114,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
       fnByName.set(name, node);
       if (isPascalCaseComponent(name)) {
         hotFunctionNodes.add(node);
+        directHotNodes.add(node);
       }
     },
     FunctionExpression(node, _state, ancestors) {
@@ -119,6 +123,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
       fnByName.set(name, node);
       if (isPascalCaseComponent(name)) {
         hotFunctionNodes.add(node);
+        directHotNodes.add(node);
       }
     },
     ArrowFunctionExpression(node, _state, ancestors) {
@@ -127,6 +132,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
       fnByName.set(name, node);
       if (isPascalCaseComponent(name)) {
         hotFunctionNodes.add(node);
+        directHotNodes.add(node);
       }
     },
     CallExpression(node: any, _state, ancestors) {
@@ -164,6 +170,8 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
         for (const arg of node.arguments || []) {
           if (FUNCTION_NODE_TYPES.has(arg.type)) {
             hotFunctionNodes.add(arg);
+            directHotNodes.add(arg);
+            hotExemptNodes.add(arg);
           }
         }
       }
@@ -176,29 +184,55 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
         for (let i = ancestors.length - 1; i >= 0; i--) {
           if (FUNCTION_NODE_TYPES.has(ancestors[i].type)) {
             hotFunctionNodes.add(ancestors[i]);
+            directHotNodes.add(ancestors[i]);
             break;
           }
         }
       }
     },
-    ForStatement(_node, _state, ancestors) {
-      markEnclosingFunctionHot(ancestors, hotFunctionNodes);
+    ForStatement(node, _state, ancestors) {
+      hotExemptNodes.add(node);
+      markEnclosingFunctionHot(ancestors, hotFunctionNodes, directHotNodes);
     },
-    ForInStatement(_node, _state, ancestors) {
-      markEnclosingFunctionHot(ancestors, hotFunctionNodes);
+    ForInStatement(node, _state, ancestors) {
+      hotExemptNodes.add(node);
+      markEnclosingFunctionHot(ancestors, hotFunctionNodes, directHotNodes);
     },
-    ForOfStatement(_node, _state, ancestors) {
-      markEnclosingFunctionHot(ancestors, hotFunctionNodes);
+    ForOfStatement(node, _state, ancestors) {
+      hotExemptNodes.add(node);
+      markEnclosingFunctionHot(ancestors, hotFunctionNodes, directHotNodes);
     },
-    WhileStatement(_node, _state, ancestors) {
-      markEnclosingFunctionHot(ancestors, hotFunctionNodes);
+    WhileStatement(node, _state, ancestors) {
+      hotExemptNodes.add(node);
+      markEnclosingFunctionHot(ancestors, hotFunctionNodes, directHotNodes);
     },
-    DoWhileStatement(_node, _state, ancestors) {
-      markEnclosingFunctionHot(ancestors, hotFunctionNodes);
+    DoWhileStatement(node, _state, ancestors) {
+      hotExemptNodes.add(node);
+      markEnclosingFunctionHot(ancestors, hotFunctionNodes, directHotNodes);
     },
   });
 
-  // Propagate hotness bottom-up along the static call graph (caller -> hot callee)
+  // 1. Propagate hotness top-down from direct hot roots to their callees (hot caller -> callee)
+  const forwardHotSet = new Set<acorn.Node>(directHotNodes);
+  let forwardChanged = true;
+  while (forwardChanged) {
+    forwardChanged = false;
+    for (const callerNode of Array.from(forwardHotSet)) {
+      const calleeNames = callerToCallees.get(callerNode);
+      if (!calleeNames) continue;
+      for (const cName of calleeNames) {
+        const targetNode = fnByName.get(cName);
+        if (targetNode && !forwardHotSet.has(targetNode)) {
+          forwardHotSet.add(targetNode);
+          hotFunctionNodes.add(targetNode);
+          hotExemptNodes.add(targetNode);
+          forwardChanged = true;
+        }
+      }
+    }
+  }
+
+  // 2. Propagate hotness bottom-up along the static call graph (caller -> hot callee)
   let changed = true;
   while (changed) {
     changed = false;
@@ -235,16 +269,21 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
     },
     hotFunctionNodes,
     coldFunctionNodes,
+    hotExemptNodes,
   };
 }
 
 function markEnclosingFunctionHot(
   ancestors: acorn.Node[],
-  hotSet: WeakSet<acorn.Node>
+  hotSet: WeakSet<acorn.Node>,
+  directHotSet?: Set<acorn.Node>
 ): void {
   for (let i = ancestors.length - 1; i >= 0; i--) {
     if (FUNCTION_NODE_TYPES.has(ancestors[i].type)) {
       hotSet.add(ancestors[i]);
+      if (directHotSet) {
+        directHotSet.add(ancestors[i]);
+      }
       break;
     }
   }

@@ -19,41 +19,43 @@ The transformation engine operates directly on JavaScript AST nodes via **Acorn*
 
 ## 2. Call-Graph Hot-Path Exemption (0% Performance Tax)
 
-Conventional obfuscators degrade performance by wrapping every statement and function in dynamic decoders. unpeek analyzes function bodies and call sites to exempt performance-critical paths:
+Conventional obfuscators degrade performance by wrapping every statement and function in dynamic decoders. unpeek analyzes function bodies and call sites to exempt performance-critical paths via **bidirectional call-graph propagation**:
 
 ### Exempted Categories (Hot Paths)
 - **Loops**: `for`, `for..in`, `for..of`, `while`, `do..while`.
 - **Array Higher-Order Methods**: Callbacks passed to `.map()`, `.filter()`, `.forEach()`, `.reduce()`, `.flatMap()`, `.some()`, `.every()`, `.find()`, and `.findIndex()`.
 - **Animation Frames**: Callbacks inside `requestAnimationFrame()` and `cancelAnimationFrame()`.
 - **UI Render Functions**: PascalCase component declarations (React, Preact), functions invoking `createElement()`, and hook consumers.
+- **Bidirectional Propagation**:
+  - **Top-Down (`Hot Caller -> Callee`)**: Any helper function called inside a hot function, loop body, or `requestAnimationFrame` frame (e.g., `renderFrame -> lerp -> stepParticles`) transitively inherits hot exemption.
+  - **Bottom-Up (`Caller -> Hot Callee`)**: Outer wrapper functions invoking hot paths are exempted from control-flow guards and scope mangling.
 
 ```text
 Source Code AST
    │
-   ├── [Hot Path Detected]  ──> Keep Pristine / 0% Overhead (Loops, rAF, Components)
+   ├── [Hot Path Detected]  ──> Keep Pristine / 0% Overhead (Loops, rAF, Components, Hot Callees)
    │
-   └── [Cold Path]          ──> Inject Polymorphic Flow Guard & Mangle Symbols
+   └── [Cold Path]          ──> Inject Polymorphic Flow Guard, Mangle Symbols & Vault Strings
 ```
 
 This selective transformation guarantees application framerates (60 FPS) and keeps execution overhead well below the **<2% CPU budget**.
 
 ---
 
-## 3. O(1) Lazy String Vault
+## 3. O(1) V8 `kConst` String Vault & Tamper Key Entanglement
 
-String literals expose business logic, API endpoints, and private keys. unpeek protects literals (`length >= minStringLength`, default: 4):
+String literals in cold paths (`length >= minStringLength`, default: 4; hot loop bodies and hot callees are strictly exempted) are protected at build time:
 
 - **FNV-1a & Polymorphic XOR**: Strings are encrypted at build time using a 32-bit FNV-1a hash key derived from the build seed.
-- **Inline Array Vault**: An encoded string pool is injected once per module.
-- **Lazy Inline Cache**: Each encrypted string access resolves through an inlined decoder. On first access, the plaintext is decoded and stored in an inline cache index; subsequent lookups execute in **O(1)** time.
+- **V8 `kConst` Pre-Decoded Array (`_uC`)**: An encoded string pool is injected once per module (`const _uC = [...].map(...)`) and evaluated once at module load, allowing V8 TurboFan to treat `_uC[index]` lookups as constant O(1) array loads with zero runtime function-call overhead.
+- **Tamper Key Entanglement (`a._u`)**: The XOR key derivation embeds `a._u` (`String.prototype._u`). In an untampered runtime `a._u` is `undefined` (`| 0`), yielding the exact plaintext; if the runtime shield detects tampering or DevTools pretty-printing, it sets `String.prototype._u = 14`, corrupting vault decryption keys automatically.
 
 ---
 
 ## 4. Cold Flow Guard
 
 In cold functions (event handlers, initialization logic, credential exchanges):
-- **Opaque Predicates**: Introduces algebraic invariants (e.g., `(x * (x + 1)) % 2 === 0`) that always evaluate to true at runtime but cannot be resolved statically by AST decompilers.
-- **Dead-Code Branches**: Injects unreachable synthetic branches containing plausible control flow, defeating automated pattern recognizers and symbolic execution analyzers.
+- **Runtime-Invariant Opaque Predicates**: Introduces bitwise invariants bound to global runtime references (`if (((a ^ (b | !String)) & 7) === wrongVal) return null;`) that always evaluate to `false` in V8 (`!String === 0` at JIT time, 0.00% CPU overhead) while preventing static AST literal constant-folders (`webcrack`, `Terser`, `SWC`) from stripping the guard without runtime environment assumptions.
 
 ---
 
@@ -61,9 +63,9 @@ In cold functions (event handlers, initialization logic, credential exchanges):
 
 Injected exclusively into entry chunks as an SSR-safe, self-executing IIFE (<1.5 KB):
 
-### Detection Mechanics
-- **Function Integrity**: Evaluates `Function.prototype.toString.call(...)` to detect monkey-patching or breakpoint hooking.
-- **Formatting / Deobfuscation Traps**: Checks whether the function representation contains newline characters (`\n` or `\r`), triggering when an attacker pretty-prints or reformats the bundle in DevTools.
+### Detection Mechanics & Token Binding
+- **Function Integrity & FNV-1a Token Binding**: Evaluates `Function.prototype.toString.call(...)` and binds the build's 32-bit FNV-1a integrity token (`expectedIntegrityHash & 1`) into the native code offset check to detect monkey-patching or breakpoint hooking.
+- **Formatting / Deobfuscation Traps & Vault Poisoning**: Checks whether the function representation contains newline characters (`\n` or `\r`), triggering when an attacker pretty-prints or reformats the bundle in DevTools, and sets `String.prototype._u = 14` to poison the string vault key.
 
 ### Deterrent Modes
 1. **Passive Mode (`--passive` or `deterrentMode: 'passive'`)**:

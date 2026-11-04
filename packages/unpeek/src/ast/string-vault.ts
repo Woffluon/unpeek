@@ -12,7 +12,7 @@ const HELPER_TEMPLATE = (acorn.parse(
   `const _ = [].map(function(a) {
   var s = "";
   for (var j = 0; j < a.length; j++) {
-    s += String.fromCharCode(a.charCodeAt(j) ^ (((0 ^ ((j & 1) * 0)) & 30) | 1));
+    s += String.fromCharCode(a.charCodeAt(j) ^ (((0 ^ (a._u | ((j & 1) * 0))) & 30) | 1));
   }
   return s;
 });`,
@@ -39,8 +39,8 @@ function createVaultHelperAst(
   const innerLeft = binaryXor.right.left.left;
   innerLeft.left.value = mask;
   innerLeft.left.raw = String(mask);
-  innerLeft.right.right.value = step;
-  innerLeft.right.right.raw = String(step);
+  innerLeft.right.right.right.value = step;
+  innerLeft.right.right.right.raw = String(step);
   return node;
 }
 
@@ -72,7 +72,8 @@ function encodeStringWithSeed(str: string, mask: number, step: number): string {
 export function applyStringVault(
   ast: acorn.Program,
   seed = 0x9e3779b9,
-  minStringLength = 4
+  minStringLength = 4,
+  hotExemptNodes?: WeakSet<acorn.Node>
 ): StringVaultResult {
   const suffix = ((seed >>> 0) % 0xff).toString(36);
   const cacheVarName = `_uC${suffix}`;
@@ -89,6 +90,14 @@ export function applyStringVault(
       const val: string = node.value;
       if (val.length < minStringLength) return;
       if (DIRECTIVE_STRINGS.has(val)) return;
+
+      if (hotExemptNodes) {
+        for (let i = ancestors.length - 2; i >= 0; i--) {
+          if (hotExemptNodes.has(ancestors[i])) {
+            return;
+          }
+        }
+      }
 
       const parent = ancestors[ancestors.length - 2] as any;
       if (!parent) return;

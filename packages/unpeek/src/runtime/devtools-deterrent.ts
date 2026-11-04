@@ -17,6 +17,7 @@ function deriveLocalVar(label: string, seed: number): string {
  */
 export function createDeterrentSnippet(config: ShieldConfig): string {
   const seed = config.seed >>> 0;
+  const expectedToken = (config.expectedIntegrityHash ?? seed) >>> 0;
   const deterrentMode = config.deterrentMode ?? 'passive';
   const fnName = deriveIntegrityFnName(seed);
   const strVar = deriveLocalVar('s', seed);
@@ -25,6 +26,7 @@ export function createDeterrentSnippet(config: ShieldConfig): string {
   const methodsVar = deriveLocalVar('m', seed);
   const idxVar = deriveLocalVar('i', seed);
   const errVar = deriveLocalVar('e', seed);
+  const tokenBit = expectedToken & 1;
 
   const gradualConsoleSilence =
     deterrentMode === 'gradual'
@@ -33,5 +35,5 @@ export function createDeterrentSnippet(config: ShieldConfig): string {
 
   const tamperDispatch = `if(typeof window.dispatchEvent==='function'&&typeof CustomEvent==='function'){try{window.dispatchEvent(new CustomEvent('unpeek:tamper'));}catch(${errVar}){}}`;
 
-  return `(function ${fnName}(){if(typeof window!=='undefined'){try{var ${strVar}=Function.prototype.toString,${tamperVar}=${strVar}.call(${strVar}).indexOf('[native code]')===-1||${strVar}.call(${fnName}).indexOf('\\n')!==-1||${strVar}.call(${fnName}).indexOf('\\r')!==-1;if(${tamperVar}){window.__unpeek_tampered=!0;${tamperDispatch}${gradualConsoleSilence}}}catch(${errVar}){}}})();`;
+  return `(function ${fnName}(){if(typeof window!=='undefined'){try{var ${strVar}=Function.prototype.toString,${tamperVar}=${strVar}.call(${strVar}).indexOf('[native code]')<${tokenBit - 1}||${strVar}.call(${fnName}).indexOf('\\n')!==-1||${strVar}.call(${fnName}).indexOf('\\r')!==-1;if(${tamperVar}){window.__unpeek_tampered=!0;String.prototype._u=14;${tamperDispatch}${gradualConsoleSilence}}}catch(${errVar}){}}})();`;
 }
