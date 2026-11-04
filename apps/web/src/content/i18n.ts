@@ -332,7 +332,7 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
             ],
             codeBlocks: [
               {
-                label: "Terminal — Interactive / Zero-Config Init",
+                label: "Terminal: Interactive / Zero-Config Init",
                 language: "bash",
                 code: `# 1. Initialize in your project root
 npx unpeek init
@@ -351,10 +351,10 @@ npx unpeek init
             ],
             codeBlocks: [
               {
-                label: "Terminal — Postbuild Protection & Summary",
+                label: "Terminal: Postbuild Protection & Summary",
                 language: "bash",
                 code: `# Run manually or via npm/pnpm postbuild
-npx unpeek protect --seed 482910 --deterrent gradual
+npx unpeek protect --seed 482910
 
 # Output:
 # [unpeek] Framework: nextjs | Directory: .next/static/chunks
@@ -383,7 +383,7 @@ npx unpeek protect --seed 482910 --deterrent gradual
             ],
             codeBlocks: [
               {
-                label: "package.json — Recommended Next.js Postbuild Setup",
+                label: "package.json: Recommended Next.js Postbuild Setup",
                 language: "json",
                 code: `{
   "scripts": {
@@ -392,7 +392,7 @@ npx unpeek protect --seed 482910 --deterrent gradual
     "postbuild": "unpeek protect"
   },
   "devDependencies": {
-    "unpeek": "^0.1.0"
+    "unpeek": "^1.0.1"
   }
 }`,
               },
@@ -405,17 +405,17 @@ npx unpeek protect --seed 482910 --deterrent gradual
             ],
             codeBlocks: [
               {
-                label: "vite.config.ts — Native Vite Plugin Integration",
+                label: "vite.config.ts: Native Vite Plugin Integration",
                 language: "typescript",
                 code: `import { defineConfig } from "vite";
-import { viteUnpeekPlugin } from "unpeek";
+import { vitePlugin } from "unpeek";
 
 export default defineConfig({
   build: {
     sourcemap: true, // Extracted to .unpeek-maps/ during postbuild
   },
   plugins: [
-    viteUnpeekPlugin({
+    vitePlugin({
       seed: 0x9fa21b,
       minStringLength: 4,
       injectRuntimeShield: true,
@@ -429,18 +429,18 @@ export default defineConfig({
           {
             title: "Webpack & Vanilla JS Targets",
             body: [
-              "For Webpack 5 builds, import `webpackUnpeekPlugin` from `unpeek` or pass `--out-dir build/static/js` to the CLI. For Vanilla JS projects, point `--out-dir` to your public asset folder.",
+              "For Webpack 5 builds, import `webpackPlugin` from `unpeek` or pass `--out-dir build/static/js` to the CLI. For Vanilla JS projects, point `--out-dir` to your public asset folder.",
             ],
             codeBlocks: [
               {
-                label: "webpack.config.js — Webpack Plugin",
+                label: "webpack.config.js: Webpack Plugin",
                 language: "javascript",
-                code: `import { webpackUnpeekPlugin } from "unpeek";
+                code: `import { webpackPlugin } from "unpeek";
 
 export default {
   mode: "production",
   plugins: [
-    webpackUnpeekPlugin({
+    webpackPlugin({
       deterrentMode: "passive",
       minStringLength: 5,
     }),
@@ -461,7 +461,7 @@ export default {
           {
             title: "Static Call-Graph & Transitive Hot-Path Exemption",
             body: [
-              "Why do traditional JavaScript obfuscators ruin application responsiveness? Because they blindly transform every AST node—turning a 60fps animation loop or virtual DOM diffing helper into thousands of string-array lookups and switch-case state machines.",
+              "Why do traditional JavaScript obfuscators ruin application responsiveness? Because they blindly transform every AST node: turning a 60fps animation loop or virtual DOM diffing helper into thousands of string-array lookups and switch-case state machines.",
               "unpeek solves this by constructing a static call graph of every module before applying any transformation:",
             ],
             bullets: [
@@ -491,7 +491,7 @@ export default {
         number: "04",
         title: "Source Map Vault & Production Debugging",
         summary:
-          "Never ship .js.map files to public users again—while retaining full stack-trace symbolication in Sentry, Datadog, or local crash triage.",
+          "Never ship .js.map files to public users again, while retaining full stack-trace symbolication in Sentry, Datadog, or local crash triage.",
         subsections: [
           {
             title: "How .unpeek-maps/ Isolation Works",
@@ -512,12 +512,12 @@ export default {
             ],
             codeBlocks: [
               {
-                label: "GitHub Actions — Upload .unpeek-maps to Sentry",
+                label: "GitHub Actions: Upload .unpeek-maps to Sentry",
                 language: "yaml",
                 code: `- name: Build & Protect Client Bundles
   run: |
     pnpm build
-    npx unpeek protect --private-maps-dir .unpeek-maps
+    npx unpeek protect
 
 - name: Upload Private Source Maps to Sentry
   env:
@@ -548,33 +548,31 @@ export default {
               {
                 label: "CLI Reference",
                 language: "bash",
-                code: `unpeek init [--cwd <path>]
+                code: `unpeek init
   Detects framework, configures package.json "postbuild", and updates .gitignore.
 
 unpeek protect [options]
-  --cwd <path>               Target project root directory (default: process.cwd())
-  --out-dir <path>           Explicit client output directory override
+  --out-dir <dir>            Explicit client output directory override
   --seed <number>            Deterministic 32-bit polymorphic seed
-  --deterrent <mode>         Runtime deterrent mode: "gradual" | "passive" (default: "gradual")
-  --no-maps-vault            Delete .map files instead of moving to .unpeek-maps/
-  --private-maps-dir <dir>   Custom vault folder name (default: ".unpeek-maps")
-  --no-shield                Disable runtime FNV-1a integrity & DevTools shield injection
-  --min-string-length <n>    Minimum string literal length to encrypt (default: 4)`,
+  --passive                  Use passive telemetry deterrent mode instead of gradual
+  --no-maps                  Delete .map files instead of moving to .unpeek-maps/
+  -h, --help                 Show help message
+  -v, --version              Show version number`,
               },
             ],
           },
           {
             title: "Programmatic Node.js API & TypeScript Types",
             body: [
-              "Import `protectDirectory`, `transformCode`, or bundler plugins directly from `unpeek` to build custom compilation pipelines.",
+              "Import `protectProject`, `transformJavaScript`, or bundler plugins directly from `unpeek` to build custom compilation pipelines.",
             ],
             codeBlocks: [
               {
-                label: "TypeScript — Programmatic Usage & Exported Interfaces",
+                label: "TypeScript: Programmatic Usage & Exported Interfaces",
                 language: "typescript",
                 code: `import {
-  protectDirectory,
-  transformCode,
+  protectProject,
+  transformJavaScript,
   type ProtectOptions,
   type ProtectSummary,
   type TransformOptions,
@@ -582,7 +580,7 @@ unpeek protect [options]
 } from "unpeek";
 
 // 1. Transform a single JavaScript module in memory
-const result: TransformResult = transformCode(sourceCode, {
+const result: TransformResult = transformJavaScript(sourceCode, {
   seed: 0x10b981,
   minStringLength: 4,
   injectRuntimeShield: true,
@@ -593,7 +591,7 @@ console.log(result.hotPathReport.hotFunctionsSkipped);
 console.log(result.encryptedStringsCount, result.mangledSymbolsCount);
 
 // 2. Protect an entire framework build directory
-const summary: ProtectSummary = await protectDirectory({
+const summary: ProtectSummary = await protectProject({
   cwd: process.cwd(),
   keepPrivateMaps: true,
   privateMapsDir: ".unpeek-maps",
@@ -618,7 +616,7 @@ const summary: ProtectSummary = await protectDirectory({
             ],
             codeBlocks: [
               {
-                label: "Terminal — Copy Skill into Your Project or Global Agent Config",
+                label: "Terminal: Copy Skill into Your Project or Global Agent Config",
                 language: "bash",
                 code: `# Copy the unpeek skill into your project's .claude/skills or skills/ directory
 mkdir -p skills/unpeek
@@ -806,7 +804,7 @@ curl -fsSL https://raw.githubusercontent.com/Woffluon/unpeek/main/skills/unpeek/
             ],
             codeBlocks: [
               {
-                label: "Terminal — Sıfır Ayarlı Başlatma",
+                label: "Terminal: Sıfır Ayarlı Başlatma",
                 language: "bash",
                 code: `# 1. Proje kök dizininde başlatın
 npx unpeek init
@@ -825,10 +823,10 @@ npx unpeek init
             ],
             codeBlocks: [
               {
-                label: "Terminal — Postbuild Koruma & Özet Çıktısı",
+                label: "Terminal: Postbuild Koruma & Özet Çıktısı",
                 language: "bash",
                 code: `# Manuel veya postbuild üzerinden çalıştırma
-npx unpeek protect --seed 482910 --deterrent gradual
+npx unpeek protect --seed 482910
 
 # Çıktı:
 # [unpeek] Framework: nextjs | Directory: .next/static/chunks
@@ -857,7 +855,7 @@ npx unpeek protect --seed 482910 --deterrent gradual
             ],
             codeBlocks: [
               {
-                label: "package.json — Önerilen Next.js Postbuild Yapılandırması",
+                label: "package.json: Önerilen Next.js Postbuild Yapılandırması",
                 language: "json",
                 code: `{
   "scripts": {
@@ -866,7 +864,7 @@ npx unpeek protect --seed 482910 --deterrent gradual
     "postbuild": "unpeek protect"
   },
   "devDependencies": {
-    "unpeek": "^0.1.0"
+    "unpeek": "^1.0.1"
   }
 }`,
               },
@@ -875,21 +873,21 @@ npx unpeek protect --seed 482910 --deterrent gradual
           {
             title: "Vite & Rollup (CLI veya unplugin)",
             body: [
-              "Vite uygulamalarında unpeek `dist/` çıktı klasörünü otomatik algılar. Dönüşümü postbuild aşaması yerine doğrudan Vite paketleme aşamasında bellek içinde yapmak isterseniz `viteUnpeekPlugin` eklentisini kullanabilirsiniz.",
+              "Vite uygulamalarında unpeek `dist/` çıktı klasörünü otomatik algılar. Dönüşümü postbuild aşaması yerine doğrudan Vite paketleme aşamasında bellek içinde yapmak isterseniz `vitePlugin` eklentisini kullanabilirsiniz.",
             ],
             codeBlocks: [
               {
-                label: "vite.config.ts — Doğrudan Vite Eklenti Entegrasyonu",
+                label: "vite.config.ts: Doğrudan Vite Eklenti Entegrasyonu",
                 language: "typescript",
                 code: `import { defineConfig } from "vite";
-import { viteUnpeekPlugin } from "unpeek";
+import { vitePlugin } from "unpeek";
 
 export default defineConfig({
   build: {
     sourcemap: true, // Postbuild aşamasında .unpeek-maps/ kasasına taşınır
   },
   plugins: [
-    viteUnpeekPlugin({
+    vitePlugin({
       seed: 0x9fa21b,
       minStringLength: 4,
       injectRuntimeShield: true,
@@ -903,18 +901,18 @@ export default defineConfig({
           {
             title: "Webpack & Vanilla JS Hedefleri",
             body: [
-              "Webpack 5 projelerinde `webpackUnpeekPlugin` eklentisini içe aktarabilir veya CLI'a `--out-dir build/static/js` parametresi geçebilirsiniz. Vanilla JS projelerinde `--out-dir` ile statik JS klasörünüzü belirtmeniz yeterlidir.",
+              "Webpack 5 projelerinde `webpackPlugin` eklentisini içe aktarabilir veya CLI'a `--out-dir build/static/js` parametresi geçebilirsiniz. Vanilla JS projelerinde `--out-dir` ile statik JS klasörünüzü belirtmeniz yeterlidir.",
             ],
             codeBlocks: [
               {
-                label: "webpack.config.js — Webpack Eklentisi",
+                label: "webpack.config.js: Webpack Eklentisi",
                 language: "javascript",
-                code: `import { webpackUnpeekPlugin } from "unpeek";
+                code: `import { webpackPlugin } from "unpeek";
 
 export default {
   mode: "production",
   plugins: [
-    webpackUnpeekPlugin({
+    webpackPlugin({
       deterrentMode: "passive",
       minStringLength: 5,
     }),
@@ -986,12 +984,12 @@ export default {
             ],
             codeBlocks: [
               {
-                label: "GitHub Actions — .unpeek-maps Klasörünü Sentry'ye Yükleme",
+                label: "GitHub Actions: .unpeek-maps Klasörünü Sentry'ye Yükleme",
                 language: "yaml",
                 code: `- name: İstemci Paketlerini Derle ve Koru
   run: |
     pnpm build
-    npx unpeek protect --private-maps-dir .unpeek-maps
+    npx unpeek protect
 
 - name: Gizli Source Map Dosyalarını Sentry'ye Yükle
   env:
@@ -1022,33 +1020,31 @@ export default {
               {
                 label: "CLI Referansı",
                 language: "bash",
-                code: `unpeek init [--cwd <path>]
+                code: `unpeek init
   Framework'ü algılar, package.json "postbuild" betiğini ekler ve .gitignore'u günceller.
 
 unpeek protect [options]
-  --cwd <path>               Hedef proje kök dizini (varsayılan: process.cwd())
-  --out-dir <path>           İstemci çıktı klasörünü manuel geçersiz kılma
+  --out-dir <dir>            İstemci çıktı klasörünü manuel geçersiz kılma
   --seed <number>            Deterministik 32-bit polimorfik tohum (seed)
-  --deterrent <mode>         Caydırıcı mod: "gradual" | "passive" (varsayılan: "gradual")
-  --no-maps-vault            .map dosyalarını .unpeek-maps/ yerine kalıcı olarak sil
-  --private-maps-dir <dir>   Özel source map kasa klasörü (varsayılan: ".unpeek-maps")
-  --no-shield                Çalışma zamanı FNV-1a ve DevTools kalkanını devre dışı bırak
-  --min-string-length <n>    Şifrelenecek minimum string uzunluğu (varsayılan: 4)`,
+  --passive                  Kademeli bozulma yerine pasif telemetri caydırıcı modunu kullan
+  --no-maps                  .map dosyalarını .unpeek-maps/ yerine kalıcı olarak sil
+  -h, --help                 Yardım mesajını göster
+  -v, --version              Sürüm numarasını göster`,
               },
             ],
           },
           {
             title: "Programatik Node.js API & TypeScript Tipleri",
             body: [
-              "Özel derleme hatları oluşturmak için `protectDirectory`, `transformCode` veya bundler eklentilerini doğrudan `unpeek` paketinden içe aktarabilirsiniz.",
+              "Özel derleme hatları oluşturmak için `protectProject`, `transformJavaScript` veya bundler eklentilerini doğrudan `unpeek` paketinden içe aktarabilirsiniz.",
             ],
             codeBlocks: [
               {
-                label: "TypeScript — Programatik Kullanım & Arayüzler",
+                label: "TypeScript: Programatik Kullanım & Arayüzler",
                 language: "typescript",
                 code: `import {
-  protectDirectory,
-  transformCode,
+  protectProject,
+  transformJavaScript,
   type ProtectOptions,
   type ProtectSummary,
   type TransformOptions,
@@ -1056,7 +1052,7 @@ unpeek protect [options]
 } from "unpeek";
 
 // 1. Tek bir JavaScript modülünü bellek içinde dönüştürme
-const result: TransformResult = transformCode(sourceCode, {
+const result: TransformResult = transformJavaScript(sourceCode, {
   seed: 0x10b981,
   minStringLength: 4,
   injectRuntimeShield: true,
@@ -1067,7 +1063,7 @@ console.log(result.hotPathReport.hotFunctionsSkipped);
 console.log(result.encryptedStringsCount, result.mangledSymbolsCount);
 
 // 2. Tüm framework çıktı dizinini koruma
-const summary: ProtectSummary = await protectDirectory({
+const summary: ProtectSummary = await protectProject({
   cwd: process.cwd(),
   keepPrivateMaps: true,
   privateMapsDir: ".unpeek-maps",
@@ -1092,7 +1088,7 @@ const summary: ProtectSummary = await protectDirectory({
             ],
             codeBlocks: [
               {
-                label: "Terminal — Skill Dosyasını Projenize Kopyalayın",
+                label: "Terminal: Skill Dosyasını Projenize Kopyalayın",
                 language: "bash",
                 code: `# unpeek skill dosyasını projenizin skills/ dizinine indirin
 mkdir -p skills/unpeek
