@@ -59,6 +59,32 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(report.hotFunctionsSkipped).toContain('UserProfileCard');
       expect(report.coldFunctionsProtected).toContain('coldValidator');
     });
+
+    it('propagates hot status top-down from hot loops/frames to their helper callees (e.g. renderFrame -> lerp -> stepParticles)', () => {
+      const sample = `
+        function stepParticles(px, velocity) {
+          return px + velocity;
+        }
+        function lerp(a, b, t) {
+          return stepParticles(a, (b - a) * t);
+        }
+        function renderFrame(particles, t) {
+          for (let i = 0; i < particles.length; i++) {
+            particles[i] = lerp(particles[i], 100, t);
+          }
+          return particles;
+        }
+        function validateLicense(key) {
+          return key === "SECRET_PROD_KEY_2026";
+        }
+      `;
+
+      const report = detectHotPaths(sample);
+      expect(report.hotFunctionsSkipped).toContain('renderFrame');
+      expect(report.hotFunctionsSkipped).toContain('lerp');
+      expect(report.hotFunctionsSkipped).toContain('stepParticles');
+      expect(report.coldFunctionsProtected).toContain('validateLicense');
+    });
   });
 
   describe('transformJavaScript semantic preservation & obfuscation', () => {

@@ -49,8 +49,12 @@ export function transformJavaScript(
     };
   }
 
-  // 1. Detect hot paths (loops, array HOF callbacks, rAF, UI components)
-  const { report: hotPathReport, coldFunctionNodes } = analyzeAstHotPaths(ast);
+  // 1. Detect hot paths (loops, array HOF callbacks, rAF, UI components, and their callees)
+  const {
+    report: hotPathReport,
+    coldFunctionNodes,
+    hotExemptNodes,
+  } = analyzeAstHotPaths(ast);
 
   // 2. Inject polymorphic opaque guards only on cold functions (<2% runtime CPU budget)
   applyColdFlowGuard(ast, coldFunctionNodes, seed);
@@ -58,11 +62,12 @@ export function transformJavaScript(
   // 3. Mangle local parameters & function-scoped variables safely
   const mangledSymbolsCount = applyPolymorphicMangler(ast, seed);
 
-  // 4. Encrypt eligible string literals into an O(1) lazy inline-cached vault
+  // 4. Encrypt eligible string literals into an O(1) const-array vault (exempting hot loops/callees)
   const { encryptedStringsCount, integrityToken } = applyStringVault(
     ast,
     seed,
-    minStringLength
+    minStringLength,
+    hotExemptNodes
   );
 
   // 5. Generate compact single-line JavaScript output

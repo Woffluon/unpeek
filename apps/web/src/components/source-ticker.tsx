@@ -17,9 +17,9 @@ const PROTECTED_LINES: TickerLine[] = [
   { text: "export function stepParticles(dt) {", hot: true },
   { text: "for (let i = 0; i < particles.length; i++) {", hot: true },
   { text: "particles[i].x += lerp(a, b, dt);", hot: true },
-  { text: "const _0x8b2 = _d(1, 0x1b);" },
+  { text: "const _0x8b2 = _uC[0];" },
   { text: "export async function verifyLicense(_0x4a1) {" },
-  { text: "const _0x9c4 = _d(2, 0x1b);" },
+  { text: "const _0x9c4 = _uC[1];" },
   { text: "return check(_0x4a1, _0x9c4, _0x8b2);" },
 ];
 

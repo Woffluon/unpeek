@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 200" width="100%" height="auto" fill="none">
+  <!-- Minimalist Carbon Canvas -->
+  <rect width="960" height="200" rx="6" fill="#111111" />
+  <rect x="0.5" y="0.5" width="959" height="199" rx="5.5" stroke="#2A2A28" />
+
+  <!-- Signal Orange Top Line -->
+  <rect x="0" y="0" width="960" height="2" fill="#FF3300" />
+
+  <!-- Iconic Brand Mark (Sealed block with open hot-path cut) -->
+  <g transform="translate(458, 30) scale(1.833)">
+    <path d="M2 2h15l5 5v15H2V2Z" fill="#EDEAE1" />
+    <rect x="0" y="10.5" width="24" height="3" fill="#FF3300" />
+  </g>
+
+  <!-- Wordmark -->
+  <text x="480" y="122" text-anchor="middle" fill="#EDEAE1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="38" font-weight="700" letter-spacing="-0.035em">unpeek</text>
+
+  <!-- Tagline -->
+  <text x="480" y="154" text-anchor="middle" fill="#8E8A7E" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" letter-spacing="-0.01em">
+    Nothing to peek at. <tspan fill="#EDEAE1">Nothing to slow down.</tspan>
+  </text>
+</svg>
