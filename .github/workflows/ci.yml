@@ -43,8 +43,12 @@ jobs:
           pnpm --filter web run build
 
   package-and-tests:
-    name: Core Lints, Tests, Benchmarks & Package
-    runs-on: windows-latest
+    name: Core Lints, Tests, Benchmarks & Package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -63,10 +67,10 @@ jobs:
           cache: pnpm
 
       - name: Verify Version Consistency
-        shell: powershell
+        shell: pwsh
         run: |
-          powershell -File scripts/test-versioning.ps1
-          powershell -File scripts/validate-version.ps1
+          pwsh -File scripts/test-versioning.ps1
+          pwsh -File scripts/validate-version.ps1
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -83,11 +87,11 @@ jobs:
         run: pnpm --filter unpeek run bench
 
       - name: Stage Release Tarball & SHA-256 Checksums
-        shell: powershell
-        run: powershell -File scripts/stage-release.ps1
+        shell: pwsh
+        run: pwsh -File scripts/stage-release.ps1
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: unpeek-CI-Build
+          name: unpeek-CI-Build-${{ matrix.os }}
           path: artifacts/*
