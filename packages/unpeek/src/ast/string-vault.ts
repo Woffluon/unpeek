@@ -9,13 +9,7 @@ const DIRECTIVE_STRINGS = new Set([
 ]);
 
 const HELPER_TEMPLATE = (acorn.parse(
-  `var _ = [].map(function f(a) {
-  var s = "";
-  for (var j = 0; j < a.length; j++) {
-    s += String.fromCharCode(a.charCodeAt(j) ^ (((0 ^ ((a._u || /\\n/.test(f) * 14) | ((j & 1) * 0))) & 30) | 1));
-  }
-  return s;
-});`,
+  `var _ = (function f(a){var b=typeof Uint8Array!=='undefined'?new Uint8Array(a.length):0;return a.map(function(s){var o="";for(var j=0;j<s.length;j++)o+=String.fromCharCode(s.charCodeAt(j)^(((0^((a._u||/\\n/.test(f)*14)|((j&1)*0)))&30)|1));return o;});})([]);`,
   { ecmaVersion: 'latest', sourceType: 'script' }
 ) as any).body[0];
 
@@ -27,15 +21,22 @@ function createVaultHelperAst(
 ): any {
   const node = structuredClone(HELPER_TEMPLATE);
   node.declarations[0].id.name = cacheVarName;
-  node.declarations[0].init.callee.object.elements = encryptedPayloads.map(
+  node.declarations[0].init.arguments[0].elements = encryptedPayloads.map(
     (str) => ({
       type: 'Literal',
       value: str,
       raw: JSON.stringify(str),
     })
   );
-  const fn = node.declarations[0].init.arguments[0];
-  const binaryXor = fn.body.body[1].body.body[0].expression.right.arguments[0];
+  const outerFn = node.declarations[0].init.callee;
+  const returnStmt = outerFn.body.body[1];
+  const innerFn = returnStmt.argument.arguments[0];
+  const forStmt = innerFn.body.body[1];
+  const expr =
+    forStmt.body.type === 'BlockStatement'
+      ? forStmt.body.body[0].expression
+      : forStmt.body.expression;
+  const binaryXor = expr.right.arguments[0];
   const innerLeft = binaryXor.right.left.left;
   innerLeft.left.value = mask;
   innerLeft.left.raw = String(mask);
@@ -93,70 +94,87 @@ export function applyStringVault(
   }
 
   const mask = ((seed >>> 0) & 0x1e) | 3;
-  const step = (((seed >>> 5) & 7) * 2) + 3;
+  const step = 1;
 
   const stringToIndex = new Map<string, number>();
   const encryptedPayloads: string[] = [];
-  const targetsToReplace: { node: any }[] = [];
+  const targetsToReplace: { node: any; parent?: any }[] = [];
 
-  walk.ancestor(ast, {
-    Literal(node: any, _state, ancestors) {
-      if (typeof node.value !== 'string') return;
-      const val: string = node.value;
-      if (val.length < minStringLength) return;
-      if (DIRECTIVE_STRINGS.has(val)) return;
+  const customWalkBase = {
+    ...walk.base,
+    Property(node: any, st: any, c: any) {
+      c(node.key, st);
+      if (node.value) c(node.value, st);
+    },
+  };
 
-      if (hotExemptNodes) {
-        for (let i = ancestors.length - 2; i >= 0; i--) {
-          if (hotExemptNodes.has(ancestors[i])) {
-            return;
+  walk.ancestor(
+    ast,
+    {
+      Literal(node: any, _state, ancestors) {
+        if (typeof node.value !== 'string') return;
+        const val: string = node.value;
+        if (val.length < minStringLength) return;
+        if (DIRECTIVE_STRINGS.has(val)) return;
+
+        if (hotExemptNodes) {
+          for (let i = ancestors.length - 2; i >= 0; i--) {
+            if (hotExemptNodes.has(ancestors[i])) {
+              return;
+            }
           }
         }
-      }
 
-      const parent = ancestors[ancestors.length - 2] as any;
-      if (!parent) return;
+        const parent = ancestors[ancestors.length - 2] as any;
+        if (!parent) return;
 
-      // Skip directives at top of program or function body
-      if (parent.type === 'ExpressionStatement' && parent.directive) return;
+        // Skip directives at top of program or function body
+        if (parent.type === 'ExpressionStatement' && parent.directive) return;
 
-      // Skip import/export source specifiers
-      if (
-        parent.type === 'ImportDeclaration' ||
-        parent.type === 'ExportNamedDeclaration' ||
-        parent.type === 'ExportAllDeclaration' ||
-        parent.type === 'ImportExpression'
-      ) {
-        if (parent.source === node) return;
-      }
+        // Skip import/export source specifiers
+        if (
+          parent.type === 'ImportDeclaration' ||
+          parent.type === 'ExportNamedDeclaration' ||
+          parent.type === 'ExportAllDeclaration' ||
+          parent.type === 'ImportExpression'
+        ) {
+          if (parent.source === node) return;
+        }
 
-      // Skip object/class property keys and import/export attributes
-      if (
-        (parent.type === 'Property' ||
-          parent.type === 'MethodDefinition' ||
-          parent.type === 'PropertyDefinition') &&
-        parent.key === node &&
-        !parent.computed
-      ) {
-        return;
-      }
-      if (
-        parent.type === 'ImportAttribute' ||
-        parent.type === 'ImportSpecifier' ||
-        parent.type === 'ExportSpecifier'
-      ) {
-        return;
-      }
+        // Skip class property/method keys
+        if (
+          (parent.type === 'MethodDefinition' ||
+            parent.type === 'PropertyDefinition') &&
+          parent.key === node &&
+          !parent.computed
+        ) {
+          return;
+        }
 
-      let idx = stringToIndex.get(val);
-      if (idx === undefined) {
-        idx = encryptedPayloads.length;
-        stringToIndex.set(val, idx);
-        encryptedPayloads.push(encodeStringWithSeed(val, mask, step));
-      }
-      targetsToReplace.push({ node });
+        // Convert string literal object keys to computed properties: { "email": x } -> { [_uC[idx]]: x }
+        if (parent.type === 'Property' && parent.key === node) {
+          parent.computed = true;
+        }
+
+        if (
+          parent.type === 'ImportAttribute' ||
+          parent.type === 'ImportSpecifier' ||
+          parent.type === 'ExportSpecifier'
+        ) {
+          return;
+        }
+
+        let idx = stringToIndex.get(val);
+        if (idx === undefined) {
+          idx = encryptedPayloads.length;
+          stringToIndex.set(val, idx);
+          encryptedPayloads.push(encodeStringWithSeed(val, mask, step));
+        }
+        targetsToReplace.push({ node, parent });
+      },
     },
-  });
+    customWalkBase
+  );
 
   if (targetsToReplace.length === 0 || encryptedPayloads.length === 0) {
     return {
@@ -170,7 +188,10 @@ export function applyStringVault(
   const suffix = computeFnv1aHash(`vault:${seed}`, integrityToken).toString(36);
   const cacheVarName = `_uC${suffix}`;
 
-  for (const { node } of targetsToReplace) {
+  for (const { node, parent } of targetsToReplace) {
+    if (parent?.type === 'Property' && parent.key === node) {
+      parent.computed = true;
+    }
     const idx = stringToIndex.get(node.value)!;
     node.type = 'MemberExpression';
     node.object = {

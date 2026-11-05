@@ -204,6 +204,49 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(new Function(res.code)()).toBe(true);
     });
 
+    it('transforms string literal object keys into computed member expressions while preserving runtime semantics and identifier keys', () => {
+      const code = `
+        function getCredentials() {
+          const payload = {
+            "authToken": "super_secret_token_123",
+            "emailAddress": "admin@unpeek.internal",
+            staticKey: "unmangled_key_value"
+          };
+          const dynamicAccess = payload["authToken"];
+          const dotAccess = payload.emailAddress;
+          return {
+            token: dynamicAccess,
+            email: dotAccess,
+            static: payload.staticKey
+          };
+        }
+        return getCredentials();
+      `;
+
+      const res = transformJavaScript(code, {
+        seed: 0x8899aa,
+        minStringLength: 4,
+      });
+
+      // String literal keys must not appear in plaintext
+      expect(res.code).not.toContain('"authToken"');
+      expect(res.code).not.toContain('"emailAddress"');
+
+      // Identifier keys like staticKey: must remain as identifier keys
+      expect(res.code).toContain('staticKey:');
+
+      // String literal keys must be transformed into computed member expressions: [_uC...[idx]]:
+      expect(res.code).toMatch(/\[_uC[a-z0-9]+\[\d+\]\]:/);
+
+      // Verify that the code executes with 100% semantic equivalence
+      const result = new Function(res.code)();
+      expect(result).toEqual({
+        token: 'super_secret_token_123',
+        email: 'admin@unpeek.internal',
+        static: 'unmangled_key_value',
+      });
+    });
+
     it('injects runtime shield preamble when injectRuntimeShield option is true', () => {
       const code = 'function hello() { return "world"; } hello();';
       const withoutShield = transformJavaScript(code, {
