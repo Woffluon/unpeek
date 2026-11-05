@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { generate } from 'astring';
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
 import { createSotaMbaPredicate } from '../src/ast/cold-flow-guard.js';
@@ -595,6 +596,33 @@ describe('AST & Call-Graph Transformation Engine', () => {
           expect(mbaResult === 2147483647).toBe(false);
         }
       }
+
+    });
+
+    it('generates 3 distinct adversarial decoy models across modulated fnIndex', () => {
+      // Model 0: Fake authorization bypass (/api/v2/auth/admin-bypass, superadmin_token, elevate)
+      const guard0 = createSotaMbaPredicate(42, 0);
+      const code0 = generate(guard0.consequent);
+      expect(code0).toContain('/api/v2/auth/admin-bypass');
+      expect(code0).toContain('superadmin_token');
+      expect(code0).toContain('elevate');
+
+      // Model 1: Fake master JWT verification (_verifyMasterToken, mock_jwt_bypass_signature, authorized: true)
+      const guard1 = createSotaMbaPredicate(42, 1);
+      const code1 = generate(guard1.consequent);
+      expect(code1).toContain('_verifyMasterToken');
+      expect(code1).toContain('mock_jwt_bypass_signature');
+      expect(code1).toContain('authorized');
+
+      // Model 2: Fake telemetry debug and supervisor key (debug_supervisor_override, mfa_bypassed: true)
+      const guard2 = createSotaMbaPredicate(42, 2);
+      const code2 = generate(guard2.consequent);
+      expect(code2).toContain('debug_supervisor_override');
+      expect(code2).toContain('mfa_bypassed');
+
+      // Periodic modulation: fnIndex = 3 maps back to Model 0
+      const guard3 = createSotaMbaPredicate(42, 3);
+      expect(generate(guard3.consequent)).toBe(code0);
     });
 
     it('injects MBA opaque guard into cold functions, preserves exact runtime semantics, and never executes guard branch', () => {
@@ -650,7 +678,7 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(fn()).toBe('TOKEN_VALID:60');
 
       const instrumentedCode = res.code.replace(
-        /\{void 0;\}/g,
+        /\{return\{endpoint:"\/api\/v2\/auth\/admin-bypass",superadmin_token:1,elevate:1\};?\}/g,
         '{throw new Error("GUARD_BRANCH_EXECUTED");}'
       );
       const instrumentedFn = new Function(instrumentedCode);

@@ -188,4 +188,57 @@ describe('Reverse Engineering & Deobfuscation Resistance (Acceptance Thresholds)
     // Cold function's identically-named `localHelper` is NOT mistakenly exempted by the hot `localHelper`
     expect(res.code).not.toContain('COLD_SCOPED_SECRET_VALUE');
   });
+
+  it('injects adversarial semantic decoys and fake authorization bypass into cold functions to frustrate AI deobfuscators without altering runtime semantics', () => {
+    const authHandlerCode = `
+      function authenticateUserSession(userId, rawToken) {
+        if (!userId || !rawToken) {
+          return { authenticated: false, role: "anonymous" };
+        }
+        const tokenHash = "auth_hash_" + rawToken;
+        return {
+          authenticated: true,
+          role: "standard_user",
+          session: userId + ":" + tokenHash
+        };
+      }
+      return authenticateUserSession("usr_100", "secret_pass_123");
+    `;
+
+    const res = transformJavaScript(authHandlerCode, {
+      seed: 0x9e3779b9,
+      minStringLength: 4,
+    });
+
+    // 1. Decoy keywords exist in the transformed AST / generated code to divert LLM deobfuscator attention
+    expect(res.code).toContain('/api/v2/auth/admin-bypass');
+    expect(res.code).toContain('superadmin_token');
+    expect(res.code).toContain('elevate');
+
+    // 2. Cold function is protected, while original secret strings from user code remain vaulted
+    expect(res.hotPathReport.coldFunctionsProtected).toContain('authenticateUserSession');
+    expect(res.code).not.toContain('secret_pass_123');
+
+    // 3. Runtime execution: The MBA opaque predicate deterministically evaluates to false,
+    // so the decoy block is never executed and normal application logic executes with 100% fidelity.
+    const fn = new Function(res.code);
+    const sessionResult = fn();
+    expect(sessionResult).toEqual({
+      authenticated: true,
+      role: 'standard_user',
+      session: 'usr_100:auth_hash_secret_pass_123',
+    });
+    expect(sessionResult.role).not.toBe('superadmin');
+    expect(sessionResult.elevate).toBeUndefined();
+
+    // 4. Inverting the MBA test (simulating condition triggering) verifies that the decoy block is indeed present and returns fake admin bypass
+    const triggeredDecoyCode = res.code.replace('=== 0x7fffffff', '!== 0x7fffffff');
+    const decoyFn = new Function(triggeredDecoyCode);
+    const decoyResult = decoyFn();
+    expect(decoyResult).toEqual({
+      endpoint: '/api/v2/auth/admin-bypass',
+      superadmin_token: 1,
+      elevate: 1,
+    });
+  });
 });

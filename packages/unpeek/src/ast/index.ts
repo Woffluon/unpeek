@@ -84,7 +84,7 @@ export function transformJavaScript(
   } = analyzeAstHotPaths(ast);
 
   // 2. Inject polymorphic opaque guards only on cold functions (<2% runtime CPU budget)
-  applyColdFlowGuard(ast, coldFunctionNodes, seed);
+  applyColdFlowGuard(ast, coldFunctionNodes, seed, hotExemptNodes);
 
   // 3. Mangle local parameters & function-scoped variables safely
   const mangledSymbolsCount = applyPolymorphicMangler(ast, seed);
