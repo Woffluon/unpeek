@@ -6,34 +6,16 @@ export function deriveIntegrityFnName(seed: number): string {
   return `_u$${hash.toString(36)}`;
 }
 
-function deriveLocalVar(label: string, seed: number): string {
-  const hash = computeIntegrityHash(`unpeek:var:${label}:${seed}`, seed) & 0xfffff;
-  return `_${label}${hash.toString(36)}`;
-}
-
 /**
  * Generates a single-line, self-executing (IIFE), polymorphic, SSR-safe (<1.5 KB)
  * anti-tamper deterrent snippet without false-positive window dimension heuristics.
  */
 export function createDeterrentSnippet(config: ShieldConfig): string {
   const seed = config.seed >>> 0;
-  const expectedToken = (config.expectedIntegrityHash ?? seed) >>> 0;
   const deterrentMode = config.deterrentMode ?? 'passive';
   const fnName = deriveIntegrityFnName(seed);
-  const strVar = deriveLocalVar('s', seed);
-  const tamperVar = deriveLocalVar('t', seed);
-  const noopVar = deriveLocalVar('n', seed);
-  const methodsVar = deriveLocalVar('m', seed);
-  const idxVar = deriveLocalVar('i', seed);
-  const errVar = deriveLocalVar('e', seed);
-  const tokenBit = expectedToken & 1;
 
-  const gradualConsoleSilence =
-    deterrentMode === 'gradual'
-      ? `if(typeof console!=='undefined'){var ${noopVar}=function(){},${methodsVar}=['log','debug','info','table','dir'];for(var ${idxVar}=0;${idxVar}<${methodsVar}.length;${idxVar}++){try{console[${methodsVar}[${idxVar}]]=${noopVar};}catch(${errVar}){}}}`
-      : '';
+  const consoleSilence = deterrentMode === 'gradual' ? 'for(var k in console)console[k]=f=>0;' : '';
 
-  const tamperDispatch = `if(window.dispatchEvent&&typeof CustomEvent!=='undefined'){try{window.dispatchEvent(new CustomEvent('unpeek:tamper'));}catch(${errVar}){}}`;
-
-  return `(function ${fnName}(){if(typeof window!=='undefined'){try{var ${strVar}=Function.prototype.toString,${tamperVar}=${strVar}.call(${strVar}).indexOf('[native code]')<${tokenBit - 1}||/[\\r\\n]/.test(${strVar}.call(${fnName}));if(${tamperVar}){window.__unpeek_tampered=!0;${tamperDispatch}${gradualConsoleSilence}String.prototype._u=14;}}catch(${errVar}){}}})();`;
+  return `(function ${fnName}(w){if(w){try{(w.queueMicrotask||w.requestIdleCallback||(f=>f()))(function f(a){var s=Function.prototype.toString,n=w.navigator||0,t=s.call(s).indexOf('[native code]')<0||/\\n/.test(s.call(${fnName}))||n.webdriver||/HeadlessChrome/.test(n.userAgent);if(t){w.__unpeek_tampered=!0,w.__unpeek_seed=((w.__unpeek_seed||${seed})^1)>>>0,String.prototype._u=14;try{${consoleSilence}w.dispatchEvent(new CustomEvent('unpeek:tamper'));}catch(e){}}});}catch(e){}}})(typeof window!=='undefined'&&window);`;
 }
