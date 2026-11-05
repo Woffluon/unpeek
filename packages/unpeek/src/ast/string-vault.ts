@@ -9,7 +9,7 @@ const DIRECTIVE_STRINGS = new Set([
 ]);
 
 const HELPER_TEMPLATE = (acorn.parse(
-  `var _ = (function f(a){var b=typeof Uint8Array!=='undefined'?new Uint8Array(a.length):0;return a.map(function(s){var o="";for(var j=0;j<s.length;j++)o+=String.fromCharCode(s.charCodeAt(j)^(((0^((a._u||/\\n/.test(f)*14)|((j&1)*0)))&30)|1));return o;});})([]);`,
+  `var _ = (function f(a){return a.map(function(s){var o="";for(var j=0;j<s.length;j++)o+=String.fromCharCode(s.charCodeAt(j)^(((0^((a._u||/\\n/.test(f)*14)|((j&1)*0)))&30)|1));return o;});})([]);`,
   { ecmaVersion: 'latest', sourceType: 'script' }
 ) as any).body[0];
 
@@ -29,7 +29,7 @@ function createVaultHelperAst(
     })
   );
   const outerFn = node.declarations[0].init.callee;
-  const returnStmt = outerFn.body.body[1];
+  const returnStmt = outerFn.body.body[0];
   const innerFn = returnStmt.argument.arguments[0];
   const forStmt = innerFn.body.body[1];
   const expr =
