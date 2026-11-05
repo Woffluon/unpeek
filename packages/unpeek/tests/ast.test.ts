@@ -368,5 +368,156 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(transRes.timeoutFlag).toBe(false);
       expect(transRes.callbackFlag).toBe(true);
     });
+
+    it('exempts Web Worker functions serialized via .toString() and body-extracted (DRACOLoader pattern) from vault references and illegal top-level return', () => {
+      const dracoWorkerPattern = `
+        function initDecoderModule() {
+          const wrapperHeader = "var decoderState = { initialized: false };";
+          const fnStr = DracoWorkerEntry.toString();
+          const workerBody = [
+            "/* draco decoder */",
+            wrapperHeader,
+            "/* worker */",
+            fnStr.substring(fnStr.indexOf("{") + 1, fnStr.lastIndexOf("}"))
+          ].join("\\n");
+          return workerBody;
+        }
+
+        function DracoWorkerEntry() {
+          let decoderConfig;
+          let wasmPending;
+          onmessage = function (e) {
+            const message = e.data;
+            switch (message.type) {
+              case "init":
+                decoderConfig = message.decoderConfig;
+                return "INITIALIZED_WORKER:" + decoderConfig.mode;
+              case "decode":
+                return "DECODED_MESH_OK";
+              default:
+                throw new Error("THREE.DRACOLoader: Unexpected message type.");
+            }
+          };
+        }
+
+        return initDecoderModule();
+      `;
+
+      const transformed = transformJavaScript(dracoWorkerPattern, {
+        seed: 0x226beef,
+        minStringLength: 4,
+      });
+
+      const workerScript = new Function(transformed.code)();
+      // Must not contain any out-of-context _uC vault reference inside the extracted worker script
+      expect(workerScript).not.toMatch(/_uC[0-9a-z]+/);
+      // Must parse and execute at top-level script scope without 'Illegal return statement' or ReferenceError
+      const workerEval = new Function(
+        'let onmessage; ' +
+          workerScript +
+          '\nreturn onmessage({ data: { type: "init", decoderConfig: { mode: "WASM_FAST" } } });'
+      );
+      expect(workerEval()).toBe('INITIALIZED_WORKER:WASM_FAST');
+    });
+
+    it('exempts functions serialized via helper wrapper f(n) and worker module descriptors (Troika defineWorkerModule & 0-arg IIFE factory patterns)', () => {
+      const troikaWorkerPattern = `
+        function createWorkerSuite() {
+          function stringifyFunction(fn) {
+            var str = fn.toString();
+            return str;
+          }
+
+          function workerBootstrap() {
+            var modules = {};
+            function handleMessage(evt) {
+              var action = evt.action;
+              if (action === "registerModule") {
+                modules[evt.name] = evt.init();
+                return "REGISTERED:" + evt.name;
+              }
+              if (action === "callModule") {
+                return modules[evt.name](evt.payload);
+              }
+              throw new Error("Unknown worker action: " + action);
+            }
+            return handleMessage;
+          }
+
+          function bidiFactory() {
+            return (function (exports) {
+              var bidiTable = {
+                STRONG_RTL: "RTL_CHAR_TABLE_DATA",
+                WEAK_NUM: "NUMERIC_CHAR_TABLE_DATA"
+              };
+              exports.lookup = function (key) {
+                return bidiTable[key] || "DEFAULT_CLASS";
+              };
+              return exports;
+            })({});
+          }
+
+          function defineWorkerModule(options) {
+            return {
+              bootstrapSource: "(" + stringifyFunction(workerBootstrap) + ")()",
+              initSource: "(" + stringifyFunction(options.init) + ")",
+              depSources: options.dependencies.map(stringifyFunction)
+            };
+          }
+
+          var registered = defineWorkerModule({
+            name: "Typesetter",
+            dependencies: [
+              bidiFactory,
+              function inlineFontParser() {
+                return "FONT_PARSER_READY";
+              }
+            ],
+            init: function (bidi, parser) {
+              return function (text) {
+                return parser + ":" + bidi.lookup("STRONG_RTL") + ":" + text;
+              };
+            }
+          });
+
+          return registered;
+        }
+
+        return createWorkerSuite();
+      `;
+
+      const transformed = transformJavaScript(troikaWorkerPattern, {
+        seed: 0xfaddde6c,
+        minStringLength: 4,
+      });
+
+      const bundle = new Function(transformed.code)();
+      expect(bundle.bootstrapSource).not.toMatch(/_uC[0-9a-z]+/);
+      expect(bundle.initSource).not.toMatch(/_uC[0-9a-z]+/);
+      for (const depSrc of bundle.depSources) {
+        expect(depSrc).not.toMatch(/_uC[0-9a-z]+/);
+      }
+
+      // Evaluate each serialized piece in a completely isolated Function scope
+      const handleMessage = new Function('return ' + bundle.bootstrapSource)();
+      const dep0 = new Function('return (' + bundle.depSources[0] + ')()')();
+      const dep1 = new Function('return (' + bundle.depSources[1] + ')()')();
+      const initFn = new Function('return ' + bundle.initSource)();
+
+      expect(
+        handleMessage({
+          action: 'registerModule',
+          name: 'Typesetter',
+          init: () => initFn(dep0, dep1),
+        })
+      ).toBe('REGISTERED:Typesetter');
+      expect(
+        handleMessage({
+          action: 'callModule',
+          name: 'Typesetter',
+          payload: 'HELLO_3D_TEXT',
+        })
+      ).toBe('FONT_PARSER_READY:RTL_CHAR_TABLE_DATA:HELLO_3D_TEXT');
+    });
   });
 });
