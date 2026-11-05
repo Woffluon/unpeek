@@ -37,8 +37,13 @@ function createOpaqueGuardStatement(seed: number, fnIndex: number): any {
       right: { type: 'Literal', value: wrongVal, raw: String(wrongVal) },
     },
     consequent: {
-      type: 'ReturnStatement',
-      argument: null,
+      type: 'ExpressionStatement',
+      expression: {
+        type: 'UnaryExpression',
+        operator: 'void',
+        prefix: true,
+        argument: { type: 'Literal', value: 0, raw: '0' },
+      },
     },
     alternate: null,
   };
