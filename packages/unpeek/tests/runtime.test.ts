@@ -200,5 +200,80 @@ describe('Runtime Integrity Guard & DevTools Deterrent', () => {
       expect(dispatchSpy).toHaveBeenCalledTimes(1);
       expect((dispatchedEvent as any)?.type).toBe('unpeek:tamper');
     });
+
+    it('detects Function.prototype.toString monkeypatching for both tokenBit 0 and tokenBit 1 seeds', () => {
+      // Seed 42 and Seed 43 represent different parity bits
+      for (const seed of [42, 43]) {
+        const snippet = createDeterrentSnippet({ seed });
+        const windowObj: Record<string, unknown> = {};
+        const context = vm.createContext({
+          window: windowObj,
+          Function: {
+            prototype: {
+              toString: function () {
+                return 'function () { return "tampered"; }';
+              },
+            },
+          },
+        });
+
+        vm.runInContext(snippet, context);
+        expect(windowObj.__unpeek_tampered).toBe(true);
+        expect(windowObj.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
+      }
+    });
+
+    it('triggers tamper flag and seed poisoning on navigator.webdriver and HeadlessChrome user agent', () => {
+      const seed = 12345;
+      const snippet = createDeterrentSnippet({ seed });
+
+      // 1. navigator.webdriver === true
+      const webdriverWindow: Record<string, unknown> = {
+        navigator: { webdriver: true, userAgent: 'Mozilla/5.0' },
+      };
+      const webdriverContext = vm.createContext({
+        window: webdriverWindow,
+      });
+      vm.runInContext(snippet, webdriverContext);
+      expect(webdriverWindow.__unpeek_tampered).toBe(true);
+      expect(webdriverWindow.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
+
+      // 2. HeadlessChrome userAgent
+      const headlessWindow: Record<string, unknown> = {
+        navigator: { webdriver: false, userAgent: 'Mozilla/5.0 HeadlessChrome/122.0.0.0 Safari/537.36' },
+      };
+      const headlessContext = vm.createContext({
+        window: headlessWindow,
+      });
+      vm.runInContext(snippet, headlessContext);
+      expect(headlessWindow.__unpeek_tampered).toBe(true);
+      expect(headlessWindow.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
+    });
+
+    it('defers attestation check via window.queueMicrotask for React 19 hydration compatibility', () => {
+      const seed = 999;
+      const snippet = createDeterrentSnippet({ seed });
+
+      const microtaskQueue: Array<() => void> = [];
+      const windowObj: Record<string, unknown> = {
+        queueMicrotask: (fn: () => void) => microtaskQueue.push(fn),
+        navigator: { webdriver: true }, // Automation signal that should trigger tamper when executed
+      };
+
+      const context = vm.createContext({
+        window: windowObj,
+      });
+
+      vm.runInContext(snippet, context);
+
+      // Prior to flushing microtasks, execution was deferred
+      expect(microtaskQueue.length).toBe(1);
+      expect(windowObj.__unpeek_tampered).toBeUndefined();
+
+      // Flush microtasks (simulating end of React 19 hydration)
+      microtaskQueue[0]();
+      expect(windowObj.__unpeek_tampered).toBe(true);
+      expect(windowObj.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
+    });
   });
 });
