@@ -1,6 +1,6 @@
 {
   "name": "unpeek",
-  "version": "1.6.3",
+  "version": "1.7.0",
   "description": "Zero-config, call-graph-aware polymorphic AST obfuscation and passive runtime anti-tamper with <2% CPU overhead.",
   "type": "module",
   "license": "MIT",

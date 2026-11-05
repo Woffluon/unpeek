@@ -1,12 +1,13 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
 
-function createOpaqueGuardStatement(seed: number, fnIndex: number): any {
-  // Deterministic polymorphic constants where (((A ^ B) & 7) | !String) === wrongVal
-  // `!String` is 0 at runtime (V8 Constant-Folded by TurboFan) while defeating AST literal constant-folders
-  const a = ((seed >>> 0) + Math.imul(fnIndex + 1, 0x45d9f3b)) & 0xffff;
-  const b = (a ^ 0x1357) & 0xffff;
-  const wrongVal = ((a ^ b) & 7) ^ 5; // Guaranteed never equal to ((a ^ b) & 7)
+export function createSotaMbaPredicate(seed: number, fnIndex = 0): any {
+  // 32-bit non-linear Mixed Boolean-Arithmetic (MBA) opaque invariant:
+  // ∀ x, y ∈ ℤ₃₂: ((x | y) + (x & y)) ≡ (x + y)
+  // Therefore: ((((x | y) + (x & y)) ^ (x + y)) | !String) ≡ 0
+  // Comparing with 0x7fffffff (2147483647) is guaranteed false while frustrating static SMT solvers
+  const x = ((seed >>> 0) + Math.imul(fnIndex + 1, 0x45d9f3b)) | 0;
+  const y = (x ^ 0x5a5a5a5a) | 0;
 
   return {
     type: 'IfStatement',
@@ -15,39 +16,61 @@ function createOpaqueGuardStatement(seed: number, fnIndex: number): any {
       operator: '===',
       left: {
         type: 'BinaryExpression',
-        operator: '&',
+        operator: '|',
         left: {
           type: 'BinaryExpression',
           operator: '^',
-          left: { type: 'Literal', value: a, raw: String(a) },
-          right: {
+          left: {
             type: 'BinaryExpression',
-            operator: '|',
-            left: { type: 'Literal', value: b, raw: String(b) },
+            operator: '+',
+            left: {
+              type: 'BinaryExpression',
+              operator: '|',
+              left: { type: 'Literal', value: x, raw: String(x) },
+              right: { type: 'Literal', value: y, raw: String(y) },
+            },
             right: {
-              type: 'UnaryExpression',
-              operator: '!',
-              prefix: true,
-              argument: { type: 'Identifier', name: 'String' },
+              type: 'BinaryExpression',
+              operator: '&',
+              left: { type: 'Literal', value: x, raw: String(x) },
+              right: { type: 'Literal', value: y, raw: String(y) },
             },
           },
+          right: {
+            type: 'BinaryExpression',
+            operator: '+',
+            left: { type: 'Literal', value: x, raw: String(x) },
+            right: { type: 'Literal', value: y, raw: String(y) },
+          },
         },
-        right: { type: 'Literal', value: 7, raw: '7' },
+        right: {
+          type: 'UnaryExpression',
+          operator: '!',
+          prefix: true,
+          argument: { type: 'Identifier', name: 'String' },
+        },
       },
-      right: { type: 'Literal', value: wrongVal, raw: String(wrongVal) },
+      right: { type: 'Literal', value: 0x7fffffff, raw: '0x7fffffff' },
     },
     consequent: {
-      type: 'ExpressionStatement',
-      expression: {
-        type: 'UnaryExpression',
-        operator: 'void',
-        prefix: true,
-        argument: { type: 'Literal', value: 0, raw: '0' },
-      },
+      type: 'BlockStatement',
+      body: [
+        {
+          type: 'ExpressionStatement',
+          expression: {
+            type: 'UnaryExpression',
+            operator: 'void',
+            prefix: true,
+            argument: { type: 'Literal', value: 0, raw: '0' },
+          },
+        },
+      ],
     },
     alternate: null,
   };
 }
+
+export const createOpaqueGuardStatement = createSotaMbaPredicate;
 
 export function applyColdFlowGuard(
   ast: acorn.Program,
@@ -61,7 +84,7 @@ export function applyColdFlowGuard(
     if (!node.body || node.body.type !== 'BlockStatement') return;
 
     guardedCount++;
-    const guardStmt = createOpaqueGuardStatement(seed, guardedCount);
+    const guardStmt = createSotaMbaPredicate(seed, 0);
 
     // Insert after any leading 'use strict' directive inside the function body
     let insertIdx = 0;

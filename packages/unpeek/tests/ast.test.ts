@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import * as acorn from 'acorn';
+import * as walk from 'acorn-walk';
+import { createSotaMbaPredicate } from '../src/ast/cold-flow-guard.js';
 import {
   transformJavaScript,
   detectHotPaths,
@@ -518,6 +521,98 @@ describe('AST & Call-Graph Transformation Engine', () => {
           payload: 'HELLO_3D_TEXT',
         })
       ).toBe('FONT_PARSER_READY:RTL_CHAR_TABLE_DATA:HELLO_3D_TEXT');
+    });
+  });
+
+  describe('Non-Linear MBA Opaque Invariants (JIT-friendly algebraic invariants)', () => {
+    it('generates algebraically sound 32-bit MBA predicates evaluating to 0 and comparing to 0x7fffffff', () => {
+      for (const seed of [0, 42, 0x9e3779b9, 0xdeadbeef, 0x12345678]) {
+        for (let fnIndex = 0; fnIndex < 10; fnIndex++) {
+          const guard = createSotaMbaPredicate(seed, fnIndex);
+          expect(guard.type).toBe('IfStatement');
+          expect(guard.test.type).toBe('BinaryExpression');
+          expect(guard.test.operator).toBe('===');
+          expect(guard.test.right.type).toBe('Literal');
+          expect(guard.test.right.value).toBe(2147483647);
+          expect(guard.test.right.value).toBe(0x7fffffff);
+
+          let foundString = false;
+          walk.simple(guard.test, {
+            Identifier(idNode: any) {
+              if (idNode.name === 'String') foundString = true;
+            },
+          });
+          expect(foundString).toBe(true);
+
+          const x = ((seed >>> 0) + Math.imul(fnIndex + 1, 0x45d9f3b)) | 0;
+          const y = (x ^ 0x5a5a5a5a) | 0;
+          const mbaResult =
+            (((x | y) + (x & y)) ^ (x + y)) | (!String as any ? 1 : 0);
+          expect(mbaResult).toBe(0);
+          expect(mbaResult === 2147483647).toBe(false);
+        }
+      }
+    });
+
+    it('injects MBA opaque guard into cold functions, preserves exact runtime semantics, and never executes guard branch', () => {
+      const source = `
+        "use strict";
+        function verifyToken(token, expected) {
+          "use strict";
+          return token === expected ? "TOKEN_VALID" : "TOKEN_INVALID";
+        }
+        function hotCompute(arr) {
+          let sum = 0;
+          for (let i = 0; i < arr.length; i++) {
+            sum += arr[i];
+          }
+          return sum;
+        }
+        return verifyToken("SECRET_JWT", "SECRET_JWT") + ":" + hotCompute([10, 20, 30]);
+      `;
+
+      const res = transformJavaScript(source, { seed: 0x9e3779b9 });
+      expect(res.hotPathReport.coldFunctionsProtected).toContain('verifyToken');
+      expect(res.hotPathReport.hotFunctionsSkipped).toContain('hotCompute');
+
+      const ast = acorn.parse(res.code, { ecmaVersion: 'latest', allowReturnOutsideFunction: true });
+      let coldGuardFound = false;
+      let stringIdentifierFound = false;
+      let maxSmiComparisonFound = false;
+
+      walk.simple(ast, {
+        IfStatement(node: any) {
+          if (
+            node.test?.type === 'BinaryExpression' &&
+            node.test.operator === '===' &&
+            node.test.right?.type === 'Literal' &&
+            node.test.right.value === 2147483647
+          ) {
+            coldGuardFound = true;
+            maxSmiComparisonFound = true;
+            walk.simple(node.test, {
+              Identifier(id: any) {
+                if (id.name === 'String') stringIdentifierFound = true;
+              },
+            });
+          }
+        },
+      });
+
+      expect(coldGuardFound).toBe(true);
+      expect(stringIdentifierFound).toBe(true);
+      expect(maxSmiComparisonFound).toBe(true);
+
+      const fn = new Function(res.code);
+      expect(fn()).toBe('TOKEN_VALID:60');
+
+      const instrumentedCode = res.code.replace(
+        /\{void 0;\}/g,
+        '{throw new Error("GUARD_BRANCH_EXECUTED");}'
+      );
+      const instrumentedFn = new Function(instrumentedCode);
+      expect(() => instrumentedFn()).not.toThrow();
+      expect(instrumentedFn()).toBe('TOKEN_VALID:60');
     });
   });
 });
