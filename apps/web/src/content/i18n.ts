@@ -195,7 +195,7 @@ export function validateLicense(_0x4a1) {
 export const DICTIONARY: Record<Locale, Dictionary> = {
   en: {
     meta: {
-      version: "v1.7.2",
+      version: "v1.8.0",
       license: "MIT License",
     },
     nav: {
@@ -817,7 +817,7 @@ unpeek protect --no-shield`,
   },
   tr: {
     meta: {
-      version: "v1.7.2",
+      version: "v1.8.0",
       license: "MIT Lisansı",
     },
     nav: {

@@ -125,15 +125,18 @@ function collectPatternTargets(
 
 function isMangleableName(origName: string): boolean {
   return (
+    origName.length > 2 &&
     !RESERVED_IDENTIFIERS.has(origName) &&
     !origName.startsWith('_u') &&
-    !origName.startsWith('_0x')
+    !origName.startsWith('_0x') &&
+    !origName.startsWith('$$')
   );
 }
 
 export function applyPolymorphicMangler(
   ast: acorn.Program,
-  seed = 0x9e3779b9
+  seed = 0x9e3779b9,
+  serializedFunctionNodes?: WeakSet<acorn.Node>
 ): number {
   const scopeRecords = new Map<acorn.Node, ScopeRecord>();
   const existingIdentifiers = new Set<string>();
@@ -189,12 +192,18 @@ export function applyPolymorphicMangler(
   function registerBindingTarget(
     scopeNode: acorn.Node,
     target: PatternTarget,
-    shouldMangle: boolean
+    shouldMangle: boolean,
+    fnScope?: acorn.Node | null
   ): void {
     const scope = scopeRecords.get(scopeNode);
     if (!scope) return;
     const origName: string = target.idNode.name;
-    const canMangle = shouldMangle && isMangleableName(origName);
+    let canMangle = shouldMangle && isMangleableName(origName);
+    if (canMangle && fnScope) {
+      if (serializedFunctionNodes && serializedFunctionNodes.has(fnScope)) {
+        canMangle = false;
+      }
+    }
     let entry = scope.bindings.get(origName);
     if (!entry) {
       entry = {
@@ -235,7 +244,7 @@ export function applyPolymorphicMangler(
       const targets: PatternTarget[] = [];
       collectPatternTargets(param, targets);
       for (const target of targets) {
-        registerBindingTarget(fnNode, target, true);
+        registerBindingTarget(fnNode, target, true, fnNode);
       }
     }
   }
@@ -307,10 +316,11 @@ export function applyPolymorphicMangler(
     CatchClause(node: any, _state, ancestors) {
       ensureScopeChain(ancestors);
       if (node.param) {
+        const fnScope = findEnclosingFunctionNode(ancestors);
         const targets: PatternTarget[] = [];
         collectPatternTargets(node.param, targets);
         for (const target of targets) {
-          registerBindingTarget(node, target, true);
+          registerBindingTarget(node, target, true, fnScope);
         }
       }
     },
@@ -349,7 +359,7 @@ export function applyPolymorphicMangler(
               }
             }
           }
-          registerBindingTarget(targetScopeNode, target, true);
+          registerBindingTarget(targetScopeNode, target, true, fnScope);
         }
       }
     },
@@ -370,6 +380,8 @@ export function applyPolymorphicMangler(
     return false;
   }
 
+  const ALPHABET = 'abcdefghijklmnopqrstuvwxyz';
+
   function makeScopedMangledName(
     scope: ScopeRecord,
     localIndex: number
@@ -378,7 +390,10 @@ export function applyPolymorphicMangler(
     let salt = 0;
     while (true) {
       const h = computeFnv1aHash(`s${scope.depth}:i${localIndex}:${salt}`, seed);
-      const candidate = `_0x${((h & 0x1f) + localIndex + salt).toString(36)}`;
+      const prefix = (h & 1) === 0 ? '_' : '$';
+      const ch = ALPHABET[((h >>> 1) + localIndex) % ALPHABET.length];
+      const num = (localIndex + salt).toString(36);
+      const candidate = `${prefix}${ch}${num}`;
       if (!isNameUsedInScopeOrAncestors(candidate, scope)) {
         return candidate;
       }

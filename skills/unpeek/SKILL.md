@@ -27,9 +27,9 @@ Zero-config, call-graph-aware client-side JavaScript protection and source map i
 
 Direct user requests to the appropriate modular guide:
 
-- **CLI & Zero-Config Setup**: Consult [Quickstart Guide](references/quickstart.md) for command syntax, postbuild hook creation, and CLI flags (`--out-dir`, `--seed`, `--passive`, `--min-string-length`, `--private-maps-dir`, `--no-shield`).
+- **CLI & Zero-Config Setup**: Consult [Quickstart Guide](references/quickstart.md) for command syntax, postbuild hook creation, and CLI flags (`--out-dir`, `--seed`, `--passive`, `--min-string-length`, `--private-maps-dir`, `--no-shield`, `--aggressive`).
 - **Framework Integrations**: Consult [Frameworks Guide](references/frameworks.md) for Next.js (SSR vs. CSR boundary, static export `out/`), Vite, Webpack, Rollup, and subpath imports (`unpeek/vite`, `unpeek/webpack`, `unpeek/unplugin`).
-- **Core Architecture & Performance**: Consult [Architecture Guide](references/architecture.md) for AST traversal, scope-aware call-graph hot-path exemption (loops, rAF, render functions), O(1) kConst string vault, cold flow guards, and anti-tamper runtime shields.
+- **Core Architecture & Performance**: Consult [Architecture Guide](references/architecture.md) for two-tier defense (Tier 1 zero-config vs Tier 2 --aggressive), AST traversal, 3-tier hot-path exemption (loops, rAF, useFrame, components), In-Place Re-Encrypting Shader Vault (WebGPU/GLSL), Bytecode Micro-VM, Inline WASM KDF, O(1) string vault, cold flow guards, and anti-tamper runtime shields.
 - **Source Map Vaulting & Security**: Consult [Source Maps Guide](references/sourcemaps.md) for `.unpeek-maps/` relocation, `sourceMappingURL` stripping, Sentry/Datadog CI upload workflows, and `.dockerignore` rules.
-- **Programmatic API**: Consult [API Reference](references/api.md) for `protectProject()`, `transformJavaScript()`, `initProject()`, and TypeScript type definitions (`ProtectOptions`, `TransformOptions`, `ProtectSummary`).
+- **Programmatic API**: Consult [API Reference](references/api.md) for `protectProject()`, `transformJavaScript()`, `initProject()`, and TypeScript type definitions (`ProtectOptions`, `TransformOptions`, `ProtectSummary`, including `aggressive`).
 - **Operational Recipes & Troubleshooting**: Consult [Recipes Guide](references/recipes.md) for Next.js SSR hydration error solutions, Sentry/Datadog telemetry hooks, and deterministic CI seed generation.

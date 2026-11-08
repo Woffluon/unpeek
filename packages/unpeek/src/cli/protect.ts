@@ -7,6 +7,24 @@ import { relocateSourceMaps, SOURCE_MAP_COMMENT_REGEX } from '../bundler/sourcem
 import { computeFnv1aHash, transformJavaScript } from '../ast/index.js';
 import { generateRuntimeShield } from '../runtime/index.js';
 
+const ENTRY_PATTERN = /^(?:main|index|turbopack|webpack|runtime|app\/layout|app\/page|pages\/_app|pages\/index)[-._/]/i;
+
+function isEntryChunk(relPath: string, index: number, allRelPaths: string[]): boolean {
+  const norm = relPath.replace(/\\/g, '/');
+  const base = path.basename(norm);
+  if (ENTRY_PATTERN.test(norm) || ENTRY_PATTERN.test(base)) {
+    return true;
+  }
+  const hasAnyPatternMatch = allRelPaths.some((p) => {
+    const n = p.replace(/\\/g, '/');
+    return ENTRY_PATTERN.test(n) || ENTRY_PATTERN.test(path.basename(n));
+  });
+  if (!hasAnyPatternMatch && index === 0) {
+    return true;
+  }
+  return false;
+}
+
 export async function protectProject(options: ProtectOptions = {}): Promise<ProtectSummary> {
   const startTime = performance.now();
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -21,9 +39,11 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
   const deterrentMode = options.deterrentMode ?? 'passive';
   const injectRuntimeShield = options.injectRuntimeShield ?? true;
   const minStringLength = options.minStringLength ?? 4;
+  const aggressive = options.aggressive ?? false;
 
   const vaultResult = relocateSourceMaps(outDir, cwd, keepPrivateMaps, privateMapsDir, false);
   const clientFiles = scanClientBundles(outDir);
+  const allRelPaths = clientFiles.map((f) => path.relative(outDir, f).replace(/\\/g, '/'));
 
   let originalBytes = 0;
   let protectedBytes = 0;
@@ -51,18 +71,21 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
       originalBytes += origBuf.byteLength;
       allOrigBufs.push(origBuf);
 
-      const relPath = path.relative(outDir, filePath).replace(/\\/g, '/');
+      const relPath = allRelPaths[i];
+      const isEntry = isEntryChunk(relPath, i, allRelPaths);
+      const shouldInjectShield = injectRuntimeShield && isEntry;
       const fileSeed = computeFnv1aHash(`${relPath}:${i}`, seed);
       const result = transformJavaScript(codeToTransform, {
         seed: fileSeed,
         minStringLength,
         filename: path.basename(filePath),
-        injectRuntimeShield,
+        injectRuntimeShield: shouldInjectShield,
         deterrentMode,
+        aggressive,
       });
 
       let finalCode = result.code;
-      if (injectRuntimeShield) {
+      if (shouldInjectShield && !finalCode.includes('__unpeek_tampered')) {
         const shield = generateRuntimeShield({
           seed: fileSeed,
           deterrentMode,
@@ -70,7 +93,6 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
         });
         if (
           shield.preambleCode &&
-          !finalCode.includes('(function _u$') &&
           !finalCode.includes(shield.integrityCheckFnName) &&
           !finalCode.startsWith(shield.preambleCode)
         ) {

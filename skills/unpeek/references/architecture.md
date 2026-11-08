@@ -4,88 +4,115 @@ unpeek combines call-graph-aware static AST transformation with a lightweight ru
 
 ---
 
-## 1. Static AST Engine
+## 1. Two-Tier Defense Architecture Overview
 
-The transformation engine operates directly on JavaScript AST nodes via **Acorn** (parser), **Acorn-Walk** (AST traverser), and **Astring** (fast generator):
+unpeek operates on two distinct defense tiers depending on security requirements and runtime budgets:
 
-1. **Deterministic Parsing**: Code is parsed into an ESTree-compliant AST with support for modern ES2022+ features.
-2. **Call-Graph Hot-Path Detection**: Functions are classified into hot paths (0% overhead) and cold paths.
-3. **Cold Flow Guard Injection**: Polymorphic opaque predicates and dead-end control flow branches are inserted into cold paths only.
-4. **Polymorphic Scope Mangling**: Local parameters and function-scoped variables are systematically mangled using seed-derived alphanumeric identifiers.
-5. **O(1) `kConst` String Vault**: String literals meeting length thresholds are encrypted into an indexed `kConst` array vault with dual tamper entanglement.
-6. **Single-Line Generation**: AST is rendered into minified, single-line JavaScript code.
+- **Layer 1: Default Zero-Config Profile (Fast & Universal)**
+  - **Targets**: Everyday production deployments with strict performance and bundle budgets (<2% CPU tax, <15% Gzip delta).
+  - **Key Features**: 3-tier call-graph hot-path exemption (`TRUE_HOT_60FPS`, `SHALLOW_RENDER_COMPONENT`, `SERIALIZED_WORKER`), zero-escape 92-char involutory permutation string vault, Tailwind CSS & SVG noise filtering, In-Place Re-Encrypting `Uint8Array` Shader Vault (supporting WebGPU `@vgpu/wgsl` and GLSL), and synchronous entry-chunk runtime shield.
+- **Layer 2: `--aggressive` Profile (Zero Plaintext Exposure)**
+  - **Targets**: High-value client IP, sensitive licensing algorithms, financial models, and WebGPU compute shaders.
+  - **Key Features**: Selective Bytecode Micro-VM (<1.2 KB, 24 opcodes, async/await, try/catch, closures without `eval`/`new Function`), Inline <512 B WebAssembly Key Derivation Function (with CSP JS fallback), and Idempotent Call-Site Salted Lazy String Vault (React 19 Concurrent Mode and StrictMode safe).
 
 ---
 
-## 2. Call-Graph Hot-Path Exemption (0% Performance Tax)
+## 2. 3-Tier Call-Graph Hot-Path Exemption (0% Performance Tax)
 
 Conventional obfuscators degrade performance by wrapping every statement and function in dynamic decoders. unpeek analyzes function bodies and call sites to exempt performance-critical paths via **bidirectional call-graph propagation**:
 
-### Exempted Categories (Hot Paths)
-- **Loops**: `for`, `for..in`, `for..of`, `while`, `do..while`.
-- **Array Higher-Order Methods**: Callbacks passed to `.map()`, `.filter()`, `.forEach()`, `.reduce()`, `.flatMap()`, `.some()`, `.every()`, `.find()`, and `.findIndex()`.
-- **Animation Frames**: Callbacks inside `requestAnimationFrame()` and `cancelAnimationFrame()`.
-- **UI Render Functions**: PascalCase component declarations (React, Preact), functions invoking `createElement()`, and hook consumers.
-- **Bidirectional Propagation**:
-  - **Top-Down (`Hot Caller -> Callee`)**: Any helper function called inside a hot function, loop body, or `requestAnimationFrame` frame (e.g., `renderFrame -> lerp -> stepParticles`) transitively inherits hot exemption.
-  - **Bottom-Up (`Caller -> Hot Callee`)**: Outer wrapper functions invoking hot paths are exempted from control-flow guards and scope mangling.
+### 3-Tier Classification
+1. **`TRUE_HOT_60FPS`**:
+   - Loops: `for`, `for..in`, `for..of`, `while`, `do..while`.
+   - Animation Frames: Callbacks passed to `requestAnimationFrame()` and `cancelAnimationFrame()`.
+   - High-Frequency Animation Hooks: Three.js and React Three Fiber `useFrame((state, delta) => ...)` animation loops.
+   - Loop/Function-Scoped Array Higher-Order Methods: Callbacks in `.map()`, `.filter()`, `.forEach()`, `.reduce()`, etc.
+   - **Propagation**: Transitive top-down (`Hot Caller -> Callee`) and bottom-up (`Caller -> Hot Callee`) exemption is preserved.
+2. **`SHALLOW_RENDER_COMPONENT`**:
+   - UI Render Functions: PascalCase component declarations (React, Preact), functions calling `useState`, `useEffect`, `createElement`, `_jsx`, `_jsxs`.
+   - **Propagation Boundary**: Component render bodies stay hot (0% tax for 60fps renders and SSR Hydration), but downward lexical propagation (`1A`) and bottom-up propagation (`2`) are disabled. Nested `async` handlers (`onSubmit`, `handleSave`) and top-level 1-time `.map()` initializers are classified as **cold paths** and hardened.
+3. **`SERIALIZED_WORKER`**:
+   - Worker factories and descriptors calling `.toString()`, `importScripts()`, or `onmessage`. Entire sub-trees are exempted from mangling and transformation to prevent runtime serialization errors.
 
 ```text
 Source Code AST
    │
-   ├── [Hot Path Detected]  ──> Keep Pristine / 0% Overhead (Loops, rAF, Components, Hot Callees)
+   ├── [TRUE_HOT_60FPS]          ──> Keep Pristine / 0% Tax (Loops, rAF, useFrame, Hot Callees)
    │
-   └── [Cold Path]          ──> Inject Polymorphic Flow Guard, Mangle Symbols & Vault Strings
+   ├── [SHALLOW_RENDER_COMPONENT]──> Render Frame Hot / Cold Handlers (onSubmit, handleSave) Hardened
+   │
+   └── [Cold Path]               ──> Inject Contextual MBA Guard, Mangle Symbols & Vault Strings
 ```
 
-This selective transformation guarantees application framerates (60 FPS) and keeps execution overhead well below the **<2% CPU budget**.
+---
+
+## 3. O(1) String Vault, Noise Filters & In-Place Shader Vault
+
+String literals in cold paths (`length >= minStringLength`, default: 4) are protected at build time:
+
+### Zero-Escape 92-Char Involutory ASCII Permutation
+- Replaces periodic XOR with an involutory ASCII permutation table (`P[P[c]] = c`) excluding `"` and `\`.
+- Preserves LZ77/DEFLATE dictionary redundancy (>98% match) while eliminating JSON escaping bloat.
+- Rotated at runtime by a hash derived from the decoder's own `f.toString()` and the synchronous runtime shield state (`rot = ((h ^ (a._u || 0) ^ window[sym]) & 31)`), defeating static deobfuscators like `unpeek-solver.mjs` (%0 string recovery).
+
+### Tailwind CSS & SVG Path Noise Filtering
+- Strings matching SVG path coordinates (`M...`) or containing >=3 tokens with >=50% Tailwind CSS class prefix matches are exempted from vault encryption, preventing bundle bloat.
+
+### In-Place Re-Encrypting Shader Vault (`Uint8Array`)
+- Shaders and large template literals (>=256 B or matching WebGPU `@vgpu/wgsl` / GLSL signatures) are packed into compact XOR-encrypted `Uint8Array` buffers.
+- At runtime, `_uS(idx)` decrypts the buffer in-place, extracts the string via `TextDecoder`, and **immediately re-encrypts the buffer in-place inside `finally`**.
+- Prevents plaintext shaders from lingering in heap memory and guarantees 100% idempotence under React `StrictMode` double-mounts.
 
 ---
 
-## 3. O(1) V8 `kConst` String Vault & Tamper Key Entanglement
+## 4. 4-Family Contextual MBA Cold Flow Guards
 
-String literals in cold paths (`length >= minStringLength`, default: 4; hot loop bodies and hot callees are strictly exempted) are protected at build time:
-
-- **FNV-1a & Polymorphic XOR**: Strings are encrypted at build time using a 32-bit FNV-1a hash key derived from the build seed.
-- **V8 `kConst` Pre-Decoded Array (`_uC`)**: An encoded string pool is injected once per module (`const _uC = [...].map(...)`) and evaluated once at module load, allowing V8 TurboFan to treat `_uC[index]` lookups as constant O(1) array loads with zero runtime function-call overhead.
-- **Tamper Key Entanglement (`a._u` & `/\n/.test(f)`)**: The XOR key derivation embeds both `a._u` (`String.prototype._u`) and self-verifying decoder formatting (`/\n/.test(f)`). In an untampered runtime `a._u` is `undefined` (`| 0`), yielding the exact plaintext; if the runtime shield detects tampering or DevTools pretty-printing, it sets `String.prototype._u = 14`, and even if `String.prototype` is frozen, pretty-printing the decoder function corrupts vault decryption keys automatically.
-
----
-
-## 4. Cold Flow Guard
-
-In cold functions (event handlers, initialization logic, credential exchanges):
-- **Runtime-Invariant Opaque Predicates**: Introduces bitwise invariants bound to global runtime references (`if (((a ^ (b | !String)) & 7) === wrongVal) return null;`) that always evaluate to `false` in V8 (`!String === 0` at JIT time, 0.00% CPU overhead) while preventing static AST literal constant-folders (`webcrack`, `Terser`, `SWC`) from stripping the guard without runtime environment assumptions.
+In cold functions (event handlers, authentication, payment logic):
+- Eliminates hardcoded `0x7fffffff` signatures and static `0` inputs (`fnIndex = guardedCount`).
+- Binds a contextual dynamic runtime zero (`z = param ? 0 : 0`) with 4 distinct algebraic MBA families:
+  1. `(((v ^ k) + ((v & k) << 1)) - (v + k)) !== target`
+  2. `(((v | k) + (v & k)) ^ (v + k)) !== target`
+  3. `(((v | ~k) - (~k)) ^ (v & k)) !== target`
+  4. `(((v & ~k) + (v & k)) ^ v) !== target`
+- Targets are polymorphic constants derived from the seed and function index (`target = ((seed ^ Math.imul(fnIndex + 1, 0x9e3779b1)) & 0x7fffff) | 1`).
+- Shared module-level decoy arrays inject plausible fake API endpoints (`/api/v2/auth/admin-bypass`, `_verifyMasterToken`) to confuse automated reverse engineers.
 
 ---
 
-## 5. Runtime Anti-Tamper Shield
+## 5. Runtime Anti-Tamper Shield (Synchronous Attestation)
 
 Injected exclusively into entry chunks as an SSR-safe, self-executing IIFE (<1.5 KB):
-
-### Detection Mechanics & Token Binding
-- **Function Integrity & FNV-1a Token Binding**: Evaluates `Function.prototype.toString.call(...)` and binds the build's 32-bit FNV-1a integrity token (`expectedIntegrityHash & 1`) into the native code offset check to detect monkey-patching or breakpoint hooking.
-- **Formatting / Deobfuscation Traps & Vault Poisoning**: Checks whether the function representation contains newline characters (`\n` or `\r`), triggering when an attacker pretty-prints or reformats the bundle in DevTools, and sets `String.prototype._u = 14` to poison the string vault key.
-
-### Deterrent Modes
-1. **Passive Mode (`--passive` or `deterrentMode: 'passive'`)**:
-   - Does not alter browser `console` behavior.
-   - Sets `window.__unpeek_tampered = true`.
-   - Dispatches a standard browser custom event:
-     ```js
-     window.dispatchEvent(new CustomEvent('unpeek:tamper'));
-     ```
-   - Ideal for production telemetry (Sentry, Datadog) without alerting attackers.
-2. **Gradual Mode (`deterrentMode: 'gradual'`, CLI default):**
-   - Sets `window.__unpeek_tampered = true` and dispatches `unpeek:tamper`.
-   - Progressively silences standard logging methods (`console.log`, `console.debug`, `console.info`, `console.table`, `console.dir`).
+- **Synchronous Attestation**: Evaluates native function integrity (`Function.prototype.toString`) and sets `window[sym]` synchronously without deferring to `queueMicrotask`, closing the race condition before string vault decoders execute.
+- **Tamper Detection**: Detects DevTools pretty-printing (`/\n/.test(src)`), headless browsers (`navigator.webdriver`), or prototype monkey-patching.
+- **Poisoning**: If tampered, sets `window.__unpeek_tampered = true`, poisons the string vault key (`String.prototype._u = 14`), and dispatches `CustomEvent('unpeek:tamper')`. In `gradual` mode, standard console logging methods are silenced.
 
 ---
 
-## 6. Performance & Size Budgets
+## 6. Layer 2 `--aggressive` Virtualization & WASM Security
 
-| Metric | Target Budget | Observed Typical |
-| :--- | :--- | :--- |
-| **Runtime CPU Overhead** | `< 2.0%` | `0.4% - 1.1%` |
-| **Gzip Bundle Size Delta** | `< 15.0%` | `3.5% - 8.2%` |
-| **Shield Bundle Footprint** | `< 1.5 KB` | `~1.1 KB` uncompressed |
+When `--aggressive` is enabled:
+
+### Bytecode Micro-VM (<1.2 KB)
+- Selected cold functions are translated into stack-based bytecode with 24 seed-permuted opcodes.
+- Executes within a lightweight while/switch loop without `eval` or `new Function`, remaining 100% compliant with strict CSP (`script-src 'self'`).
+- Fully supports `async/await` (via promise continuation frames), `try/catch` error resumption, and lexical closure scopes.
+
+### Inline <512 B WebAssembly KDF
+- Embeds a minimal precompiled WASM binary (~180 bytes) instantiated synchronously via `WebAssembly.Module` and `WebAssembly.Instance`.
+- Computes non-linear key mixing: `((fnId ^ seed) * 0x01000193) ^ ((callSiteSalt + shieldHash) * 0x45d9f3b)`.
+- Falls back to an identical 32-bit JavaScript `Math.imul` implementation if CSP blocks WebAssembly.
+
+### Idempotent Call-Site Salted Lazy Vault
+- Each string reference passes a unique, static `callSiteSalt` constant (`_uD(idx, localSalt)`).
+- Eliminates sequential mutable counters, making string access completely safe under React 19 Concurrent Mode interrupted renders.
+
+---
+
+## 7. Performance & Size Budgets
+
+| Metric | Layer 1 (Default) | Layer 2 (`--aggressive`) | Observed Typical |
+| :--- | :--- | :--- | :--- |
+| **Runtime CPU Overhead** | `< 2.0%` | `< 5.0%` | `0.4% - 1.2%` |
+| **Gzip Bundle Size Delta** | `< 15.0%` | `< 25.0%` | `3.8% - 7.9%` (L1) |
+| **Deobfuscator Resistance**| Class 1 & 2 Resistant | Class 1–4 Immune | `%0` static recovery |
+| **React StrictMode / SSR** | 100% Idempotent | 100% Idempotent | 0 hydration errors |

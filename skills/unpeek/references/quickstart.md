@@ -52,6 +52,7 @@ If `postbuild` is set up, `npm run build` triggers `unpeek protect` automaticall
 | `--private-maps-dir <dir>` | `string` | `.unpeek-maps` | Target directory for extracted production source maps. |
 | `--min-string-length <num>` | `number` | `4` | Minimum string literal character length for O(1) string vault encryption. |
 | `--no-shield` | `boolean` | `false` | Skips injecting the runtime anti-tamper deterrent shield into entry chunks. |
+| `--aggressive` | `boolean` | `false` | Enables Layer 2 aggressive defense: Bytecode Micro-VM (<1.2 KB), inline WASM KDF, and call-site salted vault. |
 | `-v, --version` | `boolean` | — | Prints installed unpeek version. |
 | `-h, --help` | `boolean` | — | Displays command-line help. |
 

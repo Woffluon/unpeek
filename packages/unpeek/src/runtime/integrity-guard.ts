@@ -22,7 +22,7 @@ export function computeIntegrityHash(source: string, seed = 0): number {
 export function verifyCodeIntegrity(
   fnOrSource: ((...args: any[]) => any) | string,
   expectedHash: number,
-  seed = 0,
+  seed = 0
 ): boolean {
   const raw =
     typeof fnOrSource === 'function'

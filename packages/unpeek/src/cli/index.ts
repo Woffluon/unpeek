@@ -3,7 +3,7 @@ import type { DeterrentMode, ProtectOptions, ProtectSummary } from '../types.js'
 import { initProject } from './init.js';
 import { protectProject } from './protect.js';
 
-const VERSION = '1.7.2';
+const VERSION = '1.8.0';
 
 function getPackageVersion(): string {
   try {
@@ -67,6 +67,7 @@ function printHelp(): void {
     '    --min-string-length <num>      minimum string length for the vault (default: 4)',
     '    --private-maps-dir <dir>       vault directory (default: .unpeek-maps)',
     '    --no-shield                    skip the runtime anti-tamper shield',
+    '    --aggressive                   enable Layer 2 aggressive protection (Micro-VM & WASM KDF)',
     '    -h, --help                     show help',
     '    -v, --version                  show version',
   ].join('\n');
@@ -218,6 +219,8 @@ export async function runCli(args: string[]): Promise<void> {
         options.privateMapsDir = args[++i];
       } else if (arg.startsWith('--private-maps-dir=')) {
         options.privateMapsDir = arg.slice('--private-maps-dir='.length);
+      } else if (arg === '--aggressive') {
+        options.aggressive = true;
       } else if (arg === '--no-shield') {
         options.injectRuntimeShield = false;
       } else if (arg === '--passive') {
