@@ -19,6 +19,8 @@ export interface ProtectOptions {
   injectRuntimeShield?: boolean;
   /** Minimum string length to encrypt in the O(1) kConst string vault (default: 4) */
   minStringLength?: number;
+  /** Enable Layer 2 aggressive protection (Bytecode Micro-VM, Inline WASM KDF, Call-Site Salted Vault) */
+  aggressive?: boolean;
 }
 
 export interface HotPathReport {
@@ -33,6 +35,8 @@ export interface TransformOptions {
   filename?: string;
   injectRuntimeShield?: boolean;
   deterrentMode?: DeterrentMode;
+  /** Enable Layer 2 aggressive protection */
+  aggressive?: boolean;
 }
 
 export interface TransformResult {
@@ -41,18 +45,24 @@ export interface TransformResult {
   mangledSymbolsCount: number;
   hotPathReport: HotPathReport;
   integrityToken: number;
+  virtualizedFunctionsCount?: number;
+  shaderBuffersCount?: number;
 }
 
 export interface ShieldConfig {
   seed: number;
   deterrentMode?: DeterrentMode;
   expectedIntegrityHash?: number;
+  windowKeySymbol?: string;
+  expectedDelta?: number;
 }
 
 export interface ShieldPayload {
   preambleCode: string;
   integrityCheckFnName: string;
   expectedHash: number;
+  windowKeySymbol?: string;
+  expectedDelta?: number;
 }
 
 export interface SourceMapVaultResult {

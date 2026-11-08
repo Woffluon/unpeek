@@ -1,4 +1,3 @@
-import { generate } from 'astring';
 import type { TransformOptions, TransformResult } from '../types.js';
 import {
   analyzeAstHotPaths,
@@ -8,33 +7,65 @@ import {
 import { applyStringVault, computeFnv1aHash } from './string-vault.js';
 import { applyPolymorphicMangler } from './polymorphic-mangler.js';
 import { applyColdFlowGuard } from './cold-flow-guard.js';
+import { generateCompactJs, derivePolymorphicIdent } from './codegen.js';
+import { applyMicroVm } from './micro-vm.js';
+import { injectWasmVault } from './wasm-vault.js';
+import { applySaltedStringVault } from './salted-vault.js';
 import { generateRuntimeShield } from '../runtime/index.js';
 
-export { detectHotPaths } from './hot-path-detector.js';
-export { computeFnv1aHash } from './string-vault.js';
+export { detectHotPaths, analyzeAstHotPaths } from './hot-path-detector.js';
+export { applyStringVault, computeFnv1aHash } from './string-vault.js';
+export { applyPolymorphicMangler } from './polymorphic-mangler.js';
+export { applyColdFlowGuard } from './cold-flow-guard.js';
+export { generateCompactJs, derivePolymorphicIdent } from './codegen.js';
+export { applyMicroVm } from './micro-vm.js';
+export { injectWasmVault } from './wasm-vault.js';
+export { applySaltedStringVault } from './salted-vault.js';
 
 function isAstAlreadyProtected(ast: any): boolean {
   if (!ast || !Array.isArray(ast.body)) return false;
   return ast.body.some((stmt: any) => {
-    if (
-      stmt.type === 'VariableDeclaration' &&
-      stmt.declarations?.some(
-        (d: any) =>
-          d.id?.type === 'Identifier' &&
-          typeof d.id.name === 'string' &&
-          d.id.name.startsWith('_uC')
-      )
-    ) {
-      return true;
+    if (stmt.type === 'VariableDeclaration' && Array.isArray(stmt.declarations)) {
+      for (const d of stmt.declarations) {
+        const name = d.id?.name;
+        if (typeof name === 'string') {
+          if (
+            name === '_d' ||
+            name.startsWith('_uC') ||
+            name.startsWith('_uD') ||
+            name.startsWith('_uS') ||
+            name.startsWith('_uVm') ||
+            name.startsWith('_wKdf') ||
+            name.startsWith('_m') ||
+            name.startsWith('_w') ||
+            name.startsWith('_k') ||
+            (name.startsWith('_a') &&
+              d.init?.type === 'CallExpression' &&
+              d.init.callee?.type === 'FunctionExpression' &&
+              d.init.callee?.id?.name === 'f')
+          ) {
+            return true;
+          }
+        }
+      }
     }
     if (
       stmt.type === 'ExpressionStatement' &&
-      stmt.expression?.type === 'CallExpression' &&
-      stmt.expression.callee?.type === 'FunctionExpression' &&
-      typeof stmt.expression.callee.id?.name === 'string' &&
-      stmt.expression.callee.id.name.startsWith('_u$')
+      stmt.expression?.type === 'CallExpression'
     ) {
-      return true;
+      const callee = stmt.expression.callee;
+      if (callee?.type === 'FunctionExpression') {
+        const name = callee.id?.name;
+        if (
+          typeof name === 'string' &&
+          (name.startsWith('_u$') ||
+            name.startsWith('_$') ||
+            name.startsWith('_s') ||
+            name.startsWith('$b'))
+        ) {
+          return true;
+        }
+      }
     }
     return false;
   });
@@ -46,6 +77,7 @@ export function transformJavaScript(
 ): TransformResult {
   const seed = options.seed ?? 0x9e3779b9;
   const minStringLength = options.minStringLength ?? 4;
+  const isAggressive = options.aggressive ?? false;
 
   if (!code || !code.trim()) {
     return {
@@ -58,6 +90,8 @@ export function transformJavaScript(
         coldFunctionsProtected: [],
       },
       integrityToken: computeFnv1aHash('', seed),
+      virtualizedFunctionsCount: 0,
+      shaderBuffersCount: 0,
     };
   }
 
@@ -73,6 +107,8 @@ export function transformJavaScript(
         coldFunctionsProtected: [],
       },
       integrityToken: computeFnv1aHash(code, seed),
+      virtualizedFunctionsCount: 0,
+      shaderBuffersCount: 0,
     };
   }
 
@@ -80,25 +116,60 @@ export function transformJavaScript(
   const {
     report: hotPathReport,
     coldFunctionNodes,
+    hotFunctionNodes,
     hotExemptNodes,
+    serializedFunctionNodes,
   } = analyzeAstHotPaths(ast);
+
+  let virtualizedFunctionsCount = 0;
+  if (isAggressive) {
+    const vmRes = applyMicroVm(
+      ast,
+      coldFunctionNodes,
+      serializedFunctionNodes,
+      seed
+    );
+    virtualizedFunctionsCount = vmRes.virtualizedCount;
+  }
 
   // 2. Inject polymorphic opaque guards only on cold functions (<2% runtime CPU budget)
   applyColdFlowGuard(ast, coldFunctionNodes, seed, hotExemptNodes);
 
   // 3. Mangle local parameters & function-scoped variables safely
-  const mangledSymbolsCount = applyPolymorphicMangler(ast, seed);
-
-  // 4. Encrypt eligible string literals into an O(1) const-array vault (exempting hot loops/callees)
-  const { encryptedStringsCount, integrityToken } = applyStringVault(
+  const mangledSymbolsCount = applyPolymorphicMangler(
     ast,
     seed,
-    minStringLength,
-    hotExemptNodes
+    serializedFunctionNodes
   );
 
+  let encryptedStringsCount = 0;
+  let integrityToken = 0;
+  let shaderBuffersCount = 0;
+
+  if (isAggressive) {
+    injectWasmVault(ast, seed);
+    const saltedRes = applySaltedStringVault(
+      ast,
+      seed,
+      minStringLength,
+      hotExemptNodes
+    );
+    encryptedStringsCount = saltedRes.encryptedStringsCount;
+    integrityToken = saltedRes.integrityToken;
+  } else {
+    const vaultRes = applyStringVault(
+      ast,
+      seed,
+      minStringLength,
+      hotExemptNodes
+    );
+    encryptedStringsCount = vaultRes.encryptedStringsCount;
+    integrityToken = vaultRes.integrityToken;
+    shaderBuffersCount = vaultRes.shaderBuffersCount ?? 0;
+  }
+
   // 5. Generate compact single-line JavaScript output
-  const outputCode = generate(ast, { indent: '', lineEnd: '' });
+  const outputCode = generateCompactJs(ast);
 
   let finalCode = outputCode;
   if (options.injectRuntimeShield) {
@@ -118,5 +189,7 @@ export function transformJavaScript(
     mangledSymbolsCount,
     hotPathReport,
     integrityToken,
+    virtualizedFunctionsCount,
+    shaderBuffersCount,
   };
 }

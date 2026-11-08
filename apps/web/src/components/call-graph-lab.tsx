@@ -95,7 +95,7 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
   const [load, setLoad] = useState(2);
   const [selected, setSelected] = useState<NodeId>("renderFrame");
   const [fps, setFps] = useState<number | null>(null);
-  const [visible, setVisible] = useState(true);
+  const [visible, setVisible] = useState(false);
   const reduce = useReducedMotion();
 
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -185,6 +185,16 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
     setFps(null);
     setSelected("renderFrame");
   }, []);
+
+  // Run the demo once on its own so the graph is never an empty frame.
+  // Reset still returns to idle, and the button restarts it manually.
+  const autoStarted = useRef(false);
+
+  useEffect(() => {
+    if (!visible || autoStarted.current) return;
+    autoStarted.current = true;
+    start();
+  }, [visible, start]);
 
   const decision = (() => {
     if (selected === "renderFrame") return dict.lab.decisionHot;

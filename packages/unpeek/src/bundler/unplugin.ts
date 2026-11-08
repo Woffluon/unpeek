@@ -11,6 +11,7 @@ export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options 
   const deterrentMode = options.deterrentMode ?? 'gradual';
   const injectRuntimeShield = options.injectRuntimeShield ?? true;
   const minStringLength = options.minStringLength ?? 4;
+  const aggressive = options.aggressive ?? false;
 
   return {
     name: 'unpeek',
@@ -35,6 +36,7 @@ export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options 
         filename: chunk.fileName,
         injectRuntimeShield: shouldInjectShield,
         deterrentMode,
+        aggressive,
       });
 
       let finalCode = result.code;

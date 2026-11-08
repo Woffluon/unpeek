@@ -351,7 +351,7 @@ export default function HomePage() {
                           }}
                         />
                       </div>
-                      <span className="w-[104px] shrink-0 text-right font-mono text-[11px] leading-4 text-ink sm:w-[150px]">
+                      <span className="w-[104px] shrink-0 text-right font-mono text-[11px] leading-4 text-ink sm:w-[172px]">
                         {row.unpeek}
                       </span>
                     </div>
@@ -363,7 +363,7 @@ export default function HomePage() {
                       <div className="h-2.5 flex-1 bg-paper-3">
                         <div className="h-full w-full bg-ink/30" />
                       </div>
-                      <span className="w-[104px] shrink-0 text-right font-mono text-[11px] leading-4 text-ink-2 sm:w-[150px]">
+                      <span className="w-[104px] shrink-0 text-right font-mono text-[11px] leading-4 text-ink-2 sm:w-[172px]">
                         {row.legacyObfuscator}
                       </span>
                     </div>

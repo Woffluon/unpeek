@@ -22,7 +22,13 @@ const ARRAY_HOF_METHODS = new Set([
   'every',
 ]);
 
-const UI_HOOK_OR_RENDER_CALLS = new Set([
+const ANIMATION_FRAME_CALLS = new Set([
+  'requestAnimationFrame',
+  'cancelAnimationFrame',
+  'useFrame',
+]);
+
+const REACT_HOOK_OR_RENDER_CALLS = new Set([
   'useState',
   'useEffect',
   'useMemo',
@@ -34,8 +40,6 @@ const UI_HOOK_OR_RENDER_CALLS = new Set([
   '_jsx',
   '_jsxs',
   'createElement',
-  'requestAnimationFrame',
-  'cancelAnimationFrame',
 ]);
 
 const FUNCTION_NODE_TYPES = new Set([
@@ -49,6 +53,7 @@ export interface HotPathAnalysis {
   hotFunctionNodes: WeakSet<acorn.Node>;
   coldFunctionNodes: WeakSet<acorn.Node>;
   hotExemptNodes: WeakSet<acorn.Node>;
+  serializedFunctionNodes: WeakSet<acorn.Node>;
 }
 
 export function parseJavaScriptAst(code: string): acorn.Program | null {
@@ -80,8 +85,13 @@ function getFunctionLabel(node: any, ancestors: acorn.Node[]): string {
     if (parent.type === 'VariableDeclarator' && parent.id?.type === 'Identifier') {
       return parent.id.name;
     }
-    if (parent.type === 'Property' && parent.key?.type === 'Identifier') {
-      return parent.key.name;
+    if (parent.type === 'Property') {
+      if (parent.key?.type === 'Identifier') {
+        return parent.key.name;
+      }
+      if (parent.key?.type === 'Literal' && typeof parent.key.value === 'string') {
+        return parent.key.value;
+      }
     }
     if (parent.type === 'MethodDefinition' && parent.key?.type === 'Identifier') {
       return parent.key.name;
@@ -100,6 +110,10 @@ function isPascalCaseComponent(name: string): boolean {
   return /^[A-Z][a-zA-Z0-9]*$/.test(name);
 }
 
+function isEventHandlerName(name: string): boolean {
+  return /^(?:on|handle)[A-Z]/.test(name);
+}
+
 function findEnclosingScopeNode(ancestors: acorn.Node[], selfNode: acorn.Node): acorn.Node {
   for (let i = ancestors.length - 1; i >= 0; i--) {
     const anc = ancestors[i];
@@ -110,12 +124,98 @@ function findEnclosingScopeNode(ancestors: acorn.Node[], selfNode: acorn.Node): 
   return ancestors[0];
 }
 
+function findEnclosingFunction(
+  ancestors: acorn.Node[],
+  selfNode?: acorn.Node
+): acorn.Node | null {
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    if (ancestors[i] !== selfNode && FUNCTION_NODE_TYPES.has(ancestors[i].type)) {
+      return ancestors[i];
+    }
+  }
+  return null;
+}
+
+function findOutermostModuleFunction(ancestors: acorn.Node[]): acorn.Node | null {
+  const fnList: acorn.Node[] = [];
+  for (let i = 0; i < ancestors.length; i++) {
+    if (FUNCTION_NODE_TYPES.has(ancestors[i].type)) {
+      fnList.push(ancestors[i]);
+    }
+  }
+  if (fnList.length === 0) return null;
+  if (fnList.length === 1) return fnList[0];
+  return fnList[1];
+}
+
+function isZeroArgIifeFactoryFunction(node: any): boolean {
+  if (!node || (node.params && node.params.length > 0)) return false;
+  if (!node.body || node.body.type !== 'BlockStatement') return false;
+  const stmts = (node.body.body || []).filter(
+    (s: any) => !(s.type === 'ExpressionStatement' && s.directive)
+  );
+  if (stmts.length !== 1 || stmts[0].type !== 'ReturnStatement') return false;
+  const retArg = stmts[0].argument;
+  if (!retArg || retArg.type !== 'CallExpression') return false;
+  const callee = retArg.callee;
+  return (
+    callee &&
+    (callee.type === 'FunctionExpression' ||
+      callee.type === 'ArrowFunctionExpression') &&
+    callee.body?.type === 'BlockStatement'
+  );
+}
+
+function containsLoopOrAnimation(fnNode: acorn.Node): boolean {
+  let found = false;
+  walk.simple(fnNode, {
+    ForStatement() {
+      found = true;
+    },
+    ForInStatement() {
+      found = true;
+    },
+    ForOfStatement() {
+      found = true;
+    },
+    WhileStatement() {
+      found = true;
+    },
+    DoWhileStatement() {
+      found = true;
+    },
+    CallExpression(callNode: any) {
+      let cName = '';
+      let mProp = '';
+      if (callNode.callee?.type === 'Identifier') {
+        cName = callNode.callee.name;
+      } else if (
+        callNode.callee?.type === 'MemberExpression' &&
+        !callNode.callee.computed &&
+        callNode.callee.property?.type === 'Identifier'
+      ) {
+        mProp = callNode.callee.property.name;
+      }
+      if (ANIMATION_FRAME_CALLS.has(cName) || ANIMATION_FRAME_CALLS.has(mProp)) {
+        found = true;
+      }
+    },
+  });
+  return found;
+}
+
 export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
   const hotFunctionNodes = new WeakSet<acorn.Node>();
   const coldFunctionNodes = new WeakSet<acorn.Node>();
   const hotExemptNodes = new WeakSet<acorn.Node>();
+  const serializedFunctionNodes = new WeakSet<acorn.Node>();
+
+  const serializedWorkerNodes = new Set<acorn.Node>();
+  const trueHotNodes = new Set<acorn.Node>();
+  const shallowComponentNodes = new Set<acorn.Node>();
+  const coldForcedNodes = new Set<acorn.Node>();
   const directHotNodes = new Set<acorn.Node>();
-  const serializedFunctionNodes = new Set<acorn.Node>();
+
   const serializerHelperNodes = new Set<acorn.Node>();
   const allFunctions: { node: acorn.Node; name: string }[] = [];
   const fnByName = new Map<string, acorn.Node>();
@@ -175,54 +275,11 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
   }
 
   function markSerializedFunction(node: acorn.Node): void {
+    serializedWorkerNodes.add(node);
     serializedFunctionNodes.add(node);
     hotFunctionNodes.add(node);
     directHotNodes.add(node);
     hotExemptNodes.add(node);
-  }
-
-  function findEnclosingFunction(
-    ancestors: acorn.Node[],
-    selfNode?: acorn.Node
-  ): acorn.Node | null {
-    for (let i = ancestors.length - 1; i >= 0; i--) {
-      if (ancestors[i] !== selfNode && FUNCTION_NODE_TYPES.has(ancestors[i].type)) {
-        return ancestors[i];
-      }
-    }
-    return null;
-  }
-
-  function findOutermostModuleFunction(ancestors: acorn.Node[]): acorn.Node | null {
-    const fnList: acorn.Node[] = [];
-    for (let i = 0; i < ancestors.length; i++) {
-      if (FUNCTION_NODE_TYPES.has(ancestors[i].type)) {
-        fnList.push(ancestors[i]);
-      }
-    }
-    if (fnList.length === 0) return null;
-    if (fnList.length === 1) return fnList[0];
-    // In bundled chunks (Webpack/Rollup), fnList[0] may be the chunk/module factory wrapper
-    // and fnList[1] is the top-level module function (e.g., DRACOWorker `function s()`).
-    return fnList[1];
-  }
-
-  function isZeroArgIifeFactoryFunction(node: any): boolean {
-    if (!node || (node.params && node.params.length > 0)) return false;
-    if (!node.body || node.body.type !== 'BlockStatement') return false;
-    const stmts = (node.body.body || []).filter(
-      (s: any) => !(s.type === 'ExpressionStatement' && s.directive)
-    );
-    if (stmts.length !== 1 || stmts[0].type !== 'ReturnStatement') return false;
-    const retArg = stmts[0].argument;
-    if (!retArg || retArg.type !== 'CallExpression') return false;
-    const callee = retArg.callee;
-    return (
-      callee &&
-      (callee.type === 'FunctionExpression' ||
-        callee.type === 'ArrowFunctionExpression') &&
-      callee.body?.type === 'BlockStatement'
-    );
   }
 
   function registerFunctionNode(node: any, ancestors: acorn.Node[]): void {
@@ -274,7 +331,6 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
       }
     }
 
-    // Also register object namespace method key (e.g. const mathObj = { step(x) {} } -> "mathObj.step")
     const grandParent = ancestors[ancestors.length - 3] as any;
     const greatGrandParent = ancestors[ancestors.length - 4] as any;
     if (
@@ -301,6 +357,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
     fnScopeChain.set(node, chain);
 
     if (isPascalCaseComponent(name)) {
+      shallowComponentNodes.add(node);
       hotFunctionNodes.add(node);
       directHotNodes.add(node);
     }
@@ -530,16 +587,20 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
         if (outerFn) markSerializedFunction(outerFn);
       }
 
-      // Check if arguments are hot callbacks (.map, .filter, .reduce, .forEach, .flatMap, requestAnimationFrame)
+      // Category: ANIMATION_FRAME_CALLS (requestAnimationFrame, cancelAnimationFrame, useFrame)
+      // Classified as TRUE_HOT_60FPS
       if (
-        ARRAY_HOF_METHODS.has(memberProp) ||
-        calleeName === 'requestAnimationFrame' ||
-        memberProp === 'requestAnimationFrame' ||
-        calleeName === 'cancelAnimationFrame' ||
-        memberProp === 'cancelAnimationFrame'
+        ANIMATION_FRAME_CALLS.has(calleeName) ||
+        ANIMATION_FRAME_CALLS.has(memberProp)
       ) {
+        if (enclosingFn) {
+          trueHotNodes.add(enclosingFn);
+          hotFunctionNodes.add(enclosingFn);
+          directHotNodes.add(enclosingFn);
+        }
         for (const arg of node.arguments || []) {
           if (FUNCTION_NODE_TYPES.has(arg.type)) {
+            trueHotNodes.add(arg);
             hotFunctionNodes.add(arg);
             directHotNodes.add(arg);
             hotExemptNodes.add(arg);
@@ -553,12 +614,70 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
         }
       }
 
-      // Check if enclosing function calls React hooks / createElement / jsx
+      // Category: ARRAY_HOF_METHODS (.map, .filter, .reduce, .forEach, .flatMap, .find, .findIndex, .some, .every)
+      if (ARRAY_HOF_METHODS.has(memberProp)) {
+        if (enclosingFn !== null) {
+          // Inside a function or loop: classified as TRUE_HOT_60FPS
+          for (const arg of node.arguments || []) {
+            if (FUNCTION_NODE_TYPES.has(arg.type)) {
+              trueHotNodes.add(arg);
+              hotFunctionNodes.add(arg);
+              directHotNodes.add(arg);
+              hotExemptNodes.add(arg);
+            } else if (arg?.type === 'Identifier') {
+              allCallSites.push({
+                scopeNode: currentScope,
+                calleeKey: arg.name,
+                args: [arg],
+              });
+            }
+          }
+        } else {
+          // Module top-level (Program scope, enclosingFn === null): 1-time run initializer
+          // e.g. COMMITTEES = CONTENT_COMMITTEES.map(...) -> COLD PATH (coldFunctionNodes)
+          for (const arg of node.arguments || []) {
+            if (FUNCTION_NODE_TYPES.has(arg.type)) {
+              coldForcedNodes.add(arg);
+            }
+          }
+        }
+      }
+
+      // Category: Loop-free useEffect / useLayoutEffect setup callbacks
       if (
-        UI_HOOK_OR_RENDER_CALLS.has(calleeName) ||
-        UI_HOOK_OR_RENDER_CALLS.has(memberProp)
+        calleeName === 'useEffect' ||
+        memberProp === 'useEffect' ||
+        calleeName === 'useLayoutEffect' ||
+        memberProp === 'useLayoutEffect'
+      ) {
+        const effectArg = node.arguments?.[0];
+        if (effectArg && FUNCTION_NODE_TYPES.has(effectArg.type)) {
+          if (!containsLoopOrAnimation(effectArg)) {
+            coldForcedNodes.add(effectArg);
+            // Also check if effect callback returns a loop-free cleanup function
+            if (effectArg.body?.type === 'BlockStatement') {
+              for (const s of effectArg.body.body || []) {
+                if (
+                  s.type === 'ReturnStatement' &&
+                  s.argument &&
+                  FUNCTION_NODE_TYPES.has(s.argument.type) &&
+                  !containsLoopOrAnimation(s.argument)
+                ) {
+                  coldForcedNodes.add(s.argument);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Category: SHALLOW_RENDER_COMPONENT (React hooks / createElement / jsx)
+      if (
+        REACT_HOOK_OR_RENDER_CALLS.has(calleeName) ||
+        REACT_HOOK_OR_RENDER_CALLS.has(memberProp)
       ) {
         if (enclosingFn) {
+          shallowComponentNodes.add(enclosingFn);
           hotFunctionNodes.add(enclosingFn);
           directHotNodes.add(enclosingFn);
         }
@@ -566,23 +685,48 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
     },
     ForStatement(node, _state, ancestors) {
       hotExemptNodes.add(node);
-      markEnclosingFunctionHot(ancestors, hotFunctionNodes, directHotNodes);
+      const enc = findEnclosingFunction(ancestors);
+      if (enc) {
+        trueHotNodes.add(enc);
+        hotFunctionNodes.add(enc);
+        directHotNodes.add(enc);
+      }
     },
     ForInStatement(node, _state, ancestors) {
       hotExemptNodes.add(node);
-      markEnclosingFunctionHot(ancestors, hotFunctionNodes, directHotNodes);
+      const enc = findEnclosingFunction(ancestors);
+      if (enc) {
+        trueHotNodes.add(enc);
+        hotFunctionNodes.add(enc);
+        directHotNodes.add(enc);
+      }
     },
     ForOfStatement(node, _state, ancestors) {
       hotExemptNodes.add(node);
-      markEnclosingFunctionHot(ancestors, hotFunctionNodes, directHotNodes);
+      const enc = findEnclosingFunction(ancestors);
+      if (enc) {
+        trueHotNodes.add(enc);
+        hotFunctionNodes.add(enc);
+        directHotNodes.add(enc);
+      }
     },
     WhileStatement(node, _state, ancestors) {
       hotExemptNodes.add(node);
-      markEnclosingFunctionHot(ancestors, hotFunctionNodes, directHotNodes);
+      const enc = findEnclosingFunction(ancestors);
+      if (enc) {
+        trueHotNodes.add(enc);
+        hotFunctionNodes.add(enc);
+        directHotNodes.add(enc);
+      }
     },
     DoWhileStatement(node, _state, ancestors) {
       hotExemptNodes.add(node);
-      markEnclosingFunctionHot(ancestors, hotFunctionNodes, directHotNodes);
+      const enc = findEnclosingFunction(ancestors);
+      if (enc) {
+        trueHotNodes.add(enc);
+        hotFunctionNodes.add(enc);
+        directHotNodes.add(enc);
+      }
     },
   });
 
@@ -603,67 +747,155 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
     }
   }
 
-  // 1. Propagate hotness & serialization exemption top-down (lexically to nested functions and along static call graph)
-  const forwardHotSet = new Set<acorn.Node>(directHotNodes);
+  // Identify cold candidates:
+  // - async functions (node.async === true)
+  // - event handlers (isEventHandlerName(fn.name))
+  // unless they contain loops or 60fps animation frames
+  for (const fn of allFunctions) {
+    if (!trueHotNodes.has(fn.node) && !containsLoopOrAnimation(fn.node)) {
+      if ((fn.node as any).async === true || isEventHandlerName(fn.name)) {
+        coldForcedNodes.add(fn.node);
+      }
+    }
+  }
+
+  // 1. Top-down propagation (1A lexical downward and 1B call-graph downward):
+  // - SERIALIZED_WORKER: full subtree (1A + 1B)
+  // - TRUE_HOT_60FPS: call-graph downward (1B: renderFrame -> lerp -> stepParticles) is fully preserved
+  // - SHALLOW_RENDER_COMPONENT: 1A and 2 are turned off!
   let forwardChanged = true;
   while (forwardChanged) {
     forwardChanged = false;
 
-    // 1A. Lexical downward propagation: any function nested inside a serialized or forward-hot function
-    // inherits its hot/exempt status so inner callbacks (e.g. onmessage, .then(), IIFEs) are also exempt
-    // and their own callees are traversed.
+    // 1A. Lexical downward propagation:
     for (const fn of allFunctions) {
-      if (forwardHotSet.has(fn.node)) continue;
+      if (coldForcedNodes.has(fn.node)) continue;
       const chain = fnScopeChain.get(fn.node);
       if (!chain) continue;
+
       for (const anc of chain) {
-        if (anc !== fn.node && (serializedFunctionNodes.has(anc) || forwardHotSet.has(anc))) {
-          forwardHotSet.add(fn.node);
-          hotFunctionNodes.add(fn.node);
-          hotExemptNodes.add(fn.node);
-          if (serializedFunctionNodes.has(anc)) {
+        if (anc === fn.node) continue;
+
+        // Serialized worker propagates downward 1A
+        if (serializedWorkerNodes.has(anc)) {
+          if (!serializedWorkerNodes.has(fn.node)) {
+            serializedWorkerNodes.add(fn.node);
             serializedFunctionNodes.add(fn.node);
+            hotFunctionNodes.add(fn.node);
+            hotExemptNodes.add(fn.node);
+            forwardChanged = true;
           }
-          forwardChanged = true;
+          break;
+        }
+
+        // True hot 60fps propagates downward 1A only if not inside a component
+        // and not from a module container / root bundle function (chain length <= 1)
+        const isModuleContainer = (fnScopeChain.get(anc)?.length ?? 0) <= 1;
+        if (trueHotNodes.has(anc) && !shallowComponentNodes.has(anc) && !isModuleContainer) {
+          if (!trueHotNodes.has(fn.node)) {
+            trueHotNodes.add(fn.node);
+            hotFunctionNodes.add(fn.node);
+            hotExemptNodes.add(fn.node);
+            forwardChanged = true;
+          }
           break;
         }
       }
     }
 
-    // 1B. Call-graph downward propagation: any helper called by a forward-hot or serialized function
-    for (const callerNode of Array.from(forwardHotSet)) {
+    // 1B. Call-graph downward propagation:
+    // Serialized worker callees
+    for (const callerNode of Array.from(serializedWorkerNodes)) {
       const calleeNames = callerToCallees.get(callerNode);
       if (!calleeNames) continue;
       for (const cName of calleeNames) {
         const targetNode = resolveCalleeNode(callerNode, cName);
-        if (targetNode && !forwardHotSet.has(targetNode)) {
-          forwardHotSet.add(targetNode);
+        if (
+          targetNode &&
+          !serializedWorkerNodes.has(targetNode) &&
+          !coldForcedNodes.has(targetNode)
+        ) {
+          serializedWorkerNodes.add(targetNode);
+          serializedFunctionNodes.add(targetNode);
           hotFunctionNodes.add(targetNode);
           hotExemptNodes.add(targetNode);
-          if (serializedFunctionNodes.has(callerNode)) {
-            serializedFunctionNodes.add(targetNode);
-          }
+          forwardChanged = true;
+        }
+      }
+    }
+
+    // True hot 60fps callees (e.g. renderFrame -> lerp -> stepParticles)
+    for (const callerNode of Array.from(trueHotNodes)) {
+      const calleeNames = callerToCallees.get(callerNode);
+      if (!calleeNames) continue;
+      for (const cName of calleeNames) {
+        const targetNode = resolveCalleeNode(callerNode, cName);
+        if (
+          targetNode &&
+          !trueHotNodes.has(targetNode) &&
+          !coldForcedNodes.has(targetNode)
+        ) {
+          trueHotNodes.add(targetNode);
+          hotFunctionNodes.add(targetNode);
+          hotExemptNodes.add(targetNode);
           forwardChanged = true;
         }
       }
     }
   }
 
+  // Count callers per callee to distinguish dedicated pipeline sub-functions from shared utility loops
+  const calleeToCallers = new Map<acorn.Node, Set<acorn.Node>>();
+  for (const [callerNode, calleeNames] of callerToCallees.entries()) {
+    for (const cName of calleeNames) {
+      const targetNode = resolveCalleeNode(callerNode, cName);
+      if (targetNode) {
+        let set = calleeToCallers.get(targetNode);
+        if (!set) {
+          set = new Set();
+          calleeToCallers.set(targetNode, set);
+        }
+        set.add(callerNode);
+      }
+    }
+  }
+
   // 2. Propagate hotness bottom-up along the static call graph (caller -> hot callee)
+  // NOTE: Bottom-Up propagation is explicitly DISABLED for SHALLOW_RENDER_COMPONENT and coldForcedNodes!
+  // To avoid utility loop caller contagion, only propagate if callee is a dedicated pipeline callee (<=2 callers)
+  // or callee was marked hot by animation frame calls.
   let changed = true;
   while (changed) {
     changed = false;
     for (const [callerNode, calleeNames] of callerToCallees.entries()) {
-      if (hotFunctionNodes.has(callerNode)) continue;
+      if (
+        hotFunctionNodes.has(callerNode) ||
+        shallowComponentNodes.has(callerNode) ||
+        coldForcedNodes.has(callerNode)
+      ) {
+        continue;
+      }
       for (const cName of calleeNames) {
         const targetNode = resolveCalleeNode(callerNode, cName);
-        if (targetNode && hotFunctionNodes.has(targetNode)) {
-          hotFunctionNodes.add(callerNode);
-          changed = true;
-          break;
+        if (targetNode && trueHotNodes.has(targetNode)) {
+          const callers = calleeToCallers.get(targetNode);
+          const isDedicatedPipeline = callers && callers.size <= 2;
+          if (isDedicatedPipeline) {
+            trueHotNodes.add(callerNode);
+            hotFunctionNodes.add(callerNode);
+            hotExemptNodes.add(callerNode);
+            changed = true;
+            break;
+          }
         }
       }
     }
+  }
+
+  // Sanitize cold-forced nodes: ensure they are completely removed from hot and hotExempt sets
+  for (const node of coldForcedNodes) {
+    hotFunctionNodes.delete(node);
+    hotExemptNodes.delete(node);
   }
 
   const hotFunctionsSkipped: string[] = [];
@@ -687,6 +919,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
     hotFunctionNodes,
     coldFunctionNodes,
     hotExemptNodes,
+    serializedFunctionNodes,
   };
 }
 

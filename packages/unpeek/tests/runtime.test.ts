@@ -250,14 +250,13 @@ describe('Runtime Integrity Guard & DevTools Deterrent', () => {
       expect(headlessWindow.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
     });
 
-    it('defers attestation check via window.queueMicrotask for React 19 hydration compatibility', () => {
+    it('executes synchronous self-signature attestation and binds windowKeySymbol for string vault entanglement', () => {
       const seed = 999;
-      const snippet = createDeterrentSnippet({ seed });
+      const windowKeySymbol = '_z99';
+      const snippet = createDeterrentSnippet({ seed, windowKeySymbol });
 
-      const microtaskQueue: Array<() => void> = [];
       const windowObj: Record<string, unknown> = {
-        queueMicrotask: (fn: () => void) => microtaskQueue.push(fn),
-        navigator: { webdriver: true }, // Automation signal that should trigger tamper when executed
+        navigator: { webdriver: false },
       };
 
       const context = vm.createContext({
@@ -266,14 +265,21 @@ describe('Runtime Integrity Guard & DevTools Deterrent', () => {
 
       vm.runInContext(snippet, context);
 
-      // Prior to flushing microtasks, execution was deferred
-      expect(microtaskQueue.length).toBe(1);
+      // Synchronous attestation completes immediately without queueMicrotask race
       expect(windowObj.__unpeek_tampered).toBeUndefined();
+      expect(typeof windowObj[windowKeySymbol]).toBe('number');
 
-      // Flush microtasks (simulating end of React 19 hydration)
-      microtaskQueue[0]();
-      expect(windowObj.__unpeek_tampered).toBe(true);
-      expect(windowObj.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
+      // Tampered environment poisons key synchronously
+      const tamperedWindow: Record<string, unknown> = {
+        navigator: { webdriver: true },
+      };
+      const tamperedContext = vm.createContext({
+        window: tamperedWindow,
+      });
+      vm.runInContext(snippet, tamperedContext);
+      expect(tamperedWindow.__unpeek_tampered).toBe(true);
+      expect(tamperedWindow.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
+      expect(typeof tamperedWindow[windowKeySymbol]).toBe('number');
     });
   });
 });
