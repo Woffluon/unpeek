@@ -17,10 +17,10 @@ const PROTECTED_LINES: TickerLine[] = [
   { text: "export function stepParticles(dt) {", hot: true },
   { text: "for (let i = 0; i < particles.length; i++) {", hot: true },
   { text: "particles[i].x += lerp(a, b, dt);", hot: true },
-  { text: "const _0x8b2 = _uC[0];" },
-  { text: "export async function verifyLicense(_0x4a1) {" },
-  { text: "const _0x9c4 = _uC[1];" },
-  { text: "return check(_0x4a1, _0x9c4, _0x8b2);" },
+  { text: "const _q1=_a4f[0];" },
+  { text: "export async function verifyLicense($k0){" },
+  { text: "const $m2=_a4f[1];" },
+  { text: "return check($k0,$m2,_q1);}" },
 ];
 
 function Track({ lines, tone }: { lines: TickerLine[]; tone: "paper" | "carbon" }) {

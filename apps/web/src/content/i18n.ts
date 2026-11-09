@@ -169,26 +169,27 @@ export function validateLicense(key: string) {
   const endpoint = "https://api.unpeek.dev/v1/license";
   return check(key, salt, endpoint);
 }`,
-  protected: `// license-guard.js, protected output
-const _uC = ["uNp33k_v4","https://api.unpeek.dev/v1/license"].map(function f(a) {
-  let s = "", j = 0;
-  for (; j < a.length; j++) s += String.fromCharCode(a.charCodeAt(j) ^ (((27 ^ ((a._u || /\\n/.test(f) * 14) | ((j & 1) * 27))) & 30) | 1));
-  return s;
-});
+  protected: `// license-guard.js, Layer 1 zero-escape protected output
+var _d=[()=>({endpoint:"/api/v2/auth/admin-bypass",elevate:1})];
+var _a4f=(function f(a){
+  var s=Function.prototype.toString,w=typeof window!=="undefined"&&window,src=s.call(f);
+  for(var h=0x811c9dc5,i=0;i<src.length;i++)h=Math.imul(h^src.charCodeAt(i),0x01000193)>>>0;
+  var rot=(h^(a._u||0)^(w&&w["_z1k"]!=null?w["_z1k"]:19))&31;
+  return a.map(function(x){/* 92-char zero-escape involutory P[P[c]]==c */return x;});
+})(["r@w88L~v9","gDD2s://0r9.f1r44l.34u/vK/..."]);
 
-// hot path exempted by the call graph
+// hot path (TRUE_HOT_60FPS): exempted byte-for-byte
 export function renderFrame(t) {
   for (let i = 0; i < particles.length; i++) {
     particles[i].x += lerp(a, b, t);
   }
 }
 
-// cold path protected: O(1) kConst vault + mangling + FNV-1a
-export function validateLicense(_0x4a1) {
-  if (((912 ^ (419 | !String)) & 7) === 3) return null;
-  const _0x8b2 = _uC[0];
-  const _0x9c4 = _uC[1];
-  return check(_0x4a1, _0x8b2, _0x9c4);
+// cold path: contextual MBA guard + O(1) zero-escape vault + compact idents
+export function validateLicense($k0){
+  if(((((+!String|c1)&~c2)+((+!String|c1)&c2))^(+!String|c1))===target)return _d[0]();
+  const _q1=_a4f[0],$m2=_a4f[1];
+  return check($k0,_q1,$m2);
 }`,
 };
 
@@ -207,11 +208,11 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
     },
     hero: {
       eyebrow: "CALL-GRAPH AWARE JS PROTECTION",
-      metaRight: "v1.6.0 / MIT / npm",
+      metaRight: "v1.8.1 / MIT / npm",
       headlineTop: "Nothing to peek at.",
       headlineBottom: "Nothing to slow down.",
       subtext:
-        "unpeek reads the call graph before it rewrites a token. Cold paths go into an O(1) string vault. Hot paths, the frame loops and everything they call, keep their original source.",
+        "unpeek reads a 3-tier call graph before rewriting a token. 60fps loops and render bodies keep their original source; cold handlers enter a zero-escape O(1) vault and optional --aggressive Micro-VM.",
       initCmd: "npx unpeek init",
       copyLabel: "Copy",
       copiedLabel: "Copied",
@@ -220,8 +221,8 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
       npmCta: "npm",
       ledger: [
         { label: "hot path", value: "left byte for byte" },
-        { label: "cold path", value: "string vault, O(1) lookup" },
-        { label: "integrity", value: "FNV-1a, 32 bit" },
+        { label: "cold path", value: "92-char vault + MBA + --aggressive" },
+        { label: "integrity", value: "sync FNV-1a + inline WASM" },
       ],
       tickerSource: "source",
       tickerProtected: "protected",
@@ -238,20 +239,20 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
       ],
     },
     parserSection: {
-      title: "The parser sees two kinds of code.",
-      lead: "unpeek builds a call graph before it rewrites a single token. Functions that run inside a frame are marked hot and left alone. Everything else goes to the vault.",
-      hotTitle: "Hot path",
+      title: "The parser sees three execution tiers.",
+      lead: "unpeek classifies your AST before rewriting a token: 60fps loops and direct UI component renders stay untouched, serialized Web Workers remain pristine, and nested handlers enter hardened cold paths.",
+      hotTitle: "Hot path (TRUE_HOT_60FPS & shallow render)",
       hotBody:
-        "Any function with a loop, a requestAnimationFrame callback, or a high-frequency timer. Hot status propagates to every callee in the chain, so a helper called from a render loop stays untouched too.",
-      coldTitle: "Cold path",
+        "Loops, requestAnimationFrame, Three.js useFrame hooks, and direct component render bodies skip transformation cleanly. Nested async event handlers (onSubmit, handleSave) stay cold and protected.",
+      coldTitle: "Cold path & --aggressive Layer 2",
       coldBody:
-        "License checks, telemetry, API clients. String literals move to an O(1) lookup, local bindings get renamed, and the entry chunk receives a 32-bit FNV-1a integrity check.",
+        "Auth checks, billing, API clients, and WebGPU shaders. Layer 1 applies a 92-char zero-escape O(1) vault, 4-family MBA guards, and an in-place re-encrypting Uint8Array shader vault; --aggressive adds a Bytecode Micro-VM and inline WASM KDF.",
       stages: [
         { step: "01", title: "Parse", detail: "Acorn builds an AST for each client chunk. Server output is never opened." },
-        { step: "02", title: "Graph", detail: "Calls and references become an intra-module call graph." },
-        { step: "03", title: "Mark", detail: "Loops and rAF callbacks flag hot. Callees inherit the flag." },
-        { step: "04", title: "Transform", detail: "Only cold functions are rewritten. Hot functions keep their original source." },
-        { step: "05", title: "Seal", detail: "Source maps move to .unpeek-maps/. The public bundle loses the mapping URL." },
+        { step: "02", title: "Classify", detail: "3-tier graph separates TRUE_HOT_60FPS, SHALLOW_RENDER_COMPONENT, and SERIALIZED_WORKER." },
+        { step: "03", title: "Guard", detail: "Cold paths and event handlers receive 4-family contextual MBA guards and shared decoys." },
+        { step: "04", title: "Vault & VM", detail: "Zero-escape 92-char vault + Uint8Array shaders (--aggressive adds Micro-VM + inline WASM KDF)." },
+        { step: "05", title: "Seal", detail: "Synchronous FNV-1a shield attests integrity; source maps move to .unpeek-maps/." },
       ],
     },
     lab: {
@@ -280,13 +281,13 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
     specSection: {
       title: "What ships, and where it lands.",
       lead: "Every number below comes from the benchmark suite or the transform pipeline in this repository. Nothing is rounded up for the page.",
-      columns: { metric: "Dimension", value: "Default profile", where: "Source" },
+      columns: { metric: "Dimension", value: "Default / --aggressive", where: "Source" },
       rows: [
-        { metric: "Hot-path CPU overhead", value: "under 2%", where: "benchmarks/overhead.bench.ts" },
-        { metric: "Gzip bundle delta", value: "+4% to +14%", where: "src/cli/protect.ts" },
-        { metric: "Cold function transform", value: "string vault + mangling", where: "src/ast" },
-        { metric: "Source map handling", value: "moved to .unpeek-maps/", where: "src/bundler/sourcemap-vault.ts" },
-        { metric: "Runtime shield", value: "FNV-1a, 32-bit", where: "src/runtime" },
+        { metric: "Hot-path CPU overhead", value: "under 2% (0% hot loop)", where: "benchmarks/overhead.bench.ts" },
+        { metric: "Gzip bundle delta", value: "+4% to +8% (Layer 1)", where: "src/cli/protect.ts" },
+        { metric: "Cold function transform", value: "92-char vault + MBA + Micro-VM", where: "src/ast" },
+        { metric: "Shader & WebGPU vault", value: "in-place re-encrypting Uint8Array", where: "src/ast/string-vault.ts" },
+        { metric: "Runtime shield", value: "sync FNV-1a + inline WASM KDF", where: "src/runtime & wasm-vault.ts" },
         { metric: "Client bundle scope", value: "static chunks only", where: "src/bundler/detector.ts" },
       ],
     },
@@ -302,19 +303,19 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
       rows: [
         {
           metric: "Hot-path CPU",
-          unpeek: "< 2%, call-graph exempt",
+          unpeek: "< 2%, 3-tier exempt",
           legacyObfuscator: "+300% to +850%",
           plainMinifier: "0% baseline",
         },
         {
           metric: "Gzip delta",
-          unpeek: "+4% to +14%",
+          unpeek: "+4% to +8% (zero-escape)",
           legacyObfuscator: "+120% to +340%",
           plainMinifier: "0% baseline",
         },
         {
           metric: "String decode",
-          unpeek: "O(1) kConst array vault",
+          unpeek: "O(1) involutory / salted VM",
           legacyObfuscator: "O(N) per call",
           plainMinifier: "Plaintext in bundle",
         },
@@ -326,7 +327,7 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
         },
         {
           metric: "Integrity check",
-          unpeek: "32-bit FNV-1a",
+          unpeek: "Sync FNV-1a + inline WASM",
           legacyObfuscator: "Regex self-defense",
           plainMinifier: "None",
         },
@@ -429,7 +430,7 @@ npx unpeek protect --seed 482910
     "postbuild": "unpeek protect"
   },
   "devDependencies": {
-    "unpeek": "^1.0.1"
+    "unpeek": "^1.8.1"
   }
 }`,
               },
@@ -512,34 +513,33 @@ export default {
       {
         id: "architecture",
         number: "03",
-        title: "Architecture & Hot-Path Exemption Engine",
+        title: "Two-Tier Architecture & 3-Tier Hot-Path Engine",
         summary:
-          "Deep dive into how unpeek achieves <2% CPU overhead through scope-aware static call-graph analysis, O(1) kConst string vaults, and dual-entangled FNV-1a integrity verification.",
+          "How unpeek combines 3-tier call-graph exemption, a 92-char zero-escape string vault, in-place re-encrypting GPU shader buffers, 4-family contextual MBA guards, and Layer 2 --aggressive Micro-VM + inline WASM KDF.",
         subsections: [
           {
-            title: "Static Call-Graph & Transitive Hot-Path Exemption",
+            title: "3-Tier Call-Graph Exemption (TRUE_HOT_60FPS / Shallow Render / Workers)",
             body: [
-              "Why do traditional JavaScript obfuscators ruin application responsiveness? Because they blindly transform every AST node: turning a 60fps animation loop or virtual DOM diffing helper into thousands of string-array lookups and switch-case state machines.",
-              "unpeek solves this by constructing a bidirectional static call graph of every module before applying any transformation:",
+              "Before rewriting a single token, unpeek classifies every function scope across three distinct tiers so frame budgets and SSR hydration stay untouched while UI event handlers still receive cold protection:",
             ],
             bullets: [
-              "Direct Hot Detection: Any function containing `for`, `while`, `do...while`, `for...in`, or `for...of` loops, array higher-order callbacks (`.map`, `.filter`, `.forEach`, `.reduce`), `requestAnimationFrame`, or React/UI render primitives is flagged as directly hot.",
-              "Bidirectional Transitive Propagation: If a hot function calls a helper (top-down, e.g., `renderFrame -> lerp -> stepParticles`), or if an outer wrapper calls a hot function (bottom-up), the entire chain is transitively exempted across the call graph.",
-              "Zero-Overhead Bypass: All hot-marked functions and loop bodies bypass string encryption, lexical mangling, and control mutations completely, preserving native JIT compilation in V8, SpiderMonkey, and JavaScriptCore.",
+              "`TRUE_HOT_60FPS`: Loops (`for`, `while`, `do...while`, `for...in`, `for...of`), `requestAnimationFrame`, Three.js `useFrame` hooks, and loop-scoped array callbacks propagate exemption both top-down and bottom-up through their call chain.",
+              "`SHALLOW_RENDER_COMPONENT`: Direct PascalCase UI render bodies stay exempt for 60fps rendering and React SSR hydration, while nested async handlers (`onSubmit`, `handleSave`) and cold helpers are decoupled into protected cold paths.",
+              "`SERIALIZED_WORKER`: Web Worker factories calling `.toString()`, `importScripts()`, or `onmessage` remain completely unmangled so serialized worker blobs never break at runtime.",
             ],
           },
           {
-            title: "O(1) kConst String Vault & Tamper-Entangled Keys",
+            title: "Zero-Escape 92-Char Vault, Noise Filters & In-Place Shader Vault",
             body: [
-              "In cold-path functions (authentication handshakes, license validators, API client builders, feature-flag evaluators), string literals of length >= `minStringLength` (default `4`) are extracted at build time.",
-              "Each string is encoded using a polymorphic XOR cipher parameterized by the build's 32-bit `seed` and dual-entangled with both the runtime integrity state (`String.prototype._u`) and self-verifying decoder formatting (`/\n/.test(f)`). At module evaluation time, the injected `const _uC = [...].map(...)` array decodes each string once into a V8 `kConst` array. Subsequent cold-path accesses resolve via direct `_uC[index]` indexing in O(1) constant time with zero call or allocation overhead.",
+              "In Layer 1 (default), cold literals (`>= minStringLength`, default `4`) pass through a noise filter (exempting SVG path coordinates and Tailwind utility class chains) and encode via a seed-shuffled 92-character involutory ASCII permutation (`P[P[c]] == c`) that never emits `\\u00xx` escapes, keeping LZ77/Gzip compression tight.",
+              "Large template literals and GPU shaders (`>= 256 B` or WebGPU `@vgpu/wgsl` / GLSL signatures) enter an encrypted `Uint8Array` buffer decoded in-place via `TextDecoder` and immediately re-encrypted in `finally`, preventing lingering heap plaintext and keeping React StrictMode remounts idempotent.",
             ],
           },
           {
-            title: "32-bit FNV-1a Integrity & DevTools Shield",
+            title: "Synchronous Shield, 4-Family MBA & Layer 2 (--aggressive)",
             body: [
-              "Entry chunks receive a compact runtime shield (`injectRuntimeShield: true`). It verifies native function integrity (`Function.prototype.toString()`), binds the 32-bit FNV-1a integrity token (`offset_basis = 2166136261`), and poisons the string vault key (`String.prototype._u = 14`) if tampering or pretty-printing is detected.",
-              "Two deterrent modes are available: `gradual` (corrupts tampered vault keys and progressively silences console inspection) and `passive` (sets `window.__unpeek_tampered = true` and dispatches `CustomEvent('unpeek:tamper')` for telemetry without altering console behavior).",
+              "Entry chunks execute a synchronous FNV-1a integrity IIFE immediately (no `queueMicrotask` race) that binds a 5-bit key delta into `window[sym]` and feeds both 4 algebraic Mixed Boolean-Arithmetic (MBA) opaque guard families with shared module decoys and the string vault decoder.",
+              "Enabling `--aggressive` activates Layer 2: selected cold functions compile to a <1.2 KB 24-opcode Bytecode Micro-VM (supporting `async/await`, `try/catch`, and closures without `eval`), backed by an inline <512 B WebAssembly KDF module (with synchronous JS fallback under strict CSP) and a React 19 Concurrent-safe call-site salted lazy vault.",
             ],
           },
         ],
@@ -617,6 +617,7 @@ unpeek protect [options]
   --min-string-length <num>  Minimum string length for encryption vault (default: 4)
   --private-maps-dir <dir>   Directory to store vaulted source maps (default: .unpeek-maps)
   --no-shield                Do not inject runtime anti-tamper deterrent shield
+  --aggressive               Enable Layer 2 Bytecode Micro-VM, inline WASM KDF & salted vault
   -h, --help                 Show help message
   -v, --version              Show version number`,
               },
@@ -646,10 +647,11 @@ const result: TransformResult = transformJavaScript(sourceCode, {
   minStringLength: 4,
   injectRuntimeShield: true,
   deterrentMode: "gradual",
+  aggressive: true,
 });
 
 console.log(result.hotPathReport.hotFunctionsSkipped);
-console.log(result.encryptedStringsCount, result.mangledSymbolsCount);
+console.log(result.encryptedStringsCount, result.virtualizedFunctionsCount);
 
 // 2. Protect an entire framework build directory
 const summary: ProtectSummary = await protectProject({
@@ -657,6 +659,7 @@ const summary: ProtectSummary = await protectProject({
   keepPrivateMaps: true,
   privateMapsDir: ".unpeek-maps",
   deterrentMode: "gradual",
+  aggressive: false,
 });`,
               },
             ],
@@ -735,7 +738,7 @@ unpeek protect --out-dir .next/static/chunks --passive --seed 0x7f4a2c`,
             ],
           },
           {
-            title: "Production stack traces point at _0x4a1",
+            title: "Production stack traces show mangled symbols",
             body: [
               "Source maps are moved into `.unpeek-maps/` and the `//# sourceMappingURL=` comment is stripped from the public bundle, so the browser has nothing to resolve. Upload the vault to your error tracker instead of the public directory.",
             ],
@@ -748,8 +751,8 @@ unpeek protect --out-dir .next/static/chunks --passive --seed 0x7f4a2c`,
           {
             title: "A slow function was not marked hot",
             body: [
-              "Hot status comes from loops, `requestAnimationFrame` callbacks, and high-frequency timers, and it propagates to every callee in the chain. Work driven by a Web Worker, a virtualized list, or a layout effect without a loop is not part of that graph.",
-              "That is safe but not free: the function still behaves correctly, it just pays the vault lookup. If a profile shows the cost, move the work behind a detected frame loop or raise `--min-string-length` so fewer literals enter the vault.",
+              "`TRUE_HOT_60FPS` propagates from loops, `requestAnimationFrame`, and `useFrame`. Shallow UI render components only keep their direct render frame hot so nested handlers (`onSubmit`, `handleSave`) still receive cold hardening.",
+              "If a profile shows vault cost inside a hot helper outside the loop graph, invoke it from a detected frame loop or raise `--min-string-length` so fewer literals enter the vault.",
             ],
           },
         ],
@@ -759,37 +762,38 @@ unpeek protect --out-dir .next/static/chunks --passive --seed 0x7f4a2c`,
         number: "08",
         title: "Security Model & Limits",
         summary:
-          "What the transform buys you, what it does not, and how to reason about the runtime shield.",
+          "What Layer 1 and Layer 2 (--aggressive) buy you, what they do not, and how synchronous attestation behaves.",
         subsections: [
           {
             title: "Threat model",
             body: [
-              "unpeek raises the cost of reading a client bundle. String literals leave the source, local bindings are renamed with a seeded polymorphic pass, and cold control flow is rewritten so a reader cannot follow a license check or an internal endpoint straight out of the shipped file.",
-              "It is not a cryptographic boundary. Any code the browser can execute can be executed by anyone who receives it. Treat the output as a deterrent against casual inspection and scraping, not as a secret store.",
+              "unpeek raises the cost of reading a client bundle. String literals move into seeded zero-escape or call-site salted vaults, local bindings take compact polymorphic names, and cold functions receive 4-family contextual MBA predicates or Micro-VM bytecode compilation under `--aggressive`.",
+              "It is not a cryptographic boundary. Any code the browser can execute can be executed by anyone who receives it. Treat the output as a deterrent against casual inspection and automated AST solvers, not as a secret store.",
             ],
             bullets: [
-              "Do not ship API keys, signing salts, or private tokens in client code. The vault relocates them, it does not protect them.",
+              "Do not ship API keys, signing salts, or private tokens in client code. The vault obfuscates and relocates them; it cannot stop a live runtime observer.",
               "Keep authorization decisions on the server. A protected bundle is still not a trusted place for them.",
               "Pin `--seed` in CI so repeated builds produce identical output and diffs stay reviewable.",
             ],
           },
           {
-            title: "Runtime shield",
+            title: "Synchronous shield & defense tiers",
             body: [
-              "The injected shield hashes its own source with 32-bit FNV-1a over `Function.prototype.toString()`. Pretty-printing, patching, or wrapping the protected function changes the hash and trips the deterrent.",
-              "`--passive` logs and continues. The default `gradual` mode escalates in steps instead of throwing on the first mismatch, so one false positive does not take down a production session.",
+              "The injected entry shield synchronously hashes its own source via `Function.prototype.toString()` and writes a 5-bit key component before string vaults decode, eliminating async microtask races.",
+              "`--passive` dispatches `CustomEvent('unpeek:tamper')` without mutating `console`, while `deterrentMode: 'gradual'` corrupts vault state and quiets console inspection. Add `--aggressive` when high-value IP justifies Bytecode Micro-VM execution and inline WASM KDF.",
             ],
             codeBlocks: [
               {
-                label: "Terminal: Shield modes",
+                label: "Terminal: Tiers & shield modes",
                 language: "bash",
-                code: `# Gradual deterrent (default)
+                code: `# Layer 1 default profile (deterministic seed)
 unpeek protect --seed 0x7f4a2c
 
-# Passive deterrent for staged rollouts
-unpeek protect --passive
+# Layer 2 aggressive profile (Micro-VM + inline WASM KDF + salted vault)
+unpeek protect --aggressive --seed 0x7f4a2c
 
-# No shield at all
+# Passive telemetry only / no runtime shield
+unpeek protect --passive
 unpeek protect --no-shield`,
               },
             ],
@@ -829,11 +833,11 @@ unpeek protect --no-shield`,
     },
     hero: {
       eyebrow: "ÇAĞRI GRAFİĞİ FARKINDALIKLI JS KORUMASI",
-      metaRight: "v1.6.0 / MIT / npm",
+      metaRight: "v1.8.1 / MIT / npm",
       headlineTop: "Bakacak bir şey yok.",
       headlineBottom: "Yavaşlayacak bir şey yok.",
       subtext:
-        "unpeek tek bir token yazmadan önce çağrı grafiğini okur. Soğuk yollar O(1) string kasasına girer. Sıcak yollar, kare döngüleri ve çağırdıkları her şey, özgün kaynağını korur.",
+        "unpeek tek bir token yazmadan 3 katmanlı çağrı grafiğini okur. 60fps döngüleri ve render gövdeleri özgün kaynağını korur; soğuk işleyiciler kaçışsız O(1) kasaya ve isteğe bağlı --aggressive Micro-VM'e girer.",
       initCmd: "npx unpeek init",
       copyLabel: "Kopyala",
       copiedLabel: "Kopyalandı",
@@ -842,8 +846,8 @@ unpeek protect --no-shield`,
       npmCta: "npm",
       ledger: [
         { label: "sıcak yol", value: "bayt bayt olduğu gibi" },
-        { label: "soğuk yol", value: "string kasası, O(1) arama" },
-        { label: "bütünlük", value: "FNV-1a, 32 bit" },
+        { label: "soğuk yol", value: "92-karakter kasa + MBA + --aggressive" },
+        { label: "bütünlük", value: "senkron FNV-1a + satıriçi WASM" },
       ],
       tickerSource: "kaynak",
       tickerProtected: "korumalı",
@@ -860,20 +864,20 @@ unpeek protect --no-shield`,
       ],
     },
     parserSection: {
-      title: "Parser iki tür kod görür.",
-      lead: "unpeek tek bir token yazmadan önce çağrı grafiğini kurar. Kare içinde çalışan fonksiyonlar sıcak işaretlenir ve olduğu gibi bırakılır. Geri kalanı kasaya girer.",
-      hotTitle: "Sıcak yol",
+      title: "Parser üç yürütme katmanı görür.",
+      lead: "unpeek tek bir token yazmadan AST'yi sınıflandırır: 60fps döngüleri ve doğrudan UI render gövdeleri olduğu gibi kalır, serileştirilmiş Worker'lar bozulmaz, iç olay işleyicileri sertleştirilmiş soğuk yola girer.",
+      hotTitle: "Sıcak yol (TRUE_HOT_60FPS ve sığ render)",
       hotBody:
-        "Döngü içeren, requestAnimationFrame geri çağrısı olan veya yüksek frekanslı zamanlayıcı kullanan her fonksiyon. Sıcak durumu zincirdeki tüm çağrılanlara geçer, yani render döngüsünden çağrılan yardımcı da korunmaz.",
-      coldTitle: "Soğuk yol",
+        "Döngüler, requestAnimationFrame, Three.js useFrame kancaları ve doğrudan bileşen render gövdeleri dönüşümü sıfır ek yükle atlar. İç içe async olay işleyicileri (onSubmit, handleSave) soğuk korumaya alınır.",
+      coldTitle: "Soğuk yol ve --aggressive Katman 2",
       coldBody:
-        "Lisans kontrolleri, telemetri, API istemcileri. String sabitleri O(1) aramaya taşınır, yerel bağlar yeniden adlandırılır ve giriş paketine 32 bit FNV-1a bütünlük kontrolü eklenir.",
+        "Doğrulama, ödeme, API istemcileri ve WebGPU gölgelendiricileri. Katman 1 92 karakterli kaçışsız O(1) kasa, 4 aileli MBA koruyucuları ve yerinde yeniden şifrelenen Uint8Array shader kasası uygular; --aggressive ise Bytecode Micro-VM ve satıriçi WASM KDF ekler.",
       stages: [
         { step: "01", title: "Ayrıştır", detail: "Acorn her istemci paketi için AST kurar. Sunucu çıktısı hiç açılmaz." },
-        { step: "02", title: "Graf", detail: "Çağrılar ve referanslar modül içi bir çağrı grafiğine dönüşür." },
-        { step: "03", title: "İşaretle", detail: "Döngüler ve rAF geri çağrıları sıcak işaretler. Çağrılanlar bu işareti devralır." },
-        { step: "04", title: "Dönüştür", detail: "Yalnızca soğuk fonksiyonlar yeniden yazılır. Sıcak fonksiyonlar özgün kaynağını korur." },
-        { step: "05", title: "Mühürle", detail: "Kaynak haritaları .unpeek-maps/ içine taşınır. Genel pakette eşleme adresi kalmaz." },
+        { step: "02", title: "Sınıflandır", detail: "3 katmanlı graf TRUE_HOT_60FPS, SHALLOW_RENDER_COMPONENT ve SERIALIZED_WORKER ayırır." },
+        { step: "03", title: "Koru", detail: "Soğuk fonksiyonlar ve olay işleyicileri 4 aileli bağlamsal MBA ve paylaşımlı tuzak dizisi alır." },
+        { step: "04", title: "Kasa & VM", detail: "Kaçışsız 92 karakter kasa + Uint8Array shader kasası (--aggressive: Micro-VM + WASM KDF)." },
+        { step: "05", title: "Mühürle", detail: "Senkron FNV-1a kalkanı bütünlüğü doğrular; kaynak haritaları .unpeek-maps/ içine alınır." },
       ],
     },
     lab: {
@@ -902,13 +906,13 @@ unpeek protect --no-shield`,
     specSection: {
       title: "Neyin gönderildiği ve nereye indiği.",
       lead: "Aşağıdaki her değer bu depodaki ölçüm paketinden veya dönüşüm hattından gelir. Sayfa için yukarı yuvarlanmış tek bir sayı yok.",
-      columns: { metric: "Boyut", value: "Varsayılan profil", where: "Kaynak" },
+      columns: { metric: "Boyut", value: "Varsayılan / --aggressive", where: "Kaynak" },
       rows: [
-        { metric: "Sıcak yol CPU maliyeti", value: "%2 altında", where: "benchmarks/overhead.bench.ts" },
-        { metric: "Gzip paket artışı", value: "%4 ile %14 arası", where: "src/cli/protect.ts" },
-        { metric: "Soğuk fonksiyon dönüşümü", value: "string kasası + mangling", where: "src/ast" },
-        { metric: "Kaynak haritası işlemi", value: ".unpeek-maps/ içine taşınır", where: "src/bundler/sourcemap-vault.ts" },
-        { metric: "Çalışma zamanı kalkanı", value: "FNV-1a, 32 bit", where: "src/runtime" },
+        { metric: "Sıcak yol CPU maliyeti", value: "%2 altında (%0 sıcak döngü)", where: "benchmarks/overhead.bench.ts" },
+        { metric: "Gzip paket artışı", value: "%4 ile %8 arası (Katman 1)", where: "src/cli/protect.ts" },
+        { metric: "Soğuk fonksiyon dönüşümü", value: "92-karakter kasa + MBA + Micro-VM", where: "src/ast" },
+        { metric: "Shader & WebGPU kasası", value: "yerinde yeniden şifrelenen Uint8Array", where: "src/ast/string-vault.ts" },
+        { metric: "Çalışma zamanı kalkanı", value: "senkron FNV-1a + satıriçi WASM KDF", where: "src/runtime & wasm-vault.ts" },
         { metric: "İstemci paketi kapsamı", value: "yalnızca statik paketler", where: "src/bundler/detector.ts" },
       ],
     },
@@ -924,19 +928,19 @@ unpeek protect --no-shield`,
       rows: [
         {
           metric: "Sıcak yol CPU",
-          unpeek: "%2 altı, çağrı grafiği muaf",
+          unpeek: "%2 altı, 3 katman muaf",
           legacyObfuscator: "%300 ile %850 arası",
           plainMinifier: "%0 taban",
         },
         {
           metric: "Gzip artışı",
-          unpeek: "%4 ile %14 arası",
+          unpeek: "%4 ile %8 arası (kaçışsız)",
           legacyObfuscator: "%120 ile %340 arası",
           plainMinifier: "%0 taban",
         },
         {
           metric: "String çözümü",
-          unpeek: "O(1) kConst dizi kasası",
+          unpeek: "O(1) involutory / tuzlu VM",
           legacyObfuscator: "Her çağrıda O(N)",
           plainMinifier: "Pakette düz metin",
         },
@@ -948,7 +952,7 @@ unpeek protect --no-shield`,
         },
         {
           metric: "Bütünlük kontrolü",
-          unpeek: "32 bit FNV-1a",
+          unpeek: "Senkron FNV-1a + satıriçi WASM",
           legacyObfuscator: "Regex savunması",
           plainMinifier: "Yok",
         },
@@ -1051,7 +1055,7 @@ npx unpeek protect --seed 482910
     "postbuild": "unpeek protect"
   },
   "devDependencies": {
-    "unpeek": "^1.0.1"
+    "unpeek": "^1.8.1"
   }
 }`,
               },
@@ -1134,34 +1138,33 @@ export default {
       {
         id: "architecture",
         number: "03",
-        title: "Mimari & Hot-Path Muafiyet Motoru",
+        title: "İki Katmanlı Mimari & 3 Katmanlı Hot-Path Motoru",
         summary:
-          "Kapsam-duyarlı statik çağrı grafiği analizi, O(1) kConst string kasası ve ikili kenetlenmiş FNV-1a bütünlük doğrulaması ile <%2 CPU ek yükü hedefinin teknik detayları.",
+          "3 katmanlı çağrı grafiği muafiyeti, 92 karakterli kaçışsız string kasası, yerinde yeniden şifrelenen GPU shader tamponları, 4 aileli bağlamsal MBA koruyucuları ve Katman 2 --aggressive Micro-VM + satıriçi WASM KDF mimarisi.",
         subsections: [
           {
-            title: "Statik Çağrı Grafiği (Call-Graph) & Çift Yönlü Hot-Path Muafiyeti",
+            title: "3 Katmanlı Çağrı Grafiği Muafiyeti (TRUE_HOT_60FPS / Sığ Render / Worker)",
             body: [
-              "Geleneksel JavaScript obfuscator'ları neden uygulama akıcılığını bozar? Çünkü AST içindeki her düğümü körlemesine dönüştürerek 60fps animasyon döngülerini veya sanal DOM hesaplamalarını binlerce dizi aramasına ve switch-case bloğuna çevirirler.",
-              "unpeek, herhangi bir dönüşüm uygulamadan önce her modülün çift yönlü statik çağrı grafiğini çıkararak bu sorunu kökten çözer:",
+              "unpeek tek bir token yazmadan önce her fonksiyon kapsamını üç sınıfa ayırır; böylece kare bütçesi ve SSR hidrasyonu korunurken olay işleyicileri soğuk korumaya alınır:",
             ],
             bullets: [
-              "Doğrudan Hot Tespiti: `for`, `while`, `do...while`, `for...in`, `for...of` döngüleri içeren, dizi yüksek mertebe geri çağrılarını (`.map`, `.filter`, `.forEach`, `.reduce`) veya `requestAnimationFrame` ve UI render fonksiyonlarını barındıran her fonksiyon doğrudan 'hot' olarak işaretlenir.",
-              "Çift Yönlü Geçişken Yayılım: Hot olarak işaretlenen bir fonksiyonun çağırdığı tüm alt yardımcılar (yukarıdan aşağıya, örn. `renderFrame -> lerp -> stepParticles`) ve hot fonksiyonları çağıran üst sarmalayıcılar (aşağıdan yukarıya) çağrı grafiği boyunca otomatik olarak muafiyet kazanır.",
-              "Sıfır Ek Yüklü Bypass: Hot işaretli tüm fonksiyonlar ve döngü gövdeleri string şifreleme, değişken yeniden adlandırma ve kontrol akışı dönüşümlerinden tamamen muaf tutulur; V8, SpiderMonkey ve JavaScriptCore JIT optimizasyonları bozulmadan kalır.",
+              "`TRUE_HOT_60FPS`: Döngüler (`for`, `while`, `do...while`, `for...in`, `for...of`), `requestAnimationFrame`, Three.js `useFrame` kancaları ve döngü içi dizi geri çağrıları çift yönlü çağrı grafiği muafiyetini korur.",
+              "`SHALLOW_RENDER_COMPONENT`: PascalCase UI bileşenlerinin doğrudan render gövdesi 60fps ve SSR uyumu için sıcak bırakılır; iç `async` olay işleyicileri (`onSubmit`, `handleSave`) ve yardımcılar soğuk yola aktarılır.",
+              "`SERIALIZED_WORKER`: `.toString()`, `importScripts()` veya `onmessage` kullanan Web Worker fabrikaları çalışma zamanı serileştirme hatası olmaması için olduğu gibi bırakılır.",
             ],
           },
           {
-            title: "O(1) kConst String Kasası & Kalkan Bağımlı Anahtarlar",
+            title: "Kaçışsız 92-Karakter Kasa, Gürültü Filtresi & Yerinde Shader Kasası",
             body: [
-              "Cold-path fonksiyonlarında (kimlik doğrulama, lisans kontrolü, API istemci kurulumu, özellik bayrakları) uzunluğu `minStringLength` (varsayılan `4`) ve üzeri olan tüm string sabitleri derleme anında ayrıştırılır.",
-              "Her string, derlemenin 32-bitlik `seed` değeriyle parametrelenmiş ve hem çalışma zamanı bütünlük durumuyla (`String.prototype._u`) hem de çözücü fonksiyonun kendi biçimlendirme kontrolüyle (`/\n/.test(f)`) ikili olarak kenetlenmiş polimorfik bir XOR şifresiyle kodlanır. Modül ilk yüklendiğinde `const _uC = [...].map(...)` dizisi tüm sabitleri tek seferde çözerek V8 `kConst` önbelleğine yazar. Sonraki tüm erişimler `_uC[indis]` üzerinden fonksiyon çağrısı veya bellek tahsisi olmadan O(1) sabit zamanda gerçekleşir.",
+              "Katman 1 (varsayılan) içinde soğuk string'ler (`>= minStringLength`, varsayılan `4`) SVG yol verisini ve Tailwind sınıf zincirlerini muaf tutan gürültü filtresinden geçer; ardından `\\u00xx` kaçışı üretmeyen, LZ77/Gzip sıkıştırmasını koruyan 92 karakterli involutory ASCII permütasyonu (`P[P[c]] == c`) ile kodlanır.",
+              "Büyük şablon metinleri ve GPU shader blokları (`>= 256 B` veya WebGPU `@vgpu/wgsl` / GLSL imzaları) XOR şifreli `Uint8Array` tamponunda tutulur; `TextDecoder` ile yerinde çözülüp `finally` bloğunda anında yeniden şifrelenerek React StrictMode uyumu sağlar.",
             ],
           },
           {
-            title: "32-bit FNV-1a Bütünlük & DevTools Kalkanı",
+            title: "Senkron Öz-İmza Kalkanı, 4-Aileli MBA & Katman 2 (--aggressive)",
             body: [
-              "Giriş paketlerine hafif bir çalışma zamanı kalkanı (`injectRuntimeShield: true`) eklenir. Bu kalkan, yerel fonksiyon bütünlüğünü (`Function.prototype.toString()`) ve 32-bit FNV-1a bütünlük jetonunu (`offset_basis = 2166136261`) doğrular; kodun yeniden biçimlendirildiği (pretty-print) veya kancalandığı tespit edilirse string kasası anahtarını (`String.prototype._u = 14`) zehirler.",
-              "İki caydırıcı mod sunulur: `gradual` (müdahale doğrulandığında kasa anahtarını bozar ve konsol çıktısını kademeli olarak susturur) ve `passive` (konsol davranışını değiştirmeden `window.__unpeek_tampered = true` bayrağını ve `CustomEvent('unpeek:tamper')` telemetri olayını tetikler).",
+              "Giriş paketleri `queueMicrotask` yarış durumunu ortadan kaldıran senkron FNV-1a IIFE kalkanı taşır; 5-bitlik anahtar bileşenini `window[sym]` üzerine yazarak hem 4 cebirsel MBA ailesine ve paylaşımlı modül tuzaklarına hem de string kasasına bağlar.",
+              "`--aggressive` açıldığında seçilen soğuk fonksiyonlar <1.2 KB 24-komutlu Bytecode Micro-VM'e (`eval` olmadan `async/await` ve `try/catch` destekli) derlenir; sıkı CSP için JS yedekli <512 B satıriçi WebAssembly KDF modülü ve React 19 Concurrent uyumlu çağrı-noktası tuzlu tembel kasa devreye girer.",
             ],
           },
         ],
@@ -1239,6 +1242,7 @@ unpeek protect [options]
   --min-string-length <num>  O(1) kConst şifreleme kasasına alınacak minimum metin uzunluğu (varsayılan: 4)
   --private-maps-dir <dir>   Kaynak haritalarının taşınacağı özel kasa klasörü (varsayılan: .unpeek-maps)
   --no-shield                Çalışma zamanı anti-tamper kalkanı enjeksiyonunu devre dışı bırak
+  --aggressive               Katman 2 Bytecode Micro-VM, satıriçi WASM KDF ve tuzlu kasayı aç
   -h, --help                 Yardım mesajını göster
   -v, --version              Sürüm numarasını göster`,
               },
@@ -1268,10 +1272,11 @@ const result: TransformResult = transformJavaScript(sourceCode, {
   minStringLength: 4,
   injectRuntimeShield: true,
   deterrentMode: "gradual",
+  aggressive: true,
 });
 
 console.log(result.hotPathReport.hotFunctionsSkipped);
-console.log(result.encryptedStringsCount, result.mangledSymbolsCount);
+console.log(result.encryptedStringsCount, result.virtualizedFunctionsCount);
 
 // 2. Tüm framework çıktı dizinini koruma
 const summary: ProtectSummary = await protectProject({
@@ -1279,6 +1284,7 @@ const summary: ProtectSummary = await protectProject({
   keepPrivateMaps: true,
   privateMapsDir: ".unpeek-maps",
   deterrentMode: "gradual",
+  aggressive: false,
 });`,
               },
             ],
@@ -1357,7 +1363,7 @@ unpeek protect --out-dir .next/static/chunks --passive --seed 0x7f4a2c`,
             ],
           },
           {
-            title: "Üretim yığın izleri _0x4a1 gösteriyor",
+            title: "Üretim yığın izleri kısaltılmış semboller gösteriyor",
             body: [
               "Kaynak haritaları `.unpeek-maps/` içine taşınır ve `//# sourceMappingURL=` yorumu genel paketten silinir, böylece tarayıcının çözeceği bir adres kalmaz. Kasayı genel dizin yerine hata izleyicinize yükleyin.",
             ],
@@ -1370,8 +1376,8 @@ unpeek protect --out-dir .next/static/chunks --passive --seed 0x7f4a2c`,
           {
             title: "Yavaş bir fonksiyon sıcak işaretlenmedi",
             body: [
-              "Sıcak durumu döngülerden, `requestAnimationFrame` geri çağrılarından ve yüksek frekanslı zamanlayıcılardan gelir; zincirdeki her çağrılana geçer. Web Worker, sanallaştırılmış liste veya döngüsüz bir layout effect tarafından yürütülen işler bu grafiğin parçası değildir.",
-              "Bu güvenlidir ama bedava değildir: fonksiyon doğru çalışmaya devam eder, yalnızca kasa aramasının maliyetini öder. Profil bu maliyeti gösteriyorsa işi algılanan bir kare döngüsünün arkasına taşıyın ya da `--min-string-length` değerini yükselterek kasaya daha az sabit sokun.",
+              "`TRUE_HOT_60FPS` döngülerden, `requestAnimationFrame` ve `useFrame` içinden yayılır. Sığ UI bileşenleri ise yalnızca kendi doğrudan render karelerini sıcak tutar; iç olay işleyicileri (`onSubmit`, `handleSave`) soğuk korumaya alınır.",
+              "Profil döngü grafiği dışındaki bir yardımcıda kasa maliyeti gösteriyorsa işi algılanan bir kare döngüsünün arkasına taşıyın ya da `--min-string-length` değerini yükselterek kasaya daha az sabit sokun.",
             ],
           },
         ],
@@ -1381,37 +1387,38 @@ unpeek protect --out-dir .next/static/chunks --passive --seed 0x7f4a2c`,
         number: "08",
         title: "Güvenlik Modeli ve Sınırları",
         summary:
-          "Dönüşümün size ne kazandırdığı, neyi kazandırmadığı ve çalışma zamanı kalkanının nasıl okunacağı.",
+          "Katman 1 ve Katman 2 (--aggressive) dönüşümlerinin ne kazandırdığı, neyi kazandırmadığı ve senkron kalkan davranışı.",
         subsections: [
           {
             title: "Tehdit modeli",
             body: [
-              "unpeek istemci paketini okumanın maliyetini yükseltir. String sabitleri kaynaktan çıkar, yerel bağlar tohumlanmış polimorfik bir geçişle yeniden adlandırılır ve soğuk kontrol akışı yeniden yazılır; böylece bir okuyucu gönderilen dosyadan lisans kontrolünü ya da iç uç noktayı doğrudan takip edemez.",
-              "Bu bir kriptografik sınır değildir. Tarayıcının çalıştırabildiği her kodu, onu teslim alan herkes çalıştırabilir. Çıktıyı gizli bilgi kasası değil, meraklı gözle bakmaya ve kazımaya karşı caydırıcı olarak değerlendirin.",
+              "unpeek istemci paketini okumanın maliyetini yükseltir. String sabitleri kaçışsız veya çağrı-noktası tuzlu kasalara taşınır, yerel bağlar kompakt polimorfik adlar alır ve soğuk fonksiyonlar 4 aileli bağlamsal MBA koruyucuları veya `--aggressive` ile Micro-VM baytkod derlemesi kazanır.",
+              "Bu bir kriptografik sınır değildir. Tarayıcının çalıştırabildiği her kodu, onu teslim alan herkes çalıştırabilir. Çıktıyı gizli bilgi kasası değil, meraklı gözle bakmaya ve otomatik AST çözücülere karşı caydırıcı olarak değerlendirin.",
             ],
             bullets: [
-              "API anahtarlarını, imzalama tuzlarını veya özel jetonları istemci kodunda göndermeyin. Kasa onları taşır, korumaz.",
+              "API anahtarlarını, imzalama tuzlarını veya özel jetonları istemci kodunda göndermeyin. Kasa onları gizler ve taşır; çalışma zamanında gözlemlenmesini tek başına engelleyemez.",
               "Yetkilendirme kararlarını sunucuda tutun. Korumalı bir paket de bunun için güvenilir bir yer değildir.",
               "CI içinde `--seed` değerini sabitleyin; böylece tekrarlanan derlemeler aynı çıktıyı üretir ve farklar incelenebilir kalır.",
             ],
           },
           {
-            title: "Çalışma zamanı kalkanı",
+            title: "Senkron kalkan & koruma katmanları",
             body: [
-              "Enjekte edilen kalkan kendi kaynağını `Function.prototype.toString()` üzerinden 32 bit FNV-1a ile özetler. Korumalı fonksiyonun güzel biçimlendirilmesi, yamalanması veya sarmalanması özeti değiştirir ve caydırıcıyı tetikler.",
-              "`--passive` günlükler ve devam eder. Varsayılan `gradual` modu ilk uyuşmazlıkta hata fırlatmak yerine kademeli olarak sertleşir; böylece tek bir yanlış pozitif üretim oturumunu düşürmez.",
+              "Enjekte edilen kalkan `Function.prototype.toString()` üzerinden kendi kaynağını senkron biçimde özetler ve string kasaları çözülmeden önce 5-bitlik anahtar bileşenini `window[sym]` üzerine yazar; böylece asenkron microtask yarışını kapatır.",
+              "`--passive` yalnızca `CustomEvent('unpeek:tamper')` olayını tetiklerken, `deterrentMode: 'gradual'` kasa anahtarını zehirler ve konsolu susturur. Yüksek değerli istemci mantığı için Bytecode Micro-VM ve satıriçi WASM KDF'i `--aggressive` ile açın.",
             ],
             codeBlocks: [
               {
-                label: "Terminal: Kalkan modları",
+                label: "Terminal: Katmanlar & kalkan modları",
                 language: "bash",
-                code: `# Kademeli caydırıcı (varsayılan)
+                code: `# Katman 1 varsayılan profil (deterministik tohum)
 unpeek protect --seed 0x7f4a2c
 
-# Aşamalı dağıtım için pasif caydırıcı
-unpeek protect --passive
+# Katman 2 agresif profil (Micro-VM + satıriçi WASM KDF + tuzlu kasa)
+unpeek protect --aggressive --seed 0x7f4a2c
 
-# Kalkan olmadan
+# Pasif telemetri / kalkan olmadan
+unpeek protect --passive
 unpeek protect --no-shield`,
               },
             ],
