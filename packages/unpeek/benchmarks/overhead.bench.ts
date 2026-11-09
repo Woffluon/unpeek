@@ -338,19 +338,63 @@ function buildRealisticApplicationBundle(): string {
   `;
 }
 
-function createBenchmarkRunner(codeToRun: string): (data: number[]) => number {
+function createBenchmarkRunner(
+  codeToRun: string,
+  mode: 'hot' | 'mixed'
+): (data: number[]) => number {
+  const loopBody =
+    mode === 'hot'
+      ? 'for (let i = 0; i < 25000; i++) { s += computeHotRenderMetrics(sampleData); }'
+      : 'for (let i = 0; i < 25000; i++) { s += computeHotRenderMetrics(sampleData); if (i % 2500 === 0) { s += createClientSession("usr_101", "tnt_99"); } }';
   const executableBody =
     codeToRun.replace(/export\s+function/g, 'function') +
-    '\nreturn function(sampleData) { let s = 0; for (let i = 0; i < 4000; i++) { s += computeHotRenderMetrics(sampleData); if (i % 400 === 0) { s += createClientSession("usr_101", "tnt_99"); } } return s; };';
+    `\nreturn function(sampleData) { let s = 0; ${loopBody} return s; };`;
   const factory = new Function(executableBody);
   return factory();
 }
 
-function trimmedMean(values: number[]): number {
+function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
-  // Drop top 2 and bottom 2 outliers (GC / OS context-switch spikes)
-  const core = sorted.slice(2, sorted.length - 2);
-  return core.reduce((acc, v) => acc + v, 0) / core.length;
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+function measureInterleavedOverheadPct(
+  runOriginal: (data: number[]) => number,
+  runProtected: (data: number[]) => number,
+  sampleData: number[]
+): number {
+  // Warmup V8 TurboFan JIT for both functions identically
+  for (let w = 0; w < 7; w++) {
+    runOriginal(sampleData);
+    runProtected(sampleData);
+  }
+
+  const origSamples: number[] = [];
+  const protSamples: number[] = [];
+
+  for (let r = 0; r < 13; r++) {
+    if (r % 2 === 0) {
+      const s1 = performance.now();
+      runOriginal(sampleData);
+      origSamples.push(performance.now() - s1);
+
+      const s2 = performance.now();
+      runProtected(sampleData);
+      protSamples.push(performance.now() - s2);
+    } else {
+      const s2 = performance.now();
+      runProtected(sampleData);
+      protSamples.push(performance.now() - s2);
+
+      const s1 = performance.now();
+      runOriginal(sampleData);
+      origSamples.push(performance.now() - s1);
+    }
+  }
+
+  const origMedianMs = median(origSamples);
+  const protMedianMs = median(protSamples);
+  return Math.max(0, ((protMedianMs - origMedianMs) / origMedianMs) * 100);
 }
 
 async function runBenchmark() {
@@ -375,42 +419,18 @@ async function runBenchmark() {
   const protGzip = zlib.gzipSync(finalProtectedCode).byteLength;
   const gzipDeltaPct = ((protGzip - origGzip) / origGzip) * 100;
 
-  const runOriginal = createBenchmarkRunner(realisticClientBundle);
-  const runProtected = createBenchmarkRunner(finalProtectedCode);
   const sampleData = Array.from({ length: 500 }, (_, i) => (i % 40) + 16);
 
-  // Warmup V8 TurboFan JIT for both functions identically
-  for (let w = 0; w < 5; w++) {
-    runOriginal(sampleData);
-    runProtected(sampleData);
-  }
-
-  const origSamples: number[] = [];
-  const protSamples: number[] = [];
-
-  for (let r = 0; r < 11; r++) {
-    if (r % 2 === 0) {
-      const s1 = performance.now();
-      runOriginal(sampleData);
-      origSamples.push(performance.now() - s1);
-
-      const s2 = performance.now();
-      runProtected(sampleData);
-      protSamples.push(performance.now() - s2);
-    } else {
-      const s2 = performance.now();
-      runProtected(sampleData);
-      protSamples.push(performance.now() - s2);
-
-      const s1 = performance.now();
-      runOriginal(sampleData);
-      origSamples.push(performance.now() - s1);
-    }
-  }
-
-  const origMedianMs = trimmedMean(origSamples);
-  const protMedianMs = trimmedMean(protSamples);
-  const cpuOverheadPct = Math.max(0, ((protMedianMs - origMedianMs) / origMedianMs) * 100);
+  const hotCpuOverheadPct = measureInterleavedOverheadPct(
+    createBenchmarkRunner(realisticClientBundle, 'hot'),
+    createBenchmarkRunner(finalProtectedCode, 'hot'),
+    sampleData
+  );
+  const cpuOverheadPct = measureInterleavedOverheadPct(
+    createBenchmarkRunner(realisticClientBundle, 'mixed'),
+    createBenchmarkRunner(finalProtectedCode, 'mixed'),
+    sampleData
+  );
 
   console.log('==================================================');
   console.log('             UNPEEK BENCHMARK REPORT              ');
@@ -423,11 +443,16 @@ async function runBenchmark() {
   console.log(`Cold-Path Protected Fns: ${transformed.hotPathReport.coldFunctionsProtected.join(', ')}`);
   console.log(`Encrypted Strings      : ${transformed.encryptedStringsCount}`);
   console.log(`Mangled Local Symbols  : ${transformed.mangledSymbolsCount}`);
+  console.log(`Hot-Loop CPU Overhead  : ${hotCpuOverheadPct.toFixed(2)}% (Budget: < 2.00%)`);
   console.log(`Runtime CPU Overhead   : ${cpuOverheadPct.toFixed(2)}% (Budget: < 2.00%)`);
   console.log('==================================================');
 
   if (buildTimeMs > 3000) {
     console.error('FAIL: Build time exceeded 3000ms budget');
+    process.exit(1);
+  }
+  if (hotCpuOverheadPct > 2.0) {
+    console.error(`FAIL: Hot-loop CPU overhead ${hotCpuOverheadPct.toFixed(2)}% exceeded 2.00% budget`);
     process.exit(1);
   }
   if (cpuOverheadPct > 2.0) {
