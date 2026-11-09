@@ -208,7 +208,7 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
     },
     hero: {
       eyebrow: "CALL-GRAPH AWARE JS PROTECTION",
-      metaRight: "v1.8.1 / MIT / npm",
+      metaRight: "v1.8.2 / MIT / npm",
       headlineTop: "Nothing to peek at.",
       headlineBottom: "Nothing to slow down.",
       subtext:
@@ -430,7 +430,7 @@ npx unpeek protect --seed 482910
     "postbuild": "unpeek protect"
   },
   "devDependencies": {
-    "unpeek": "^1.8.1"
+    "unpeek": "^1.8.2"
   }
 }`,
               },
@@ -833,7 +833,7 @@ unpeek protect --no-shield`,
     },
     hero: {
       eyebrow: "ÇAĞRI GRAFİĞİ FARKINDALIKLI JS KORUMASI",
-      metaRight: "v1.8.1 / MIT / npm",
+      metaRight: "v1.8.2 / MIT / npm",
       headlineTop: "Bakacak bir şey yok.",
       headlineBottom: "Yavaşlayacak bir şey yok.",
       subtext:
@@ -1055,7 +1055,7 @@ npx unpeek protect --seed 482910
     "postbuild": "unpeek protect"
   },
   "devDependencies": {
-    "unpeek": "^1.8.1"
+    "unpeek": "^1.8.2"
   }
 }`,
               },
