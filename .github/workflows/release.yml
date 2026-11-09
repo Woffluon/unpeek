@@ -40,7 +40,7 @@ jobs:
       target_sha: ${{ steps.target.outputs.sha }}
     steps:
       - name: Checkout main history
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
@@ -57,6 +57,7 @@ jobs:
           & git merge-base --is-ancestor $Target origin/main
           if ($LASTEXITCODE -ne 0) { throw "Release target must be reachable from main: $Target" }
           powershell -File scripts/validate-version.ps1 -CommitSha $Target
+          if ($LASTEXITCODE -ne 0) { throw "Version validation failed for $Target" }
           "sha=$Target" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
   discover:
@@ -68,7 +69,7 @@ jobs:
       count: ${{ steps.discover.outputs.count }}
     steps:
       - name: Checkout target history
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           fetch-depth: 0
@@ -82,10 +83,93 @@ jobs:
         run: |
           powershell -File scripts/discover-release-backlog.ps1 -TargetSha $env:TARGET_SHA
 
+  verify-core:
+    name: Verify Release Candidate (${{ matrix.os }})
+    needs: [ preflight, discover ]
+    if: success() && needs.discover.outputs.count != '0'
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ windows-latest, ubuntu-latest ]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout release candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Verify Version Consistency
+        shell: pwsh
+        env:
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          pwsh -File scripts/test-versioning.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -File scripts/validate-version.ps1 -CommitSha $env:TARGET_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Core Package
+        run: pnpm --filter unpeek run build
+
+      - name: Typecheck Core Package
+        run: pnpm --filter unpeek run typecheck
+
+      - name: Unit, E2E & REA Resistance Tests
+        run: pnpm --filter unpeek run test:coverage
+
+      - name: Enforce CPU (<2%) & Gzip (<15%) Budgets
+        run: pnpm --filter unpeek run bench
+
+  verify-web:
+    name: Verify Website Release Candidate
+    needs: [ preflight, discover ]
+    if: success() && needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout release candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck Website
+        run: pnpm --filter web run typecheck
+
+      - name: Build Website
+        env:
+          NEXT_PUBLIC_BASE_PATH: /unpeek
+        run: pnpm --filter web run build
+
   publish:
     name: Publish ${{ matrix.release.tag }}
-    needs: discover
-    if: needs.discover.outputs.count != '0'
+    needs: [ discover, verify-core, verify-web ]
+    if: success() && needs.discover.outputs.count != '0'
     strategy:
       fail-fast: true
       max-parallel: 1
@@ -99,14 +183,43 @@ jobs:
       id-token: write
     steps:
       - name: Checkout release commit
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ matrix.release.sha }}
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Check immutable tag and release state
+        id: state
+        shell: powershell
+        env:
+          RELEASE_SHA: ${{ matrix.release.sha }}
+          RELEASE_TAG: ${{ matrix.release.tag }}
+          RELEASE_VERSION: ${{ matrix.release.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $CheckSha = $env:RELEASE_SHA
+          $RemoteTag = @(& git ls-remote --tags origin "refs/tags/$($env:RELEASE_TAG)" "refs/tags/$($env:RELEASE_TAG)^{}")
+          if ($LASTEXITCODE -ne 0) { throw "Failed to query remote tag state for $($env:RELEASE_TAG)." }
+          if ($RemoteTag.Count -gt 0) {
+            & git fetch --force origin "refs/tags/$($env:RELEASE_TAG):refs/tags/$($env:RELEASE_TAG)" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Failed to fetch existing tag $($env:RELEASE_TAG)." }
+            $CheckSha = (& git rev-list -n 1 $env:RELEASE_TAG).Trim()
+            if ($LASTEXITCODE -ne 0 -or -not $CheckSha) { throw "Cannot resolve commit for existing tag $($env:RELEASE_TAG)." }
+            & git merge-base --is-ancestor $CheckSha $env:RELEASE_SHA
+            if ($LASTEXITCODE -ne 0) { throw "Existing tag $($env:RELEASE_TAG) ($CheckSha) is not an ancestor of $($env:RELEASE_SHA)." }
+          }
+          powershell -File scripts/test-existing-release.ps1 `
+            -ReleaseSha $CheckSha `
+            -ReleaseTag $env:RELEASE_TAG `
+            -Version $env:RELEASE_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Existing release verification failed for $($env:RELEASE_TAG)." }
+          $Subject = (& git log -1 --format="%s" $env:RELEASE_SHA).Trim()
+          "COMMIT_MSG=$Subject" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Setup pnpm
-        uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node.js for build and release
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -126,12 +239,13 @@ jobs:
         run: powershell -File scripts/stage-release.ps1
 
       - name: Publish immutable GitHub release
-        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
+        if: steps.state.outputs.needed == 'true'
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ matrix.release.tag }}
           name: unpeek ${{ matrix.release.tag }}
           body: |
-            ${{ matrix.release.tag }}
+            ${{ env.COMMIT_MSG || matrix.release.tag }}
 
             ### Installation
             ```bash
@@ -153,27 +267,58 @@ jobs:
 
       - name: Publish package to npm registry via OIDC Trusted Publishing
         shell: powershell
+        env:
+          RELEASE_VERSION: ${{ matrix.release.version }}
         run: |
-          $Version = "${{ matrix.release.version }}"
-          $Existing = ""
+          $ErrorActionPreference = "Stop"
+          $Version = $env:RELEASE_VERSION
+          $AlreadyPublished = $false
           try {
-            $Existing = (& npm view "unpeek@$Version" version 2>$null | Out-String).Trim()
+            $Resp = Invoke-RestMethod -Uri "https://registry.npmjs.org/unpeek/$Version" -Method Get -Headers @{ "Cache-Control" = "no-cache, no-store, max-age=0" }
+            if ($Resp.version -ceq $Version) {
+              $AlreadyPublished = $true
+            }
           } catch {
-            $Existing = ""
+            $AlreadyPublished = $false
           }
-          if ($Existing -ceq $Version) {
+
+          if ($AlreadyPublished) {
             Write-Host "unpeek@$Version is already published on npm; skipping npm publish." -ForegroundColor Yellow
             return
           }
+
           Write-Host "Publishing unpeek@$Version via npm OIDC Trusted Publishing..." -ForegroundColor Cyan
           Write-Host "NPM CLI version: $(& npm --version)" -ForegroundColor Cyan
           & npm publish "./artifacts/unpeek-v$Version.tgz" --access public --provenance
           if ($LASTEXITCODE -ne 0) { throw "npm publish failed for unpeek@$Version" }
 
+          Write-Host "Polling https://registry.npmjs.org/unpeek/$Version until live..." -ForegroundColor Cyan
+          $MaxAttempts = 45
+          $DelaySeconds = 20
+          $Available = $false
+          for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
+            try {
+              $Check = Invoke-RestMethod -Uri "https://registry.npmjs.org/unpeek/$Version" -Method Get -Headers @{ "Cache-Control" = "no-cache, no-store, max-age=0" }
+              if ($Check.version -ceq $Version) {
+                $Available = $true
+                Write-Host "Verified unpeek@$Version is queryable on npm (attempt $Attempt/$MaxAttempts)." -ForegroundColor Green
+                break
+              }
+            } catch {
+              Write-Host "Attempt $Attempt/${MaxAttempts}: unpeek@$Version still processing; retrying in ${DelaySeconds}s..."
+            }
+            if ($Attempt -lt $MaxAttempts) {
+              Start-Sleep -Seconds $DelaySeconds
+            }
+          }
+          if (-not $Available) {
+            throw "unpeek@$Version did not become queryable on registry.npmjs.org within $($MaxAttempts * $DelaySeconds)s after npm publish."
+          }
+
   finalize:
     name: Finalize Latest Release
     needs: [ discover, publish ]
-    if: needs.discover.outputs.count != '0' && needs.publish.result == 'success'
+    if: success() && needs.discover.outputs.count != '0' && needs.publish.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -198,6 +343,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Cannot mark discovered release $($Latest.tag) as latest." }
 
       - name: Deploy refreshed website data
+        if: github.event_name != 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run deploy-pages.yml --repo "$GITHUB_REPOSITORY" --ref main
