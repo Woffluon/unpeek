@@ -1,7 +1,7 @@
 {
   "name": "unpeek-monorepo",
   "private": true,
-  "version": "1.8.1",
+  "version": "1.8.2",
   "description": "Zero-config, near-zero-overhead (<2% CPU) client-side JavaScript protection & anti-reverse-engineering toolkit.",
   "repository": {
     "type": "git",
