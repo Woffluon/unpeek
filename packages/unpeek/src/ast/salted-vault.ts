@@ -1,6 +1,6 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
-import { computeFnv1aHash } from './string-vault.js';
+import { computeFnv1aHash, SAFE_ALPHA } from './string-vault.js';
 import { fallbackKdf, injectWasmVault } from './wasm-vault.js';
 
 const DIRECTIVE_STRINGS = new Set([
@@ -15,6 +15,68 @@ export interface SaltedVaultResult {
   integrityToken: number;
   vaultVarName: string;
   decryptFnName: string;
+}
+
+/**
+ * Computes deterministic 8-bit call-site salt for lazy string resolution.
+ */
+export function computeCallSiteSalt(seed: number, idx: number): number {
+  return (((seed & 15) ^ (idx * 5) + 3) & 31) >>> 0;
+}
+
+/**
+ * Creates the compact lazy-memoized decryptor function AST for Layer 1 on-demand resolution.
+ */
+export function createSaltedDecryptorFnAst(
+  seed: number,
+  pChars: string,
+  expectedDelta: number,
+  windowKeySymbol: string,
+  safeAlpha = SAFE_ALPHA
+): any {
+  const fBody = `var memo=[];var s=Function.prototype.toString,w=typeof window!=='undefined'&&window,src=s.call(f);for(var h=0x811c9dc5,j=0;j<src.length;j++)h=Math.imul(h^src.charCodeAt(j),0x01000193)>>>0;var rot=(h^((""._u||a._u||0))^(w&&w['${windowKeySymbol}']!=null?w['${windowKeySymbol}']:${expectedDelta}))&31;var A="${safeAlpha}",P="${pChars}";return function(i,s){if(memo[i]!==void 0)return memo[i];var p=a[i];if(!p)return "";var o="";for(var j=0;j<p.length;j++){var c=p.charAt(j),k=A.indexOf(c);if(k<0){o+=c;}else{var y=(k-s+rot+9200)%92;var z=A.indexOf(P.charAt(y));o+=A.charAt((z-rot+9200)%92);}}return(memo[i]=o);};`;
+
+  return (
+    acorn.parse(`(function f(a){${fBody}})`, {
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+    }) as any
+  ).body[0].expression;
+}
+
+/**
+ * Creates the VariableDeclaration AST defining the compact _uD(index, salt) decryptor helper.
+ */
+export function createSaltedVaultHelperAst(
+  decryptFnName: string,
+  encryptedPayloads: string[],
+  fnAst: any
+): any {
+  return {
+    type: 'VariableDeclaration',
+    kind: 'var',
+    declarations: [
+      {
+        type: 'VariableDeclarator',
+        id: { type: 'Identifier', name: decryptFnName },
+        init: {
+          type: 'CallExpression',
+          callee: fnAst,
+          arguments: [
+            {
+              type: 'ArrayExpression',
+              elements: encryptedPayloads.map((str) => ({
+                type: 'Literal',
+                value: str,
+                raw: JSON.stringify(str),
+              })),
+            },
+          ],
+          optional: false,
+        },
+      },
+    ],
+  };
 }
 
 /**

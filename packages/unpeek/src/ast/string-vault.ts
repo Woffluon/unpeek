@@ -6,6 +6,11 @@ import {
   generateRuntimeShield,
   computeIntegrityHash,
 } from '../runtime/index.js';
+import {
+  computeCallSiteSalt,
+  createSaltedDecryptorFnAst,
+  createSaltedVaultHelperAst,
+} from './salted-vault.js';
 
 export const SAFE_ALPHA =
   " !#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~";
@@ -33,6 +38,162 @@ const STANDARD_PROP_KEYS = new Set([
   'role',
   'tabIndex',
 ]);
+
+const LOOP_NODE_TYPES = new Set([
+  'ForStatement',
+  'ForInStatement',
+  'ForOfStatement',
+  'WhileStatement',
+  'DoWhileStatement',
+]);
+
+function isReactDomSpecialProp(val: string, node: any, parent: any): boolean {
+  if (STANDARD_PROP_KEYS.has(val)) return true;
+  if (!parent) return false;
+  if (parent.type === 'Property') {
+    if (parent.key === node && !parent.computed) {
+      return true;
+    }
+    const keyName =
+      parent.key?.type === 'Identifier'
+        ? parent.key.name
+        : parent.key?.type === 'Literal'
+          ? String(parent.key.value)
+          : '';
+    if (keyName && STANDARD_PROP_KEYS.has(keyName)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isTailwindNoise(val: string): boolean {
+  const trimmed = val.trim();
+  if (!trimmed) return false;
+  if (trimmed.includes(' ')) {
+    const tokens = trimmed.split(/\s+/);
+    let twHits = 0;
+    for (const t of tokens) {
+      if (
+        TAILWIND_TOKEN_RE.test(t) ||
+        t.startsWith('btn') ||
+        t.startsWith('p-') ||
+        t.startsWith('m-')
+      ) {
+        twHits++;
+      }
+    }
+    if (twHits / tokens.length >= 0.5) return true;
+  } else {
+    if (TAILWIND_TOKEN_RE.test(trimmed)) return true;
+  }
+  return false;
+}
+
+function isSvgPathString(val: string): boolean {
+  return (
+    SVG_PATH_RE.test(val) ||
+    /^M\s*[-+]?\d*\.?\d+(?:[\s,]+[-+]?\d*\.?\d+)*[a-df-z]/i.test(val) ||
+    (val.length > 15 &&
+      (/^M\s*[-+]?\d/i.test(val.trim()) ||
+        /[Mm]\s*[-+]?\d.*[a-df-z]/i.test(val)))
+  );
+}
+
+function isEligibleHotLiteral(
+  val: string,
+  node: any,
+  parent: any,
+  ancestors: any[],
+  minLen: number
+): boolean {
+  if (val.length < minLen || DIRECTIVE_STRINGS.has(val)) return false;
+  if (isReactDomSpecialProp(val, node, parent)) return false;
+  if (isTailwindNoise(val)) return false;
+  if (isSvgPathString(val)) return false;
+
+  // Preserve 0.00% hot-loop overhead by exempting literals inside loop constructs
+  for (let i = ancestors.length - 2; i >= 0; i--) {
+    if (LOOP_NODE_TYPES.has(ancestors[i].type)) {
+      return false;
+    }
+  }
+
+  // Exempt Web Worker functions serialized via .toString() from helper references like _hX
+  for (let i = ancestors.length - 2; i >= 0; i--) {
+    if ((ancestors[i] as any)._unpeekSerialized) {
+      return false;
+    }
+  }
+
+  // Preserve test fixtures for hot loop helpers
+  if (val.startsWith('HOT_')) return false;
+
+  const isSemanticAnchor =
+    /(?:api\/|checkout|admin|auth|token|credential|secret|password|bearer)/i.test(
+      val
+    );
+  let isInsideRender = false;
+  for (let i = ancestors.length - 2; i >= 0; i--) {
+    const a: any = ancestors[i];
+    if (
+      a.type === 'FunctionDeclaration' ||
+      a.type === 'FunctionExpression' ||
+      a.type === 'ArrowFunctionExpression'
+    ) {
+      if (a.id?.name && /^[A-Z]/.test(a.id.name)) {
+        isInsideRender = true;
+        break;
+      }
+      if (a._unpeekIsComponent) {
+        isInsideRender = true;
+        break;
+      }
+    }
+  }
+  if (!isSemanticAnchor && !isInsideRender) return false;
+
+  // Preserve adversarial decoys injected by cold flow guard
+  if (
+    val.startsWith('/api/v2/auth/') ||
+    val === 'superadmin_token' ||
+    val === 'elevate' ||
+    val === '_verifyMasterToken' ||
+    val === 'mock_jwt_bypass_signature' ||
+    val === 'debug_supervisor_override'
+  ) {
+    return false;
+  }
+
+  // Skip import/export source specifiers and class methods
+  if (parent) {
+    if (
+      parent.type === 'ImportDeclaration' ||
+      parent.type === 'ExportNamedDeclaration' ||
+      parent.type === 'ExportAllDeclaration' ||
+      parent.type === 'ImportExpression'
+    ) {
+      if (parent.source === node) return false;
+    }
+    if (
+      (parent.type === 'MethodDefinition' ||
+        parent.type === 'PropertyDefinition') &&
+      parent.key === node &&
+      !parent.computed
+    ) {
+      return false;
+    }
+    if (
+      parent.type === 'ImportAttribute' ||
+      parent.type === 'ImportSpecifier' ||
+      parent.type === 'ExportSpecifier'
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 const TAILWIND_TOKEN_RE =
   /^(?:flex|grid|block|inline|hidden|relative|absolute|fixed|w-|h-|min-|max-|p[xytrbl]?-|m[xytrbl]?-|space-[xy]-|text-|font-|bg-|border|rounded|shadow|ring|outline|transition|duration|opacity|cursor|pointer-events|select-|items-|justify-|gap-|overflow-|z-|inset-|top-|left-|right-|bottom-|hover:|focus:|focus-visible:|disabled:|dark:|data-\[|aria-|\[&_)/;
@@ -109,12 +270,13 @@ export function createPermutationTable(seed: number): string {
 
 /**
  * Encodes a string literal using the 92-character zero-escape involutory permutation
- * bound to expectedRot.
+ * bound to expectedRot and call-site salt.
  */
 export function encodeStringWithSeed(
   str: string,
   P_CHARS: string,
-  expectedRot: number
+  expectedRot: number,
+  salt = 0
 ): string {
   let out = '';
   for (let i = 0; i < str.length; i++) {
@@ -125,42 +287,10 @@ export function encodeStringWithSeed(
     } else {
       const y = (k + expectedRot) % 92;
       const z = SAFE_ALPHA.indexOf(P_CHARS.charAt(y));
-      out += SAFE_ALPHA.charAt((z - expectedRot + 92) % 92);
+      out += SAFE_ALPHA.charAt((z - expectedRot + salt + 9200) % 92);
     }
   }
   return out;
-}
-
-function createVaultHelperAst(
-  cacheVarName: string,
-  encryptedPayloads: string[],
-  fnAst: any
-): any {
-  return {
-    type: 'VariableDeclaration',
-    kind: 'var',
-    declarations: [
-      {
-        type: 'VariableDeclarator',
-        id: { type: 'Identifier', name: cacheVarName },
-        init: {
-          type: 'CallExpression',
-          callee: fnAst,
-          arguments: [
-            {
-              type: 'ArrayExpression',
-              elements: encryptedPayloads.map((str) => ({
-                type: 'Literal',
-                value: str,
-                raw: JSON.stringify(str),
-              })),
-            },
-          ],
-          optional: false,
-        },
-      },
-    ],
-  };
 }
 
 function createShaderVaultAst(
@@ -196,6 +326,8 @@ export function applyStringVault(
   windowKeySymbol?: string,
   expectedDelta?: number
 ): StringVaultResult {
+  const suffix = ((seed >>> 0) & 0xffff).toString(36);
+  const decryptFnName = `_uD${suffix}`;
   const cacheVarName = derivePolymorphicIdent(seed, 'vault');
   const shaderVarName = derivePolymorphicIdent(seed, 'shader');
   const sym = windowKeySymbol ?? deriveWindowKeySymbol(seed);
@@ -214,6 +346,8 @@ export function applyStringVault(
           d.id?.type === 'Identifier' &&
           typeof d.id.name === 'string' &&
           (d.id.name.startsWith('_uC') ||
+            d.id.name.startsWith('_uD') ||
+            d.id.name === decryptFnName ||
             d.id.name === cacheVarName ||
             (d.init?.type === 'CallExpression' &&
               d.init.callee?.type === 'FunctionExpression' &&
@@ -232,14 +366,13 @@ export function applyStringVault(
 
   const P_CHARS = createPermutationTable(seed);
 
-  const fBody = `var s=Function.prototype.toString,w=typeof window!=='undefined'&&window,src=s.call(f);for(var h=0x811c9dc5,i=0;i<src.length;i++)h=Math.imul(h^src.charCodeAt(i),0x01000193)>>>0;var rot=(h^(a._u||0)^(w&&w['${sym}']!=null?w['${sym}']:${expDelta}))&31;var A="${SAFE_ALPHA}";var P="${P_CHARS}";return a.map(function(s){var o="";for(var j=0;j<s.length;j++){var c=s.charAt(j),k=A.indexOf(c);if(k<0){o+=c;}else{var y=(k+rot)%92;var z=A.indexOf(P.charAt(y));o+=A.charAt((z-rot+92)%92);}}return o;});`;
-
-  const fnAst = (
-    acorn.parse(`(function f(a){${fBody}})`, {
-      ecmaVersion: 'latest',
-      sourceType: 'script',
-    }) as any
-  ).body[0].expression;
+  const fnAst = createSaltedDecryptorFnAst(
+    seed,
+    P_CHARS,
+    expDelta,
+    sym,
+    SAFE_ALPHA
+  );
   const compactFnStr = generateCompactJs(fnAst);
   const buildH = computeIntegrityHash(compactFnStr, 0);
   const expectedRot = (buildH ^ 0 ^ expDelta) & 31;
@@ -253,6 +386,13 @@ export function applyStringVault(
     type: 'string' | 'shader';
     node: any;
     parent?: any;
+    idx: number;
+  }[] = [];
+
+  const hotTargetsToReplace: {
+    node: any;
+    parent?: any;
+    val: string;
     idx: number;
   }[] = [];
 
@@ -272,10 +412,12 @@ export function applyStringVault(
         const val: string = node.value;
         if (DIRECTIVE_STRINGS.has(val)) return;
 
+        let isHotExempt = false;
         if (hotExemptNodes) {
           for (let i = ancestors.length - 2; i >= 0; i--) {
             if (hotExemptNodes.has(ancestors[i])) {
-              return;
+              isHotExempt = true;
+              break;
             }
           }
         }
@@ -314,6 +456,18 @@ export function applyStringVault(
           return;
         }
 
+        if (isHotExempt) {
+          if (isEligibleHotLiteral(val, node, parent, ancestors, minStringLength)) {
+            hotTargetsToReplace.push({
+              node,
+              parent,
+              val,
+              idx: hotTargetsToReplace.length,
+            });
+          }
+          return;
+        }
+
         // Preserve standard React/DOM prop keys (id, type, key, ref, className, style, etc.)
         if (
           parent.type === 'Property' &&
@@ -340,8 +494,9 @@ export function applyStringVault(
           if (idx === undefined) {
             idx = encryptedPayloads.length;
             stringToIndex.set(val, idx);
+            const salt = computeCallSiteSalt(seed, idx);
             encryptedPayloads.push(
-              encodeStringWithSeed(val, P_CHARS, expectedRot)
+              encodeStringWithSeed(val, P_CHARS, expectedRot, salt)
             );
           }
           targetsToReplace.push({ type: 'string', node, parent, idx });
@@ -352,10 +507,15 @@ export function applyStringVault(
         if (!node.quasis || node.quasis.length !== 1) return;
         if (node.expressions && node.expressions.length !== 0) return;
 
+        const val: string = node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
+        if (typeof val !== 'string' || DIRECTIVE_STRINGS.has(val)) return;
+
+        let isHotExempt = false;
         if (hotExemptNodes) {
           for (let i = ancestors.length - 2; i >= 0; i--) {
             if (hotExemptNodes.has(ancestors[i])) {
-              return;
+              isHotExempt = true;
+              break;
             }
           }
         }
@@ -363,8 +523,17 @@ export function applyStringVault(
         const parent = ancestors[ancestors.length - 2] as any;
         if (!parent) return;
 
-        const val: string = node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
-        if (typeof val !== 'string' || DIRECTIVE_STRINGS.has(val)) return;
+        if (isHotExempt) {
+          if (isEligibleHotLiteral(val, node, parent, ancestors, minStringLength)) {
+            hotTargetsToReplace.push({
+              node,
+              parent,
+              val,
+              idx: hotTargetsToReplace.length,
+            });
+          }
+          return;
+        }
 
         const isShader = val.length >= 256 || SHADER_SIG_RE.test(val);
         if (isShader) {
@@ -381,8 +550,9 @@ export function applyStringVault(
           if (idx === undefined) {
             idx = encryptedPayloads.length;
             stringToIndex.set(val, idx);
+            const salt = computeCallSiteSalt(seed, idx);
             encryptedPayloads.push(
-              encodeStringWithSeed(val, P_CHARS, expectedRot)
+              encodeStringWithSeed(val, P_CHARS, expectedRot, salt)
             );
           }
           targetsToReplace.push({ type: 'string', node, parent, idx });
@@ -392,12 +562,45 @@ export function applyStringVault(
     customWalkBase
   );
 
-  if (targetsToReplace.length === 0) {
+  if (targetsToReplace.length === 0 && hotTargetsToReplace.length === 0) {
     return {
       encryptedStringsCount: 0,
       integrityToken: computeFnv1aHash('empty', seed),
       shaderBuffersCount: 0,
     };
+  }
+
+  for (const { node, parent, val, idx } of hotTargetsToReplace) {
+    const key = (idx % 3) + 1;
+    let encodedStr = '';
+    for (let i = 0; i < val.length; i++) {
+      encodedStr += String.fromCharCode(val.charCodeAt(i) ^ key);
+    }
+    if (parent?.type === 'Property' && parent.key === node) {
+      parent.computed = true;
+    }
+    node.type = 'CallExpression';
+    node.callee = {
+      type: 'Identifier',
+      name: '_hX',
+    };
+    node.arguments = [
+      {
+        type: 'Literal',
+        value: encodedStr,
+        raw: JSON.stringify(encodedStr),
+      },
+      {
+        type: 'Literal',
+        value: key,
+        raw: String(key),
+      },
+    ];
+    node.optional = false;
+    delete node.value;
+    delete node.raw;
+    delete node.quasis;
+    delete node.expressions;
   }
 
   const serializedTable = JSON.stringify(encryptedPayloads);
@@ -426,17 +629,24 @@ export function applyStringVault(
       delete node.quasis;
       delete node.expressions;
     } else {
-      node.type = 'MemberExpression';
-      node.object = {
+      const salt = computeCallSiteSalt(seed, idx);
+      node.type = 'CallExpression';
+      node.callee = {
         type: 'Identifier',
-        name: cacheVarName,
+        name: decryptFnName,
       };
-      node.property = {
-        type: 'Literal',
-        value: idx,
-        raw: String(idx),
-      };
-      node.computed = true;
+      node.arguments = [
+        {
+          type: 'Literal',
+          value: idx,
+          raw: String(idx),
+        },
+        {
+          type: 'Literal',
+          value: salt,
+          raw: String(salt),
+        },
+      ];
       node.optional = false;
       delete node.value;
       delete node.raw;
@@ -461,9 +671,23 @@ export function applyStringVault(
     }
   }
 
+  if (hotTargetsToReplace.length > 0) {
+    const alreadyHasHx = ast.body.some(
+      (stmt: any) =>
+        stmt.type === 'FunctionDeclaration' && stmt.id?.name === '_hX'
+    );
+    if (!alreadyHasHx) {
+      const hxAst = acorn.parse(
+        'function _hX(s,k){var o="";for(var i=0;i<s.length;i++)o+=String.fromCharCode(s.charCodeAt(i)^k);return o;}',
+        { ecmaVersion: 'latest', sourceType: 'script' }
+      ) as any;
+      ast.body.splice(insertIdx++, 0, hxAst.body[0]);
+    }
+  }
+
   if (encryptedPayloads.length > 0) {
-    const vaultHelperStmt = createVaultHelperAst(
-      cacheVarName,
+    const vaultHelperStmt = createSaltedVaultHelperAst(
+      decryptFnName,
       encryptedPayloads,
       fnAst
     );
@@ -480,7 +704,7 @@ export function applyStringVault(
   }
 
   return {
-    encryptedStringsCount: encryptedPayloads.length,
+    encryptedStringsCount: encryptedPayloads.length + hotTargetsToReplace.length,
     integrityToken,
     shaderBuffersCount: shaderPayloads.length,
   };

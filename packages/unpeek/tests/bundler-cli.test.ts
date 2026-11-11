@@ -359,7 +359,7 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
     for (const relName of chunkNames) {
       const fullPath = path.join(chunksDir, relName);
       const code = fs.readFileSync(fullPath, 'utf8');
-      const match = code.match(/\bvar (_a[a-z0-9]+|_uC[a-z0-9]+)\b/);
+      const match = code.match(/\bvar (_a[a-z0-9]+|_uC[a-z0-9]+|_uD[a-z0-9]+)\b/);
       expect(match).not.toBeNull();
       vaultVarNames.add(match![1]);
 

@@ -275,6 +275,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
   }
 
   function markSerializedFunction(node: acorn.Node): void {
+    (node as any)._unpeekSerialized = true;
     serializedWorkerNodes.add(node);
     serializedFunctionNodes.add(node);
     hotFunctionNodes.add(node);
@@ -360,6 +361,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
       shallowComponentNodes.add(node);
       hotFunctionNodes.add(node);
       directHotNodes.add(node);
+      hotExemptNodes.add(node);
     }
 
     if (isZeroArgIifeFactoryFunction(node)) {
@@ -680,6 +682,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
           shallowComponentNodes.add(enclosingFn);
           hotFunctionNodes.add(enclosingFn);
           directHotNodes.add(enclosingFn);
+          hotExemptNodes.add(enclosingFn);
         }
       }
     },
@@ -779,6 +782,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
         // Serialized worker propagates downward 1A
         if (serializedWorkerNodes.has(anc)) {
           if (!serializedWorkerNodes.has(fn.node)) {
+            (fn.node as any)._unpeekSerialized = true;
             serializedWorkerNodes.add(fn.node);
             serializedFunctionNodes.add(fn.node);
             hotFunctionNodes.add(fn.node);
@@ -815,6 +819,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
           !serializedWorkerNodes.has(targetNode) &&
           !coldForcedNodes.has(targetNode)
         ) {
+          (targetNode as any)._unpeekSerialized = true;
           serializedWorkerNodes.add(targetNode);
           serializedFunctionNodes.add(targetNode);
           hotFunctionNodes.add(targetNode);
