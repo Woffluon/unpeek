@@ -236,8 +236,8 @@ describe('AST & Call-Graph Transformation Engine', () => {
       // Identifier keys like staticKey: must remain as identifier keys
       expect(res.code).toContain('staticKey:');
 
-      // String literal keys must be transformed into computed member expressions: [_uC...[idx]]:
-      expect(res.code).toMatch(/\[(_a[a-z0-9]+|_uC[a-z0-9]+)\[\d+\]\]:/);
+      // String literal keys must be transformed into computed expressions with salted lazy resolution
+      expect(res.code).toMatch(/\[(_a[a-z0-9]+|_uC[a-z0-9]+|_uD[a-z0-9]*)(\[\d+\]|\(\d+,\s*\d+\))\]:/);
 
       // Verify that the code executes with 100% semantic equivalence
       const result = new Function(res.code)();

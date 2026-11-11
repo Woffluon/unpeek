@@ -238,4 +238,93 @@ describe('Reverse Engineering & Deobfuscation Resistance (Acceptance Thresholds)
     expect(decoyResult).toBeDefined();
     expect(decoyResult.endpoint).toMatch(/^\/api\/v2\/auth\//);
   });
+
+  it('defeats memory dump deobfuscation by preventing mass in-memory string decryption at module evaluation time', () => {
+    const code = `
+      function uncalledColdFunction() {
+        return "SUPER_SECRET_PAYLOAD_UNTOUCHED";
+      }
+      function calledColdFunction() {
+        return "CALLED_SECRET_PAYLOAD_123";
+      }
+      return calledColdFunction();
+    `;
+
+    const res = transformJavaScript(code, {
+      seed: 0x776655,
+      minStringLength: 4,
+    });
+
+    // 1. Static check: Transformed code does not contain sensitive strings in plaintext
+    expect(res.code).not.toContain('SUPER_SECRET_PAYLOAD_UNTOUCHED');
+    expect(res.code).not.toContain('CALLED_SECRET_PAYLOAD_123');
+
+    // 2. Uses on-demand call-site salted resolution (_uD(idx, salt)) instead of eager mass decryption array
+    expect(res.code).toMatch(/_uD[a-z0-9]*\(\d+,\s*\d+\)/);
+    // Transformed code does NOT contain eager mass decryption array (.map at evaluation time)
+    expect(res.code).not.toMatch(/\.map\(function\(s\)/);
+
+    // 3. Execution check: Evaluating module loads without mass decrypting uncalled strings
+    const fn = new Function(res.code);
+    const result = fn();
+    expect(result).toBe('CALLED_SECRET_PAYLOAD_123');
+  });
+
+  it('prevents semantic anchor leakage in hot-path render functions by applying lightweight 1-byte XOR tokenization while exempting React DOM props', () => {
+    const renderComponentSource = `
+      function CheckoutButton(props) {
+        const [isAdmin, setIsAdmin] = useState(false);
+        const checkoutUrl = "api/v1/checkout";
+        const authRole = "isAdmin";
+        return createElement("button", {
+          key: "btn-checkout",
+          id: "checkout-submit",
+          className: "btn btn-primary",
+        }, props.label || checkoutUrl + ":" + authRole);
+      }
+    `;
+
+    const res = transformJavaScript(renderComponentSource, {
+      seed: 0x7f3a91,
+      minStringLength: 4,
+    });
+
+    // 1. Hot render component is recognized and skipped from cold flow guards
+    expect(res.hotPathReport.hotFunctionsSkipped).toContain('CheckoutButton');
+
+    // 2. Sensitive strings must NOT appear in plaintext (they are XOR tokenized with _hX)
+    expect(res.code).not.toContain('api/v1/checkout');
+    expect(res.code).not.toContain('isAdmin');
+    expect(res.code).toContain('_hX(');
+
+    // 3. React DOM special props stay plain
+    expect(res.code).toContain('key');
+    expect(res.code).toContain('id');
+    expect(res.code).toContain('className');
+
+    // 4. Runtime execution returns the exact uncorrupted values
+    let stateVal = false;
+    const mockContext: Record<string, any> = {
+      useState: (initial: any) => [stateVal, (v: any) => { stateVal = v; }],
+      createElement: (type: string, props: any, children: any) => ({
+        type,
+        props,
+        children,
+      }),
+    };
+    mockContext.globalThis = mockContext;
+    vm.createContext(mockContext);
+    vm.runInContext(
+      `${res.code}\n;globalThis.rendered = CheckoutButton({});`,
+      mockContext
+    );
+
+    const rendered = mockContext.rendered;
+    expect(rendered).toBeDefined();
+    expect(rendered.type).toBe('button');
+    expect(rendered.props.key).toBe('btn-checkout');
+    expect(rendered.props.id).toBe('checkout-submit');
+    expect(rendered.props.className).toBe('btn btn-primary');
+    expect(rendered.children).toBe('api/v1/checkout:isAdmin');
+  });
 });
