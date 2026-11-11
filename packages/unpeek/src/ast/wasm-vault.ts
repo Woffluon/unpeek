@@ -209,6 +209,14 @@ export function injectWasmVault(
   const wasmBytes = generateWasmKdfBinary(seed);
   const byteArrayLiteral = Array.from(wasmBytes).join(',');
 
+  const sVal = seed | 0;
+  const xorMask = (seed ^ 0x5a5a5a5a) | 0;
+  const m1 = (16777619 ^ xorMask) | 0;
+  const m2 = (73244475 ^ xorMask) | 0;
+  const m3 = (sVal ^ xorMask) | 0;
+  const strKey = ((seed & 0x7f) ^ 0x3d) | 0;
+  const mChars = [105 ^ strKey, 109 ^ strKey, 117 ^ strKey, 108 ^ strKey].join(',');
+
   const helperSnippet = `var ${kdfFnName};
 try {
   var ${wasmVarName} = new Uint8Array([${byteArrayLiteral}]);
@@ -216,9 +224,19 @@ try {
   var _wi${suffix} = new WebAssembly.Instance(_wm${suffix});
   ${kdfFnName} = _wi${suffix}.exports.kdf;
 } catch (e) {
-  ${kdfFnName} = function(f, s, h) {
-    return (Math.imul((f ^ ${seed | 0}) | 0, 16777619) ^ Math.imul(((s + h) | 0), 73244475)) | 0;
-  };
+  ${kdfFnName} = (function() {
+    var _k = ${xorMask};
+    var _x = [${m1}, ${m2}, ${m3}];
+    var _p = '';
+    var _c = [${mChars}];
+    for (var _i = 0; _i < _c.length; _i++) {
+      _p += String.fromCharCode(_c[_i] ^ ${strKey});
+    }
+    var _m = Math[_p];
+    return function(f, s, h) {
+      return (_m((f ^ (_x[2] ^ _k)) | 0, _x[0] ^ _k) ^ _m(((s + h) | 0), _x[1] ^ _k)) | 0;
+    };
+  })();
 }`;
 
   const parsedHelper = acorn.parse(helperSnippet, {

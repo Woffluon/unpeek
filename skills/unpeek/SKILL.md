@@ -23,6 +23,13 @@ Zero-config, call-graph-aware client-side JavaScript protection and source map i
 2. **Build**: Run the project's standard production build (`npm run build`).
 3. **Protect**: `unpeek protect` executes automatically post-build, extracting `.map` files into `.unpeek-maps/` and applying AST hardening.
 
+## Two-Tier Defense Architecture
+
+unpeek provides two distinct defense tiers:
+
+- **Tier 1 (Default Profile)**: Fast, zero-config production protection within strict budgets (<2% runtime CPU overhead, <15% Gzip size delta). Employs 3-tier bidirectional call-graph exemption (`TRUE_HOT_60FPS`, `SHALLOW_RENDER_COMPONENT`, `SERIALIZED_WORKER`), 92-character zero-escape involutory string vaulting, non-linear quadratic MBA opaque predicates, in-place re-encrypting `Uint8Array` shader vault, and synchronous entry-chunk anti-tamper shield.
+- **Tier 2 (`--aggressive` Profile)**: Zero plaintext exposure for high-value IP and sensitive algorithmic handlers. Compiles selected cold functions to a <1.2 KB 24-opcode Bytecode Micro-VM (with `async/await`, `try/catch`, and closure support without `eval`), backed by an inline WebAssembly KDF (with hardened CSP JS fallback) and React 19 Concurrent-safe call-site salted decoders.
+
 ## Reference Navigation
 
 Direct user requests to the appropriate modular guide:

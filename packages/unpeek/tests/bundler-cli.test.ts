@@ -379,4 +379,159 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
       expect(modExports.run('OK')).toBe(`OK:CHUNK_SECRET_PAYLOAD_${i}_${chunkNames[i]}`);
     }
   });
+
+  it('CLI help and summary display Tier 1 (<%2 CPU, <%15 Gzip) vs Tier 2 / --aggressive (Micro-VM & WASM KDF)', async () => {
+    const { runCli } = await import('../src/cli/index.js');
+    fs.writeFileSync(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'tier-test-app', scripts: { build: 'vite build' } }),
+      'utf8'
+    );
+    const distDir = path.join(tmpDir, 'dist');
+    fs.mkdirSync(distDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(distDir, 'bundle.js'),
+      'function testSecret() { return "super_secret_token"; }',
+      'utf8'
+    );
+
+    let logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => {
+      logs.push(args.map(String).join(' '));
+    };
+
+    const origCwd = process.cwd();
+    try {
+      process.chdir(tmpDir);
+
+      // 1. Verify --help output contains Tier 1 and Tier 2 descriptions
+      logs = [];
+      await runCli(['--help']);
+      const helpOutput = logs.join('\n');
+      expect(helpOutput).toMatch(/Tier 1/i);
+      expect(helpOutput).toMatch(/Tier 2/i);
+      expect(helpOutput).toMatch(/--aggressive/);
+      expect(helpOutput).toMatch(/Micro-VM & WASM KDF/i);
+      expect(helpOutput).toMatch(/(?:<2%|<%2)\s*CPU/i);
+      expect(helpOutput).toMatch(/(?:<15%|<%15)\s*Gzip/i);
+
+      // 2. Verify summary for Tier 1 default
+      logs = [];
+      await runCli(['protect', '--out-dir', 'dist']);
+      const tier1Summary = logs.join('\n');
+      expect(tier1Summary).toContain('Tier 1');
+      expect(tier1Summary).toMatch(/default/i);
+
+      // 3. Verify summary for Tier 2 --aggressive
+      logs = [];
+      await runCli(['protect', '--out-dir', 'dist', '--aggressive']);
+      const tier2Summary = logs.join('\n');
+      expect(tier2Summary).toContain('Tier 2');
+      expect(tier2Summary).toMatch(/--aggressive/);
+      expect(tier2Summary).toMatch(/Micro-VM & WASM KDF/i);
+    } finally {
+      process.chdir(origCwd);
+      console.log = origLog;
+    }
+  });
+
+  it('issues Dockerignore advisory warning when .dockerignore does not exist or lacks .unpeek-maps/', async () => {
+    const { runCli } = await import('../src/cli/index.js');
+    const { relocateSourceMaps } = await import('../src/bundler/sourcemap-vault.js');
+
+    fs.writeFileSync(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'docker-advisory-app', scripts: { build: 'vite build' } }),
+      'utf8'
+    );
+    const distDir = path.join(tmpDir, 'dist');
+    fs.mkdirSync(distDir, { recursive: true });
+    fs.writeFileSync(path.join(distDir, 'bundle.js'), 'console.log("hello");', 'utf8');
+
+    // 1. When .dockerignore does NOT exist, relocateSourceMaps reports dockerIgnoreMissing: true
+    const resNoDocker = relocateSourceMaps(distDir, tmpDir, true, '.unpeek-maps');
+    expect(resNoDocker.dockerIgnoreMissing).toBe(true);
+
+    // And CLI protect outputs advisory warning
+    let logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => {
+      logs.push(args.map(String).join(' '));
+    };
+
+    const origCwd = process.cwd();
+    try {
+      process.chdir(tmpDir);
+      await runCli(['protect', '--out-dir', 'dist']);
+      const output = logs.join('\n');
+      expect(output).toContain(
+        "[unpeek:advisory] .dockerignore is missing .unpeek-maps/. Private maps may leak into Docker image during 'COPY . .'."
+      );
+    } finally {
+      process.chdir(origCwd);
+      console.log = origLog;
+    }
+
+    // 2. When .dockerignore exists but lacks .unpeek-maps/
+    const dockerignorePath = path.join(tmpDir, '.dockerignore');
+    fs.writeFileSync(dockerignorePath, 'node_modules\n', 'utf8');
+    const resMissingEntry = relocateSourceMaps(distDir, tmpDir, true, '.unpeek-maps');
+    expect(resMissingEntry.dockerIgnoreMissing).toBe(true);
+
+    // 3. When .dockerignore exists and already contains .unpeek-maps/
+    fs.writeFileSync(dockerignorePath, '.unpeek-maps/\nnode_modules\n', 'utf8');
+    const resWithEntry = relocateSourceMaps(distDir, tmpDir, true, '.unpeek-maps');
+    expect(resWithEntry.dockerIgnoreMissing).toBe(false);
+  });
+
+  it('hardens WASM fallback function in wasm-vault and prevents raw unshielded JS arithmetic exposure', async () => {
+    const acorn = await import('acorn');
+    const vm = await import('node:vm');
+    const { injectWasmVault, fallbackKdf } = await import('../src/ast/wasm-vault.js');
+    const { generateCompactJs } = await import('../src/ast/codegen.js');
+
+    const dummyAst = acorn.parse('function main() {}', {
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+    }) as any;
+
+    const seed = 0x12345678;
+    const { kdfFnName } = injectWasmVault(dummyAst, seed);
+    const injectedCode = generateCompactJs(dummyAst);
+
+    // 1. WASM fallback in catch (e) must NOT contain raw unshielded Math.imul or plaintext constants
+    expect(injectedCode).not.toContain('Math.imul((f ^');
+    expect(injectedCode).not.toContain('16777619');
+    expect(injectedCode).not.toContain('73244475');
+
+    // 2. Simulate strict CSP where WebAssembly is undefined or disabled
+    const cspSandbox: Record<string, any> = {
+      WebAssembly: undefined,
+      Math,
+      String,
+      Uint8Array,
+    };
+    cspSandbox.window = cspSandbox;
+    const ctx = vm.createContext(cspSandbox);
+
+    expect(() => vm.runInContext(injectedCode, ctx)).not.toThrow();
+
+    const fallbackFn = ctx[kdfFnName];
+    expect(typeof fallbackFn).toBe('function');
+
+    // 3. Fallback must produce 100% mathematically identical results to fallbackKdf across test vectors
+    const testVectors = [
+      { fnId: 1, salt: 7, hash: 0x5a5a5a5a },
+      { fnId: 42, salt: 19, hash: 0x1234abcd },
+      { fnId: 100, salt: 0, hash: 0 },
+      { fnId: 9999, salt: 31, hash: -123456 },
+    ];
+
+    for (const v of testVectors) {
+      const expected = fallbackKdf(v.fnId, v.salt, v.hash, seed);
+      const actual = fallbackFn(v.fnId, v.salt, v.hash);
+      expect(actual).toBe(expected);
+    }
+  });
 });

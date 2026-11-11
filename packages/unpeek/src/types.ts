@@ -70,6 +70,7 @@ export interface SourceMapVaultResult {
   strippedFilesCount: number;
   vaultDir: string;
   movedFiles: string[];
+  dockerIgnoreMissing?: boolean;
 }
 
 export interface ProtectSummary {
@@ -87,4 +88,7 @@ export interface ProtectSummary {
   totalEncryptedStrings: number;
   totalMangledSymbols: number;
   elapsedMs: number;
+  tier?: string;
+  aggressive?: boolean;
+  dockerIgnoreMissing?: boolean;
 }

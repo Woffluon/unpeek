@@ -26,6 +26,23 @@ function isSubdirectoryOrSame(parent: string, child: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+function isDockerIgnoreMissing(cwd: string, ignoreEntry: string): boolean {
+  const filePath = path.join(path.resolve(cwd), '.dockerignore');
+  if (!fs.existsSync(filePath)) {
+    return true;
+  }
+  const content = fs.readFileSync(filePath, 'utf8');
+  const normalizedEntry = ignoreEntry.endsWith('/') ? ignoreEntry : `${ignoreEntry}/`;
+  const bareEntry = normalizedEntry.slice(0, -1);
+  const lines = content.split(/\r?\n/).map((line) => line.trim());
+  return (
+    !lines.includes(normalizedEntry) &&
+    !lines.includes(bareEntry) &&
+    !lines.includes('.unpeek-maps') &&
+    !lines.includes('.unpeek-maps/')
+  );
+}
+
 export function relocateSourceMaps(
   outDir: string,
   cwd: string,
@@ -51,6 +68,10 @@ export function relocateSourceMaps(
     }
   }
 
+  const relVault = path.relative(resolvedCwd, vaultDir).replace(/\\/g, '/');
+  const ignoreEntry = relVault && !relVault.startsWith('..') ? `${relVault}/` : '.unpeek-maps/';
+  const dockerIgnoreMissing = isDockerIgnoreMissing(resolvedCwd, ignoreEntry);
+
   const movedFiles: string[] = [];
   let movedMapsCount = 0;
   let strippedFilesCount = 0;
@@ -61,6 +82,7 @@ export function relocateSourceMaps(
       strippedFilesCount: 0,
       vaultDir,
       movedFiles: [],
+      dockerIgnoreMissing,
     };
   }
 
@@ -138,5 +160,6 @@ export function relocateSourceMaps(
     strippedFilesCount,
     vaultDir,
     movedFiles,
+    dockerIgnoreMissing,
   };
 }

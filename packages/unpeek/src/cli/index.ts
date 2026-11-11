@@ -57,7 +57,7 @@ function printHelp(): void {
     '',
     '  Usage:',
     '    unpeek init [--dry-run]        wire postbuild and the .unpeek-maps/ vault',
-    '    unpeek protect [options]       protect client bundles in place',
+    '    unpeek protect [options]       protect client bundles in place (Tier 1 default: <2% CPU, <15% Gzip)',
     '',
     '  Options:',
     '    --out-dir <dir>                explicit client output directory',
@@ -67,9 +67,13 @@ function printHelp(): void {
     '    --min-string-length <num>      minimum string length for the vault (default: 4)',
     '    --private-maps-dir <dir>       vault directory (default: .unpeek-maps)',
     '    --no-shield                    skip the runtime anti-tamper shield',
-    '    --aggressive                   enable Layer 2 aggressive protection (Micro-VM & WASM KDF)',
+    '    --aggressive                   enable Tier 2 aggressive protection (Micro-VM & WASM KDF)',
     '    -h, --help                     show help',
     '    -v, --version                  show version',
+    '',
+    '  Tiers:',
+    '    Tier 1 (default)               call-graph hot-path exemption (<2% CPU, <15% Gzip)',
+    '    Tier 2 (--aggressive)          zero plaintext exposure via Micro-VM & WASM KDF',
   ].join('\n');
   console.log(helpText);
 }
@@ -83,12 +87,17 @@ function printSummaryTable(summary: ProtectSummary): void {
   const sign = summary.gzipDeltaPercent > 0 ? '+' : '';
   const gzip = `${formatBytes(summary.originalGzipBytes)} -> ${formatBytes(summary.protectedGzipBytes)}  ${sign}${summary.gzipDeltaPercent}%`;
 
+  const tierLabel = summary.aggressive
+    ? 'Tier 2 (--aggressive: Micro-VM & WASM KDF)'
+    : 'Tier 1 (default: <2% CPU, <15% Gzip)';
+
   console.log('');
   console.log(brandBlock());
   console.log('');
   console.log(
     sectionBlock('PROJECT', [
       ['framework', summary.framework],
+      ['tier', tierLabel],
       ['output', summary.outDir],
       ['bundles', String(summary.processedFiles)],
     ])
@@ -117,6 +126,13 @@ function printSummaryTable(summary: ProtectSummary): void {
   );
   console.log('');
   console.log(`  ${dim('done. maps are private. hot path untouched.')}`);
+
+  if (summary.dockerIgnoreMissing) {
+    console.log('');
+    console.log(
+      "[unpeek:advisory] .dockerignore is missing .unpeek-maps/. Private maps may leak into Docker image during 'COPY . .'."
+    );
+  }
 }
 
 function printInitResult(
