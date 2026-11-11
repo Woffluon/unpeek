@@ -588,6 +588,17 @@ export default {
               },
             ],
           },
+          {
+            title: "Docker Image Hardening & .dockerignore Advisory",
+            body: [
+              "When packaging applications with Docker using `COPY . .`, private debugging symbols inside `.unpeek-maps/` can leak into public container image layers if `.dockerignore` is missing or omits `.unpeek-maps/`.",
+              "`unpeek protect` automatically inspects `.dockerignore`. If present, it appends `.unpeek-maps/`; if `.dockerignore` is missing or lacks the rule, it emits an advisory warning:",
+            ],
+            bullets: [
+              "`[unpeek:advisory] .dockerignore is missing .unpeek-maps/. Private maps may leak into Docker image during 'COPY . .'.`",
+              "Always ensure `.unpeek-maps/` is listed in `.dockerignore` alongside `.gitignore` before shipping Docker images.",
+            ],
+          },
         ],
       },
       {
@@ -598,9 +609,11 @@ export default {
           "Complete specification for the unpeek CLI binary, Node.js programmatic functions, and TypeScript interfaces exported from packages/unpeek/src/types.ts.",
         subsections: [
           {
-            title: "CLI Commands & Flags",
+            title: "CLI Commands & Defense Tiers (Tier 1 vs Tier 2)",
             body: [
-              "The `unpeek` binary supports `init` and `protect` commands with deterministic flags suitable for local development and reproducible CI builds.",
+              "The `unpeek` binary supports `init` and `protect` commands across two distinct defense tiers:",
+              "Tier 1 (Default): Zero-config call-graph aware protection with <2% runtime CPU overhead and <15% Gzip size delta, applying 92-character involutory string vaulting and non-linear MBA cold-flow guards.",
+              "Tier 2 (--aggressive): Maximum tamper-resistance compiling selected cold functions to a <1.2 KB 24-opcode Bytecode Micro-VM backed by inline WebAssembly KDF and call-site salted decoders for zero plaintext exposure.",
             ],
             codeBlocks: [
               {
@@ -617,7 +630,7 @@ unpeek protect [options]
   --min-string-length <num>  Minimum string length for encryption vault (default: 4)
   --private-maps-dir <dir>   Directory to store vaulted source maps (default: .unpeek-maps)
   --no-shield                Do not inject runtime anti-tamper deterrent shield
-  --aggressive               Enable Layer 2 Bytecode Micro-VM, inline WASM KDF & salted vault
+  --aggressive               Enable Tier 2 Bytecode Micro-VM, inline WASM KDF & salted vault
   -h, --help                 Show help message
   -v, --version              Show version number`,
               },
@@ -1213,6 +1226,17 @@ export default {
               },
             ],
           },
+          {
+            title: "Docker İmaj Güvenliği & .dockerignore Uyarısı",
+            body: [
+              "`COPY . .` komutu kullanılan Docker derlemelerinde `.dockerignore` dosyası bulunmadığında veya `.unpeek-maps/` kuralı eksik olduğunda, gizli hata ayıklama sembolleri istem dışı olarak herkese açık Docker imaj katmanlarına sızabilir.",
+              "`unpeek protect` çalıştığında mevcut `.dockerignore` dosyasını otomatik olarak `.unpeek-maps/` ile günceller. Eğer `.dockerignore` bulunmuyorsa veya kural eksikse unpeek açık bir advisory uyarısı verir:",
+            ],
+            bullets: [
+              "`[unpeek:advisory] .dockerignore is missing .unpeek-maps/. Private maps may leak into Docker image during 'COPY . .'.`",
+              "Docker konteyner imajlarını yayınlamadan önce `.unpeek-maps/` dizininin hem `.gitignore` hem de `.dockerignore` içinde yer aldığından emin olun.",
+            ],
+          },
         ],
       },
       {
@@ -1223,9 +1247,11 @@ export default {
           "unpeek CLI ikili dosyası, Node.js programatik fonksiyonları ve packages/unpeek/src/types.ts içinden dışa aktarılan TypeScript arayüzlerinin tam referansı.",
         subsections: [
           {
-            title: "CLI Komutları & Bayraklar",
+            title: "CLI Komutları & Savunma Kademeleri (Tier 1 vs Tier 2)",
             body: [
-              "`unpeek` komut satırı aracı hem yerel geliştirme hem de tekrarlanabilir (reproducible) CI derlemeleri için `init` ve `protect` alt komutlarını sunar.",
+              "`unpeek` komut satırı aracı hem yerel geliştirme hem de tekrarlanabilir CI derlemeleri için iki ayrı savunma kademesi sunar:",
+              "Katman 1 (Varsayılan): <%2 çalışma zamanı CPU ek yükü ve <%15 Gzip boyutu delta bütçesiyle çağrı grafiği duyarlı muafiyet, 92-karakter involutory string kasası ve non-lineer MBA soğuk akış koruması.",
+              "Katman 2 (--aggressive): Seçili soğuk fonksiyonları <1.2 KB 24-komutlu Bytecode Micro-VM'e derleyen, satıriçi WebAssembly KDF ve çağrı noktası tuzlu tembel kasayla sıfır düz metin maruziyeti sağlayan üst düzey koruma profili.",
             ],
             codeBlocks: [
               {

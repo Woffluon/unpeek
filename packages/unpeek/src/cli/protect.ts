@@ -158,5 +158,8 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
     totalEncryptedStrings,
     totalMangledSymbols,
     elapsedMs,
+    tier: aggressive ? 'Tier 2' : 'Tier 1',
+    aggressive,
+    dockerIgnoreMissing: vaultResult.dockerIgnoreMissing,
   };
 }
