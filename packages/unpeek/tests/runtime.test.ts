@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import vm from 'node:vm';
+import { transformJavaScript } from '../src/ast/index.js';
 import {
   computeIntegrityHash,
   verifyCodeIntegrity,
@@ -87,6 +88,9 @@ describe('Runtime Integrity Guard & DevTools Deterrent', () => {
       expect(shieldA.preambleCode).not.toBe(shieldB.preambleCode);
       expect(shieldA.preambleCode).toContain(shieldA.integrityCheckFnName);
       expect(shieldB.preambleCode).toContain(shieldB.integrityCheckFnName);
+
+      const customDeltaShield = generateRuntimeShield({ seed: 42, expectedDelta: 15 });
+      expect(customDeltaShield.expectedDelta).toBe(15);
     });
 
     it('leaves console intact when single-line snippet is untampered, and silences console + sets __unpeek_tampered on pretty-print or toString tampering in gradual mode', () => {
@@ -280,6 +284,54 @@ describe('Runtime Integrity Guard & DevTools Deterrent', () => {
       expect(tamperedWindow.__unpeek_tampered).toBe(true);
       expect(tamperedWindow.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
       expect(typeof tamperedWindow[windowKeySymbol]).toBe('number');
+    });
+
+    it('defeats AST shield pruning by coupling string decryptor to runtime shield state such that removing the shield IIFE produces corrupt garbage strings', () => {
+      const sourceCode = `
+        function getCredentials() {
+          return "SUPER_SECRET_DATABASE_CREDENTIAL";
+        }
+        globalThis.__secret = getCredentials();
+      `;
+
+      const result = transformJavaScript(sourceCode, {
+        seed: 0x9e3779b9,
+        minStringLength: 4,
+        injectRuntimeShield: true,
+      });
+
+      expect(result.code).toContain('__unpeek_tampered');
+
+      // 1. When executed in a browser-like context (window = {}), the strings decode cleanly
+      const browserWindow: Record<string, unknown> = {};
+      const cleanContext = vm.createContext({
+        window: browserWindow,
+        globalThis: {},
+      });
+      cleanContext.globalThis = cleanContext;
+      cleanContext.window = browserWindow;
+
+      vm.runInContext(result.code, cleanContext);
+      expect(cleanContext.__secret).toBe('SUPER_SECRET_DATABASE_CREDENTIAL');
+
+      // 2. When the deterrent snippet (shield IIFE) is stripped from the AST/code or when window[sym] is missing
+      const codeLines = result.code.split('\n');
+      const strippedCode = codeLines.slice(1).join('\n');
+
+      const prunedWindow: Record<string, unknown> = {};
+      const prunedContext = vm.createContext({
+        window: prunedWindow,
+        globalThis: {},
+      });
+      prunedContext.globalThis = prunedContext;
+      prunedContext.window = prunedWindow;
+
+      vm.runInContext(strippedCode, prunedContext);
+
+      // The decryptor produces corrupted garbage data (does NOT fall back to working plain strings via expDelta)
+      expect(prunedContext.__secret).not.toBe('SUPER_SECRET_DATABASE_CREDENTIAL');
+      expect(typeof prunedContext.__secret).toBe('string');
+      expect((prunedContext.__secret as string).length).toBeGreaterThan(0);
     });
   });
 });

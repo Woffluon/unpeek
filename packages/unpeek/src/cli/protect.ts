@@ -73,7 +73,7 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
 
       const relPath = allRelPaths[i];
       const isEntry = isEntryChunk(relPath, i, allRelPaths);
-      const shouldInjectShield = injectRuntimeShield && isEntry;
+      const shouldInjectShield = injectRuntimeShield;
       const fileSeed = computeFnv1aHash(`${relPath}:${i}`, seed);
       const result = transformJavaScript(codeToTransform, {
         seed: fileSeed,

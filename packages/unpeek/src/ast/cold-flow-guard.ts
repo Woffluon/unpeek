@@ -215,6 +215,45 @@ function cloneNode<T>(node: T): T {
   return JSON.parse(JSON.stringify(node));
 }
 
+function makeImul(left: any, right: any): any {
+  return {
+    type: 'CallExpression',
+    callee: {
+      type: 'MemberExpression',
+      computed: false,
+      object: { type: 'Identifier', name: 'Math' },
+      property: { type: 'Identifier', name: 'imul' },
+    },
+    arguments: [left, right],
+  };
+}
+
+function makeBinary(operator: string, left: any, right: any): any {
+  return {
+    type: 'BinaryExpression',
+    operator,
+    left,
+    right,
+  };
+}
+
+function makeUnary(operator: string, argument: any): any {
+  return {
+    type: 'UnaryExpression',
+    operator,
+    prefix: true,
+    argument,
+  };
+}
+
+function makeLiteral(value: number): any {
+  return {
+    type: 'Literal',
+    value,
+    raw: String(value),
+  };
+}
+
 export function createSotaMbaPredicate(
   seed: number,
   fnIndex = 0,
@@ -231,10 +270,10 @@ export function createSotaMbaPredicate(
   // v = (z | c1) === c1, k = (c2 | (!String)) === c2.
   // Target is non-zero, deterministic, seed- and index-derived integer (0x7fffffff signature is eliminated).
   const family = Math.abs((seed + fnIndex) & 3);
-  const c1 = ((seed >>> 0) + Math.imul(family + 1, 0x45d9f3b)) | 0;
-  const c2 = (c1 ^ 0x5a5a5a5a) | 0;
+  const c1 = ((seed >>> 1) + Math.imul(family + 1, 0x15d9f3b)) & 0x7ffff;
+  const c2 = (c1 ^ 0x2a5a5) & 0x7ffff;
   const target =
-    ((seed ^ Math.imul(family + 1, 0x9e3779b1)) & 0x7fffff) | 1;
+    ((seed ^ Math.imul(family + 1, 0x9e3779b1)) & 0x7ffff) | 1;
 
   let paramName: string | null = null;
   if (typeof paramNode === 'string') {
@@ -267,153 +306,78 @@ export function createSotaMbaPredicate(
     right: { type: 'Literal', value: c1, raw: String(c1) },
   };
 
-  const kNode: any = {
-    type: 'BinaryExpression',
-    operator: '|',
-    left: { type: 'Literal', value: c2, raw: String(c2) },
-    right: {
-      type: 'UnaryExpression',
-      operator: '!',
-      prefix: true,
-      argument: { type: 'Identifier', name: 'String' },
-    },
-  };
+  const kNode: any = makeLiteral(c2);
+
+  const vLit = makeLiteral(c1);
+  const kLit = makeLiteral(c2);
 
   let mbaExpr: any;
   if (family === 0) {
-    // Aile 0: (((v ^ k) + ((v & k) << 1)) - (v + k)) ≡ 0
-    const vXorK = {
-      type: 'BinaryExpression',
-      operator: '^',
-      left: cloneNode(vNode),
-      right: cloneNode(kNode),
-    };
-    const vAndK = {
-      type: 'BinaryExpression',
-      operator: '&',
-      left: cloneNode(vNode),
-      right: cloneNode(kNode),
-    };
-    const shift = {
-      type: 'BinaryExpression',
-      operator: '<<',
-      left: vAndK,
-      right: { type: 'Literal', value: 1, raw: '1' },
-    };
-    const addLeft = {
-      type: 'BinaryExpression',
-      operator: '+',
-      left: vXorK,
-      right: shift,
-    };
-    const vPlusK = {
-      type: 'BinaryExpression',
-      operator: '+',
-      left: cloneNode(vNode),
-      right: cloneNode(kNode),
-    };
-    mbaExpr = {
-      type: 'BinaryExpression',
-      operator: '-',
-      left: addLeft,
-      right: vPlusK,
-    };
+    // Aile 0: (Math.imul(v, k) - (Math.imul(v & k, v | k) + Math.imul(v & ~k, ~v & k))) ≡ 0
+    const term1 = makeImul(cloneNode(vNode), cloneNode(kNode));
+    const vAndK = makeBinary('&', cloneNode(vLit), cloneNode(kLit));
+    const vOrK = makeBinary('|', cloneNode(vLit), cloneNode(kLit));
+    const notK = makeUnary('~', cloneNode(kLit));
+    const notV = makeUnary('~', cloneNode(vLit));
+    const vAndNotK = makeBinary('&', cloneNode(vLit), notK);
+    const notVAndK = makeBinary('&', notV, cloneNode(kLit));
+
+    const term2 = makeImul(vAndK, vOrK);
+    const term3 = makeImul(vAndNotK, notVAndK);
+    const sumTerms = makeBinary('+', term2, term3);
+    mbaExpr = makeBinary('-', term1, sumTerms);
   } else if (family === 1) {
-    // Aile 1: (((v | k) + (v & k)) ^ (v + k)) ≡ 0
-    const vOrK = {
-      type: 'BinaryExpression',
-      operator: '|',
-      left: cloneNode(vNode),
-      right: cloneNode(kNode),
-    };
-    const vAndK = {
-      type: 'BinaryExpression',
-      operator: '&',
-      left: cloneNode(vNode),
-      right: cloneNode(kNode),
-    };
-    const addLeft = {
-      type: 'BinaryExpression',
-      operator: '+',
-      left: vOrK,
-      right: vAndK,
-    };
-    const vPlusK = {
-      type: 'BinaryExpression',
-      operator: '+',
-      left: cloneNode(vNode),
-      right: cloneNode(kNode),
-    };
-    mbaExpr = {
-      type: 'BinaryExpression',
-      operator: '^',
-      left: addLeft,
-      right: vPlusK,
-    };
+    // Aile 1: (Math.imul(v ^ k, v ^ k) - (Math.imul(v - k, v - k) + (Math.imul(v & ~k, ~v & k) << 2))) ≡ 0
+    const vXorK1 = makeBinary('^', cloneNode(vNode), cloneNode(kNode));
+    const vXorK2 = makeBinary('^', cloneNode(vLit), cloneNode(kLit));
+    const term1 = makeImul(vXorK1, vXorK2);
+
+    const vSubK1 = makeBinary('-', cloneNode(vLit), cloneNode(kLit));
+    const vSubK2 = cloneNode(vSubK1);
+    const term2 = makeImul(vSubK1, vSubK2);
+
+    const notK = makeUnary('~', cloneNode(kLit));
+    const notV = makeUnary('~', cloneNode(vLit));
+    const vAndNotK = makeBinary('&', cloneNode(vLit), notK);
+    const notVAndK = makeBinary('&', notV, cloneNode(kLit));
+    const term3 = makeImul(vAndNotK, notVAndK);
+    const shiftTerm = makeBinary('<<', term3, makeLiteral(2));
+
+    const sumTerms = makeBinary('+', term2, shiftTerm);
+    mbaExpr = makeBinary('-', term1, sumTerms);
   } else if (family === 2) {
-    // Aile 2: (((v | ~k) - (~k)) ^ (v & k)) ≡ 0
-    const notK = {
-      type: 'UnaryExpression',
-      operator: '~',
-      prefix: true,
-      argument: cloneNode(kNode),
-    };
-    const vOrNotK = {
-      type: 'BinaryExpression',
-      operator: '|',
-      left: cloneNode(vNode),
-      right: cloneNode(notK),
-    };
-    const subLeft = {
-      type: 'BinaryExpression',
-      operator: '-',
-      left: vOrNotK,
-      right: cloneNode(notK),
-    };
-    const vAndK = {
-      type: 'BinaryExpression',
-      operator: '&',
-      left: cloneNode(vNode),
-      right: cloneNode(kNode),
-    };
-    mbaExpr = {
-      type: 'BinaryExpression',
-      operator: '^',
-      left: subLeft,
-      right: vAndK,
-    };
+    // Aile 2: (Math.imul(v + k, v + k) - ((Math.imul(v & k, v | k) << 2) + Math.imul(v ^ k, v ^ k))) ≡ 0
+    const vAddK1 = makeBinary('+', cloneNode(vNode), cloneNode(kNode));
+    const vAddK2 = makeBinary('+', cloneNode(vLit), cloneNode(kLit));
+    const term1 = makeImul(vAddK1, vAddK2);
+
+    const vAndK = makeBinary('&', cloneNode(vLit), cloneNode(kLit));
+    const vOrK = makeBinary('|', cloneNode(vLit), cloneNode(kLit));
+    const term2 = makeImul(vAndK, vOrK);
+    const shiftTerm = makeBinary('<<', term2, makeLiteral(2));
+
+    const vXorK1 = makeBinary('^', cloneNode(vLit), cloneNode(kLit));
+    const vXorK2 = cloneNode(vXorK1);
+    const term3 = makeImul(vXorK1, vXorK2);
+
+    const sumTerms = makeBinary('+', shiftTerm, term3);
+    mbaExpr = makeBinary('-', term1, sumTerms);
   } else {
-    // Aile 3: (((v & ~k) + (v & k)) ^ v) ≡ 0
-    const notK = {
-      type: 'UnaryExpression',
-      operator: '~',
-      prefix: true,
-      argument: cloneNode(kNode),
-    };
-    const vAndNotK = {
-      type: 'BinaryExpression',
-      operator: '&',
-      left: cloneNode(vNode),
-      right: cloneNode(notK),
-    };
-    const vAndK = {
-      type: 'BinaryExpression',
-      operator: '&',
-      left: cloneNode(vNode),
-      right: cloneNode(kNode),
-    };
-    const addLeft = {
-      type: 'BinaryExpression',
-      operator: '+',
-      left: vAndNotK,
-      right: vAndK,
-    };
-    mbaExpr = {
-      type: 'BinaryExpression',
-      operator: '^',
-      left: addLeft,
-      right: cloneNode(vNode),
-    };
+    // Aile 3: (Math.imul(v | k, v | k) - (Math.imul(v & k, v & k) + Math.imul(v ^ k, v + k))) ≡ 0
+    const vOrK1 = makeBinary('|', cloneNode(vNode), cloneNode(kNode));
+    const vOrK2 = makeBinary('|', cloneNode(vLit), cloneNode(kLit));
+    const term1 = makeImul(vOrK1, vOrK2);
+
+    const vAndK1 = makeBinary('&', cloneNode(vLit), cloneNode(kLit));
+    const vAndK2 = cloneNode(vAndK1);
+    const term2 = makeImul(vAndK1, vAndK2);
+
+    const vXorK = makeBinary('^', cloneNode(vLit), cloneNode(kLit));
+    const vAddK = makeBinary('+', cloneNode(vLit), cloneNode(kLit));
+    const term3 = makeImul(vXorK, vAddK);
+
+    const sumTerms = makeBinary('+', term2, term3);
+    mbaExpr = makeBinary('-', term1, sumTerms);
   }
 
   const decoyIdx = Math.abs(fnIndex) % 3;

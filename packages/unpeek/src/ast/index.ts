@@ -161,7 +161,10 @@ export function transformJavaScript(
       ast,
       seed,
       minStringLength,
-      hotExemptNodes
+      hotExemptNodes,
+      undefined,
+      undefined,
+      options.deterrentMode
     );
     encryptedStringsCount = vaultRes.encryptedStringsCount;
     integrityToken = vaultRes.integrityToken;
@@ -175,7 +178,7 @@ export function transformJavaScript(
   if (options.injectRuntimeShield) {
     const shield = generateRuntimeShield({
       seed,
-      deterrentMode: options.deterrentMode ?? 'gradual',
+      deterrentMode: options.deterrentMode ?? 'passive',
       expectedIntegrityHash: integrityToken,
     });
     if (shield.preambleCode) {

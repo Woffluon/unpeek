@@ -15,6 +15,11 @@ export function deriveWindowKeySymbol(seed: number): string {
  * Function.prototype.toString() representation and writes the 5-bit key component (expectedDelta)
  * to window[windowKeySymbol].
  *
+ * Freedom To Operate (FTO) Compliance:
+ * Strictly avoids timer / setInterval active debugging checks, timing differential loops,
+ * and periodic debugger polling covered by third-party patents (e.g. Jscrambler US9979726B2).
+ * Operates purely via synchronous cryptographic state coupling via FNV-1a hash and tamper flags.
+ *
  * When tampering is detected (formatting, pretty-print, webdriver, toString spoofing):
  * window.__unpeek_tampered is set to true, String.prototype._u is poisoned to 14,
  * window[sym] is poisoned to expectedDelta ^ 29, and CustomEvent('unpeek:tamper') is dispatched.

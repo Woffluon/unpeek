@@ -28,7 +28,7 @@ export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options 
         return null;
       }
 
-      const shouldInjectShield = injectRuntimeShield && (chunk.isEntry ?? true);
+      const shouldInjectShield = injectRuntimeShield;
       const chunkSeed = computeFnv1aHash(chunk.fileName, baseSeed);
       const result = transformJavaScript(code, {
         seed: chunkSeed,
