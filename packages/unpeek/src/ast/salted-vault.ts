@@ -34,7 +34,7 @@ export function createSaltedDecryptorFnAst(
   windowKeySymbol: string,
   safeAlpha = SAFE_ALPHA
 ): any {
-  const fBody = `var memo=[];var s=Function.prototype.toString,w=typeof window!=='undefined'&&window,src=s.call(f);for(var h=0x811c9dc5,j=0;j<src.length;j++)h=Math.imul(h^src.charCodeAt(j),0x01000193)>>>0;var rot=(h^((""._u||a._u||0))^(w&&w['${windowKeySymbol}']!=null?w['${windowKeySymbol}']:${expectedDelta}))&31;var A="${safeAlpha}",P="${pChars}";return function(i,s){if(memo[i]!==void 0)return memo[i];var p=a[i];if(!p)return "";var o="";for(var j=0;j<p.length;j++){var c=p.charAt(j),k=A.indexOf(c);if(k<0){o+=c;}else{var y=(k-s+rot+9200)%92;var z=A.indexOf(P.charAt(y));o+=A.charAt((z-rot+9200)%92);}}return(memo[i]=o);};`;
+  const fBody = `var memo=[];var s=Function.prototype.toString,w=typeof window!=='undefined'&&window,src=s.call(f);for(var h=0x811c9dc5,j=0;j<src.length;j++)h=Math.imul(h^src.charCodeAt(j),0x01000193)>>>0;var rot=(h^((""._u||a._u||0))^(w?(w['${windowKeySymbol}']!=null?w['${windowKeySymbol}']:0):${expectedDelta}))&31;var A="${safeAlpha}",P="${pChars}";return function(i,s){if(memo[i]!==void 0)return memo[i];var p=a[i];if(!p)return "";var o="";for(var j=0;j<p.length;j++){var c=p.charAt(j),k=A.indexOf(c);if(k<0){o+=c;}else{var y=(k-s+rot+9200)%92;var z=A.indexOf(P.charAt(y));o+=A.charAt((z-rot+9200)%92);}}return(memo[i]=o);};`;
 
   return (
     acorn.parse(`(function f(a){${fBody}})`, {

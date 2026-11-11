@@ -1,5 +1,6 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
+import type { DeterrentMode } from '../types.js';
 import { derivePolymorphicIdent, generateCompactJs } from './codegen.js';
 import {
   deriveWindowKeySymbol,
@@ -324,7 +325,8 @@ export function applyStringVault(
   minStringLength = 4,
   hotExemptNodes?: WeakSet<acorn.Node>,
   windowKeySymbol?: string,
-  expectedDelta?: number
+  expectedDelta?: number,
+  deterrentMode?: DeterrentMode
 ): StringVaultResult {
   const suffix = ((seed >>> 0) & 0xffff).toString(36);
   const decryptFnName = `_uD${suffix}`;
@@ -334,7 +336,11 @@ export function applyStringVault(
 
   let expDelta = expectedDelta;
   if (expDelta === undefined) {
-    const shield = generateRuntimeShield({ seed, windowKeySymbol: sym });
+    const shield = generateRuntimeShield({
+      seed,
+      windowKeySymbol: sym,
+      deterrentMode: deterrentMode ?? 'passive',
+    });
     expDelta = shield.expectedDelta ?? 0;
   }
 

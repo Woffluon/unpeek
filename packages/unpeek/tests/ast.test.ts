@@ -588,12 +588,24 @@ describe('AST & Call-Graph Transformation Engine', () => {
           });
           expect(foundString).toBe(true);
 
-          const x = ((seed >>> 0) + Math.imul(fnIndex + 1, 0x45d9f3b)) | 0;
-          const y = (x ^ 0x5a5a5a5a) | 0;
-          const mbaResult =
-            (((x | y) + (x & y)) ^ (x + y)) | (!String as any ? 1 : 0);
-          expect(mbaResult).toBe(0);
-          expect(mbaResult === 2147483647).toBe(false);
+          let foundImul = false;
+          walk.simple(guard.test, {
+            CallExpression(call: any) {
+              if (
+                call.callee?.type === 'MemberExpression' &&
+                call.callee.object?.name === 'Math' &&
+                call.callee.property?.name === 'imul'
+              ) {
+                foundImul = true;
+              }
+            },
+          });
+          expect(foundImul).toBe(true);
+
+          const evalCode = `(function() { return (${generate(guard.test.left)}); })()`;
+          const evalResult = new Function('String', 'return ' + evalCode)(String);
+          expect(evalResult | 0).toBe(0);
+          expect(evalResult === guard.test.right.value).toBe(false);
         }
       }
 
@@ -684,6 +696,90 @@ describe('AST & Call-Graph Transformation Engine', () => {
       const instrumentedFn = new Function(instrumentedCode);
       expect(() => instrumentedFn()).not.toThrow();
       expect(instrumentedFn()).toBe('TOKEN_VALID:60');
+    });
+
+    it('injects non-linear quadratic MBA opaque predicates in cold functions that resist 1-bit algebraic simplification while preserving 100% semantic fidelity', () => {
+      const source = `
+        function fn0(a) { return "fn0:" + a; }
+        function fn1(b) { return "fn1:" + b; }
+        function fn2(c) { return "fn2:" + c; }
+        function fn3(d) { return "fn3:" + d; }
+        function hotLoop(arr) {
+          let sum = 0;
+          for (let i = 0; i < arr.length; i++) sum += arr[i];
+          return sum;
+        }
+        return [fn0(1), fn1(2), fn2(3), fn3(4), hotLoop([10, 20])].join(";");
+      `;
+
+      const transformed = transformJavaScript(source, { seed: 0x12345678 });
+      expect(transformed.hotPathReport.coldFunctionsProtected).toContain('fn0');
+      expect(transformed.hotPathReport.coldFunctionsProtected).toContain('fn1');
+      expect(transformed.hotPathReport.coldFunctionsProtected).toContain('fn2');
+      expect(transformed.hotPathReport.coldFunctionsProtected).toContain('fn3');
+      expect(transformed.hotPathReport.hotFunctionsSkipped).toContain('hotLoop');
+
+      const ast = acorn.parse(transformed.code, {
+        ecmaVersion: 'latest',
+        allowReturnOutsideFunction: true,
+      });
+
+      const mathImulCalls: any[] = [];
+      const ifStatementsInColdFns: any[] = [];
+
+      walk.simple(ast, {
+        FunctionDeclaration(node: any) {
+          if (node.id?.name === 'hotLoop') {
+            for (const stmt of node.body.body) {
+              if (stmt.type === 'IfStatement') {
+                let hasImul = false;
+                walk.simple(stmt.test, {
+                  CallExpression(call: any) {
+                    if (
+                      call.callee?.type === 'MemberExpression' &&
+                      call.callee.object?.name === 'Math' &&
+                      call.callee.property?.name === 'imul'
+                    ) {
+                      hasImul = true;
+                    }
+                  },
+                });
+                expect(hasImul).toBe(false);
+              }
+            }
+          }
+          if (['fn0', 'fn1', 'fn2', 'fn3'].includes(node.id?.name)) {
+            const firstStmt = node.body.body[0];
+            expect(firstStmt?.type).toBe('IfStatement');
+            ifStatementsInColdFns.push(firstStmt);
+
+            let imulCount = 0;
+            walk.simple(firstStmt.test, {
+              CallExpression(call: any) {
+                if (
+                  call.callee?.type === 'MemberExpression' &&
+                  call.callee.object?.name === 'Math' &&
+                  call.callee.property?.name === 'imul'
+                ) {
+                  imulCount++;
+                  mathImulCalls.push(call);
+                }
+              },
+            });
+            // Must contain quadratic non-linear structures using Math.imul
+            // (at least 2 Math.imul multiplications per quadratic family)
+            expect(imulCount).toBeGreaterThanOrEqual(2);
+          }
+        },
+      });
+
+      expect(ifStatementsInColdFns.length).toBe(4);
+      expect(mathImulCalls.length).toBeGreaterThanOrEqual(8);
+
+      // Verify that runtime execution preserves 100% semantic fidelity
+      const fn = new Function(transformed.code);
+      const res = fn();
+      expect(res).toBe('fn0:1;fn1:2;fn2:3;fn3:4;30');
     });
   });
 });
