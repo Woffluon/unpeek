@@ -501,4 +501,153 @@ describe('Aggressive Profile & Advanced Protection (Layer 2 & Red-Team Verificat
       expect(transformed.code).not.toContain('SUPER_ADMIN_ROLE_PERMITTED');
     });
   });
+
+  // =========================================================================
+  // 6. v1.13.0 Real WASM KDF Blinding & Micro-VM Hardening Verification
+  // =========================================================================
+  describe('6. v1.13.0 WASM KDF Blinding & Micro-VM Hardening', () => {
+    it('generateWasmKdfBinary blinds seed and FNV/mul constants in <512B WASM and matches fallbackKdf + CSP MBA fallback bit-for-bit', async () => {
+      const {
+        generateWasmKdfBinary,
+        encodeSignedLeb128,
+        fallbackKdf,
+        injectWasmVault,
+      } = await import('../src/ast/wasm-vault.js');
+      const { generateCompactJs } = await import('../src/ast/codegen.js');
+
+      const containsSubseq = (haystack: Uint8Array, needle: number[]): boolean => {
+        for (let i = 0; i <= haystack.length - needle.length; i++) {
+          let match = true;
+          for (let j = 0; j < needle.length; j++) {
+            if (haystack[i + j] !== needle[j]) {
+              match = false;
+              break;
+            }
+          }
+          if (match) return true;
+        }
+        return false;
+      };
+
+      const testSeeds = [0, 1, 0x41, 0x12345678, 0x9e3779b9, 0xdeadbeef, 0xffffffff];
+      const nonTrivialSeeds = new Set([0x41, 0x12345678, 0x9e3779b9, 0xdeadbeef]);
+      const testInputs: [number, number, number][] = [
+        [0, 0, 0],
+        [1, 0x101, 0x55aa],
+        [-1, -500, 0x12345678],
+        [0x7fffffff, 0x80000000 | 0, -0x5a5b],
+      ];
+
+      for (const seed of testSeeds) {
+        const wasmBytes = generateWasmKdfBinary(seed);
+        expect(wasmBytes.byteLength).toBeLessThan(512);
+
+        // Must NOT contain i32.const <seed> (for non-0/1 constants) or i32.const 0x01000193 or i32.const 0x45d9f3b
+        if (nonTrivialSeeds.has(seed)) {
+          expect(containsSubseq(wasmBytes, [0x41, ...encodeSignedLeb128(seed | 0)])).toBe(false);
+        }
+        expect(containsSubseq(wasmBytes, [0x41, ...encodeSignedLeb128(0x01000193)])).toBe(false);
+        expect(containsSubseq(wasmBytes, [0x41, ...encodeSignedLeb128(0x45d9f3b)])).toBe(false);
+
+        const mod = new WebAssembly.Module(wasmBytes as BufferSource);
+        const inst = new WebAssembly.Instance(mod);
+        const wasmKdf = inst.exports.kdf as (f: number, s: number, h: number) => number;
+
+        // Also test CSP JS fallback via injectWasmVault with WebAssembly disabled
+        const ast = acorn.parse('function noop(){}', { ecmaVersion: 'latest', sourceType: 'script' }) as any;
+        const { kdfFnName } = injectWasmVault(ast, seed);
+        const injectedCode = generateCompactJs(ast);
+
+        expect(injectedCode).not.toContain('_x[2]');
+        expect(injectedCode).not.toContain('16777619');
+        expect(injectedCode).not.toContain('73244475');
+        expect(injectedCode).not.toContain('Math.imul((f ^');
+        expect(injectedCode).toContain('+!String');
+
+        const cspCtx = vm.createContext({
+          WebAssembly: undefined,
+          Uint8Array,
+          Math,
+          String,
+        });
+        vm.runInContext(injectedCode, cspCtx);
+        const jsFallback = cspCtx[kdfFnName] as (f: number, s: number, h: number) => number;
+
+        for (const [f, s, h] of testInputs) {
+          const expected = fallbackKdf(f, s, h, seed);
+          expect(wasmKdf(f, s, h)).toBe(expected);
+          expect(jsFallback(f, s, h)).toBe(expected);
+        }
+      }
+    });
+
+    it('Micro-VM uses indirect shuffled dispatch without switch(o) or >=4-char strings and executes branches + async/await accurately', async () => {
+      const { applyMicroVm } = await import('../src/ast/micro-vm.js');
+      const { generateCompactJs } = await import('../src/ast/codegen.js');
+
+      const source = `
+        function computeBranch(x, flag) {
+          var base = 10;
+          if (flag) {
+            base = base + x * 2;
+          } else {
+            base = base - x;
+          }
+          return { total: base, doubled: x * 2 };
+        }
+
+        async function resolveAsyncValue(a, b) {
+          var v = await Promise.resolve(a + b);
+          if (v > 20) {
+            return v + 5;
+          }
+          return v;
+        }
+      `;
+
+      const ast = acorn.parse(source, { ecmaVersion: 'latest', sourceType: 'script' }) as any;
+      const vmRes = applyMicroVm(ast, undefined, undefined, 0xabcdef01);
+      expect(vmRes.virtualizedCount).toBe(2);
+
+      const outCode = generateCompactJs(ast);
+
+      // Zero plaintext switch(), eval(), Function(), and zero >=4-char strings in _uVm helper
+      expect(outCode).not.toMatch(/\bswitch\s*\(/);
+      expect(outCode).not.toContain('eval(');
+      expect(outCode).not.toContain('new Function');
+
+      const vmAst = acorn.parse(outCode, { ecmaVersion: 'latest', sourceType: 'script' }) as any;
+      const vmDecl = vmAst.body.find(
+        (n: any) =>
+          n.type === 'VariableDeclaration' &&
+          n.declarations?.some((d: any) => d.id?.name === vmRes.vmHelperName)
+      );
+      expect(vmDecl).toBeDefined();
+
+      const longStringsInVm: string[] = [];
+      walk.simple(vmDecl, {
+        Literal(node: any) {
+          if (typeof node.value === 'string' && node.value.length >= 4) {
+            longStringsInVm.push(node.value);
+          }
+        },
+      });
+      expect(longStringsInVm).toEqual([]);
+
+      // Execute both branches (taken & fallthrough) and async continuation
+      const ctx: Record<string, any> = {
+        Promise,
+        String,
+        Math,
+      };
+      ctx.globalThis = ctx;
+      vm.createContext(ctx);
+      vm.runInContext(outCode, ctx);
+
+      expect(ctx.computeBranch(7, true)).toEqual({ total: 24, doubled: 14 });
+      expect(ctx.computeBranch(7, false)).toEqual({ total: 3, doubled: 14 });
+      expect(await ctx.resolveAsyncValue(15, 10)).toBe(30);
+      expect(await ctx.resolveAsyncValue(5, 10)).toBe(15);
+    });
+  });
 });

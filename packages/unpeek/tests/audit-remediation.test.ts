@@ -613,4 +613,66 @@ export function runDomainService() {
       expect(protectedCode).not.toContain('very_long_secret_value');
     });
   });
+
+  describe('9. v1.13.0 Tier 2 Aggressive & Rolling Salted Vault End-to-End', () => {
+    it('encodes salted strings with non-repeating per-character rolling keystream and executes aggressive mode cleanly under strict CSP', async () => {
+      const { encodeSaltedString, decodeSaltedString } = await import('../src/ast/salted-vault.js');
+
+      const repeatedPlain = 'AAAAAAAAAAAAAAAAAAAA';
+      const enc = encodeSaltedString(repeatedPlain, 0x13572468);
+      expect(decodeSaltedString(enc, 0x13572468)).toBe(repeatedPlain);
+      // Keystream must vary across characters rather than repeating every 24 bytes / single char
+      expect(new Set(enc.split('')).size).toBeGreaterThan(4);
+
+      const source = `
+        'use strict';
+        function checkAccess(role, factor) {
+          var secretPrefix = "TIER2_STRICT_CSP_KEY_";
+          if (factor > 10) {
+            return secretPrefix + role + ":" + (factor * 2);
+          } else {
+            return secretPrefix + role + ":" + (factor + 1);
+          }
+        }
+        return [checkAccess("admin", 12), checkAccess("guest", 3)];
+      `;
+
+      const transformedNoShield = transformJavaScript(source, {
+        seed: 0x2468ace0,
+        minStringLength: 4,
+        aggressive: true,
+        injectRuntimeShield: false,
+      });
+      expect(transformedNoShield.code.trim().startsWith("'use strict';")).toBe(true);
+
+      const transformed = transformJavaScript(source, {
+        seed: 0x2468ace0,
+        minStringLength: 4,
+        aggressive: true,
+        injectRuntimeShield: true,
+      });
+
+      expect(transformed.code).toContain("'use strict';");
+      expect(transformed.code).not.toContain('TIER2_STRICT_CSP_KEY_');
+      expect(transformed.code).not.toMatch(/\bswitch\s*\(/);
+
+      // Test under strict CSP (WebAssembly unavailable)
+      const cspScope: Record<string, any> = {
+        Function,
+        String,
+        Math,
+        JSON,
+        Uint8Array,
+        Promise,
+        WebAssembly: undefined,
+        CustomEvent: class {},
+        navigator: { userAgent: 'Mozilla/5.0 Chrome', webdriver: false },
+      };
+      cspScope.self = cspScope;
+      cspScope.globalThis = cspScope;
+      const ctx = vm.createContext(cspScope);
+      const result = vm.runInContext(`(function(){${transformed.code}})()`, ctx);
+      expect(result).toEqual(['TIER2_STRICT_CSP_KEY_admin:24', 'TIER2_STRICT_CSP_KEY_guest:4']);
+    });
+  });
 });

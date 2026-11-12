@@ -36,6 +36,71 @@ export interface CompiledFunction {
   bytecode: number[];
   consts: any[];
   localCount: number;
+  stateSlots?: Set<number>;
+}
+
+function shuffleRange(n: number, seed: number): number[] {
+  const arr: number[] = [];
+  for (let i = 0; i < n; i++) arr.push(i);
+  let s = (seed || 0x13572468) >>> 0;
+  function rand(): number {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    return (s >>> 0) / 4294967296;
+  }
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
+}
+
+export function deriveVmKey(seed: number): number {
+  return computeFnv1aHash('vm-key', seed) | 0;
+}
+
+/**
+ * Encrypts compiled bytecode with a 2-pass stateful ciphertext-feedback stream cipher.
+ * Jump state synchronization slots hold targetState ^ streamState so branches remain exact.
+ */
+export function encryptBytecodeStream(
+  plainBytecode: number[],
+  fnSalt: number,
+  vmKey: number,
+  stateSlots?: Set<number>
+): number[] {
+  const len = plainBytecode.length;
+  const enc = new Array<number>(len);
+  const stateBefore = new Array<number>(len + 1);
+  const stAtSlot = new Map<number, number>();
+  let st = (vmKey ^ fnSalt) | 0;
+
+  for (let p = 0; p < len; p++) {
+    stateBefore[p] = st;
+    if (stateSlots && stateSlots.has(p)) {
+      stAtSlot.set(p, st);
+      enc[p] = 0;
+    } else {
+      st = (Math.imul(st ^ (p + 1), 0x45d9f3b) + 0x9e3779b9) | 0;
+      const raw = plainBytecode[p] ^ ((st >>> 16) & 0xffff);
+      enc[p] = raw;
+      st = (st ^ Math.imul(raw + 1, 0x85ebca6b)) | 0;
+    }
+  }
+  stateBefore[len] = st;
+
+  if (stateSlots) {
+    for (const slot of stateSlots) {
+      const targetPc = plainBytecode[slot - 1];
+      const sBefore = stAtSlot.get(slot) ?? 0;
+      enc[slot] = (stateBefore[targetPc] ^ sBefore) | 0;
+    }
+  }
+
+  return enc;
 }
 
 /**
@@ -61,71 +126,68 @@ export function generateOpcodeMap(seed: number): number[] {
 }
 
 /**
- * Produces the CSP-safe, eval-free, switch-dispatch interpreter source code (<1.2 KB).
+ * Produces the CSP-safe, eval-free, indirect-dispatch stateful stream interpreter.
+ * Eliminates plaintext switch(o) dispatch via blinded opcode lookup M and shuffled handler table H.
  * Supports async/await via Promise frame continuation.
  */
 export function createInterpreterSource(
   vmHelperName: string,
-  opMap: number[]
+  opMap: number[],
+  seed = 0x9e3779b9
 ): string {
-  return `function ${vmHelperName}(c, k, s, t) {
-  var p = 0, r = 0, q = [];
-  var G = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : this);
-  function x() {
-    while (p < c.length) {
-      var o = c[p++];
-      switch (o) {
-        case ${opMap[OP_LDC]}: q[r++] = k[c[p++]]; break;
-        case ${opMap[OP_LDV]}: q[r++] = s[c[p++]]; break;
-        case ${opMap[OP_STV]}: s[c[p++]] = q[--r]; break;
-        case ${opMap[OP_LDG]}: q[r++] = G[k[c[p++]]]; break;
-        case ${opMap[OP_GETP]}: { var b = q[--r], a = q[--r]; q[r++] = a[b]; break; }
-        case ${opMap[OP_SETP]}: { var v = q[--r], b = q[--r], a = q[--r]; q[r++] = (a[b] = v); break; }
-        case ${opMap[OP_CALL]}: {
-          var n = c[p++], g = [];
-          for (var i = n - 1; i >= 0; i--) g[i] = q[--r];
-          var f = q[--r]; q[r++] = f.apply(null, g); break;
-        }
-        case ${opMap[OP_MCALL]}: {
-          var n = c[p++], g = [];
-          for (var i = n - 1; i >= 0; i--) g[i] = q[--r];
-          var b = q[--r], a = q[--r]; q[r++] = a[b].apply(a, g); break;
-        }
-        case ${opMap[OP_ADD]}: { var b = q[--r], a = q[--r]; q[r++] = a + b; break; }
-        case ${opMap[OP_SUB]}: { var b = q[--r], a = q[--r]; q[r++] = a - b; break; }
-        case ${opMap[OP_MUL]}: { var b = q[--r], a = q[--r]; q[r++] = a * b; break; }
-        case ${opMap[OP_XOR]}: { var b = q[--r], a = q[--r]; q[r++] = a ^ b; break; }
-        case ${opMap[OP_AND]}: { var b = q[--r], a = q[--r]; q[r++] = a & b; break; }
-        case ${opMap[OP_OR]}: { var b = q[--r], a = q[--r]; q[r++] = a | b; break; }
-        case ${opMap[OP_SEQ]}: { var b = q[--r], a = q[--r]; q[r++] = a === b; break; }
-        case ${opMap[OP_LT]}: { var b = q[--r], a = q[--r]; q[r++] = a < b; break; }
-        case ${opMap[OP_NOT]}: { q[r - 1] = !q[r - 1]; break; }
-        case ${opMap[OP_JMP]}: { p = c[p]; break; }
-        case ${opMap[OP_JZ]}: { var j = c[p++]; if (!q[--r]) p = j; break; }
-        case ${opMap[OP_RET]}: return q[--r];
-        case ${opMap[OP_THROW]}: throw q[--r];
-        case ${opMap[OP_AWAIT]}: {
-          var v = q[--r];
-          return Promise.resolve(v).then(function(w) { q[r++] = w; return x(); });
-        }
-        case ${opMap[OP_OBJ]}: {
-          var n = c[p++], o = {}, e = [];
-          for (var i = 0; i < n; i++) { var v = q[--r], k0 = q[--r]; e.push([k0, v]); }
-          for (var i = e.length - 1; i >= 0; i--) { o[e[i][0]] = e[i][1]; }
-          q[r++] = o;
-          break;
-        }
-        case ${opMap[OP_ARR]}: {
-          var n = c[p++], a = [];
-          for (var i = n - 1; i >= 0; i--) a[i] = q[--r];
-          q[r++] = a;
-          break;
-        }
-      }
-    }
+  const slotMap = shuffleRange(24, (seed ^ 0x517cc1b7) >>> 0);
+  const pairOrder = shuffleRange(24, (seed ^ 0x3c6ef372) >>> 0);
+
+  const opMask = (computeFnv1aHash('vm-opmask', seed) & 0xff) | 1;
+  const omA = computeFnv1aHash('vm-oma', seed) & 0xff;
+  const omB = opMask ^ omA;
+
+  const slotMask = (computeFnv1aHash('vm-slotmask', seed) & 0x7f) | 0x20;
+  const smA = computeFnv1aHash('vm-sma', seed) & 0xff;
+  const smB = slotMask ^ smA;
+
+  const vmKey = deriveVmKey(seed);
+  const vkA = computeFnv1aHash('vm-vka', seed) | 0;
+  const vkB = (vmKey ^ vkA) | 0;
+
+  const pairs: number[] = [];
+  for (const op of pairOrder) {
+    pairs.push(opMap[op] ^ opMask, slotMap[op] ^ slotMask);
   }
-  return x();
-}`;
+
+  const handlerMap: Record<number, string> = {
+    [OP_LDC]: 'function(f){f.q[f.r++]=f.k[rd(f)];}',
+    [OP_LDV]: 'function(f){f.q[f.r++]=f.s[rd(f)];}',
+    [OP_STV]: 'function(f){f.s[rd(f)]=f.q[--f.r];}',
+    [OP_LDG]: 'function(f){f.q[f.r++]=G[f.k[rd(f)]];}',
+    [OP_GETP]: 'function(f){var b=f.q[--f.r],a=f.q[--f.r];f.q[f.r++]=a[b];}',
+    [OP_SETP]: 'function(f){var v=f.q[--f.r],b=f.q[--f.r],a=f.q[--f.r];f.q[f.r++]=(a[b]=v);}',
+    [OP_CALL]: 'function(f){var n=rd(f),g=[];for(var i=n-1;i>=0;i--)g[i]=f.q[--f.r];var fn=f.q[--f.r];f.q[f.r++]=fn.apply(null,g);}',
+    [OP_MCALL]: 'function(f){var n=rd(f),g=[];for(var i=n-1;i>=0;i--)g[i]=f.q[--f.r];var b=f.q[--f.r],a=f.q[--f.r];f.q[f.r++]=a[b].apply(a,g);}',
+    [OP_ADD]: 'function(f){var b=f.q[--f.r],a=f.q[--f.r];f.q[f.r++]=a+b;}',
+    [OP_SUB]: 'function(f){var b=f.q[--f.r],a=f.q[--f.r];f.q[f.r++]=a-b;}',
+    [OP_MUL]: 'function(f){var b=f.q[--f.r],a=f.q[--f.r];f.q[f.r++]=a*b;}',
+    [OP_XOR]: 'function(f){var b=f.q[--f.r],a=f.q[--f.r];f.q[f.r++]=a^b;}',
+    [OP_AND]: 'function(f){var b=f.q[--f.r],a=f.q[--f.r];f.q[f.r++]=a&b;}',
+    [OP_OR]: 'function(f){var b=f.q[--f.r],a=f.q[--f.r];f.q[f.r++]=a|b;}',
+    [OP_SEQ]: 'function(f){var b=f.q[--f.r],a=f.q[--f.r];f.q[f.r++]=a===b;}',
+    [OP_LT]: 'function(f){var b=f.q[--f.r],a=f.q[--f.r];f.q[f.r++]=a<b;}',
+    [OP_NOT]: 'function(f){f.q[f.r-1]=!f.q[f.r-1];}',
+    [OP_JMP]: 'function(f){var j=rd(f),ts=f.c[f.p++]^f.st;f.p=j;f.st=ts;}',
+    [OP_JZ]: 'function(f){var j=rd(f),ts=f.c[f.p++]^f.st;if(!f.q[--f.r]){f.p=j;f.st=ts;}}',
+    [OP_RET]: 'function(f){f.d=1;f.v=f.q[--f.r];}',
+    [OP_THROW]: 'function(f){throw f.q[--f.r];}',
+    [OP_AWAIT]: 'function(f){var v=f.q[--f.r];f.d=2;f.v=Promise.resolve(v).then(function(w){f.d=0;f.q[f.r++]=w;return x(f);});}',
+    [OP_OBJ]: 'function(f){var n=rd(f),o={},e=[];for(var i=0;i<n;i++){var v=f.q[--f.r],k0=f.q[--f.r];e.push([k0,v]);}for(var i=e.length-1;i>=0;i--){o[e[i][0]]=e[i][1];}f.q[f.r++]=o;}',
+    [OP_ARR]: 'function(f){var n=rd(f),a=[];for(var i=n-1;i>=0;i--)a[i]=f.q[--f.r];f.q[f.r++]=a;}',
+  };
+
+  const handlers = new Array<string>(24);
+  for (let op = 0; op < 24; op++) {
+    handlers[slotMap[op]] = handlerMap[op];
+  }
+
+  return `var ${vmHelperName}=(function(){var G=typeof globalThis<"u"?globalThis:(typeof window<"u"?window:this);var z=+!String,ok=(z|${omA})^${omB},sk=(z|${smA})^${smB},vk=(z|${vkA})^${vkB};var M=[],P=[${pairs.join(',')}];for(var i=0;i<P.length;i+=2)M[P[i]]=P[i+1];function rd(f){var p=f.p++;var x0=f.st=(Math.imul(f.st^(p+1),0x45d9f3b)+0x9e3779b9)|0;var w=f.c[p],v=w^((x0>>>16)&0xffff);f.st=(f.st^Math.imul(w+1,0x85ebca6b))|0;return v;}var H;function x(f){while(f.p<f.c.length){var o=rd(f),m=M[o^ok];if(m!==void 0){var h=H[m^sk];if(h)h(f);}if(f.d)return f.v;}}H=[${handlers.join(',')}];return function(c,k,s,t,a){return x({c:c,k:k,s:s,t:t,q:[],r:0,p:0,st:(vk^a)|0,d:0,v:void 0});};})();`;
 }
 
 function countAstNodes(node: acorn.Node): number {
@@ -176,6 +238,7 @@ export function compileFunctionToBytecode(
 ): CompiledFunction | null {
   const bytecode: number[] = [];
   const consts: any[] = [];
+  const stateSlots = new Set<number>();
   const localMap = new Map<string, number>();
   let localCount = 0;
 
@@ -425,12 +488,14 @@ export function compileFunctionToBytecode(
       case 'IfStatement': {
         if (!compileExpr(stmt.test)) return false;
         const jzPos = bytecode.length;
-        emit(OP_JZ, 0);
+        emit(OP_JZ, 0, 0);
+        stateSlots.add(jzPos + 2);
         if (!compileStmt(stmt.consequent)) return false;
 
         if (stmt.alternate) {
           const jmpPos = bytecode.length;
-          emit(OP_JMP, 0);
+          emit(OP_JMP, 0, 0);
+          stateSlots.add(jmpPos + 2);
           bytecode[jzPos + 1] = bytecode.length;
           if (!compileStmt(stmt.alternate)) return false;
           bytecode[jmpPos + 1] = bytecode.length;
@@ -463,27 +528,42 @@ export function compileFunctionToBytecode(
   emit(OP_LDC, undefIdx);
   emit(OP_RET);
 
-  return { bytecode, consts, localCount };
+  return { bytecode, consts, localCount, stateSlots };
 }
 
-function isMicroVmAlreadyInjected(ast: acorn.Program): boolean {
-  if (!ast || !Array.isArray(ast.body)) return false;
-  return ast.body.some((stmt: any) => {
+function findInjectedVmHelperName(ast: acorn.Program): string | null {
+  if (!ast || !Array.isArray(ast.body)) return null;
+  for (const stmt of ast.body as any[]) {
     if (
       stmt.type === 'FunctionDeclaration' &&
       typeof stmt.id?.name === 'string' &&
       stmt.id.name.startsWith('_uVm')
     ) {
-      return true;
+      return stmt.id.name;
     }
-    return false;
-  });
+    if (stmt.type === 'VariableDeclaration' && Array.isArray(stmt.declarations)) {
+      for (const d of stmt.declarations) {
+        if (
+          d.id?.type === 'Identifier' &&
+          typeof d.id.name === 'string' &&
+          d.id.name.startsWith('_uVm')
+        ) {
+          return d.id.name;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function isMicroVmAlreadyInjected(ast: acorn.Program): boolean {
+  return findInjectedVmHelperName(ast) !== null;
 }
 
 /**
  * Selective Bytecode Micro-VM virtualization for Layer 2 (--aggressive).
  * Selects qualifying cold functions (not serialized, no JSX, no super/yield/arguments/new.target, 15 <= N <= 80),
- * transforms their bodies into stack-based bytecode calls, and injects the <1.2 KB switch-dispatch interpreter once.
+ * transforms their bodies into stateful stream-encrypted bytecode calls, and injects the indirect-dispatch interpreter once.
  */
 export function applyMicroVm(
   ast: acorn.Program,
@@ -494,20 +574,16 @@ export function applyMicroVm(
   const suffix = computeFnv1aHash(`micro-vm:${seed}`, seed).toString(36);
   const vmHelperName = `_uVm${suffix}`;
 
-  if (isMicroVmAlreadyInjected(ast)) {
-    const existing = (ast.body as any[]).find(
-      (stmt) =>
-        stmt.type === 'FunctionDeclaration' &&
-        typeof stmt.id?.name === 'string' &&
-        stmt.id.name.startsWith('_uVm')
-    );
+  const existingName = findInjectedVmHelperName(ast);
+  if (existingName) {
     return {
       virtualizedCount: 0,
-      vmHelperName: existing?.id?.name ?? vmHelperName,
+      vmHelperName: existingName,
     };
   }
 
   const opMap = generateOpcodeMap(seed);
+  const vmKey = deriveVmKey(seed);
   const candidates: any[] = [];
 
   walk.simple(ast, {
@@ -559,7 +635,15 @@ export function applyMicroVm(
       continue;
     }
 
-    // Replace function body with VM execution call: _uVm(bytecode, consts, [params], this)
+    const fnSalt = computeFnv1aHash(`vm-fn:${virtualizedCount}`, seed) >>> 0;
+    const encBytecode = encryptBytecodeStream(
+      compiled.bytecode,
+      fnSalt,
+      vmKey,
+      compiled.stateSlots
+    );
+
+    // Replace function body with VM execution call: _uVm(encBytecode, consts, [params], this, fnSalt)
     const paramArgs = fn.params.map((p: any) => ({
       type: 'Identifier',
       name: p.name,
@@ -574,10 +658,10 @@ export function applyMicroVm(
       arguments: [
         {
           type: 'ArrayExpression',
-          elements: compiled.bytecode.map((b) => ({
+          elements: encBytecode.map((b) => ({
             type: 'Literal',
-            value: b,
-            raw: String(b),
+            value: b >>> 0,
+            raw: String(b >>> 0),
           })),
         },
         {
@@ -594,6 +678,11 @@ export function applyMicroVm(
         },
         {
           type: 'ThisExpression',
+        },
+        {
+          type: 'Literal',
+          value: fnSalt,
+          raw: String(fnSalt),
         },
       ],
       optional: false,
@@ -614,15 +703,31 @@ export function applyMicroVm(
     virtualizedCount++;
   }
 
-  // If at least one function was virtualized, inject interpreter at module top
+  // If at least one function was virtualized, inject interpreter at module top (after directives/imports)
   if (virtualizedCount > 0) {
-    const interpreterSource = createInterpreterSource(vmHelperName, opMap);
+    const interpreterSource = createInterpreterSource(vmHelperName, opMap, seed);
     const parsedHelper = acorn.parse(interpreterSource, {
       ecmaVersion: 'latest',
       sourceType: 'script',
     }) as acorn.Program;
 
-    ast.body.unshift(...(parsedHelper.body as any[]));
+    let insertIdx = 0;
+    while (insertIdx < ast.body.length) {
+      const stmt: any = ast.body[insertIdx];
+      const isDirective =
+        stmt.type === 'ExpressionStatement' &&
+        (Boolean(stmt.directive) ||
+          (stmt.expression?.type === 'Literal' &&
+            typeof stmt.expression.value === 'string' &&
+            /^(?:use\s+[a-zA-Z0-9_-]+)/.test(stmt.expression.value.trim())));
+      if (isDirective || stmt.type === 'ImportDeclaration') {
+        insertIdx++;
+      } else {
+        break;
+      }
+    }
+
+    ast.body.splice(insertIdx, 0, ...(parsedHelper.body as any[]));
   }
 
   return {
