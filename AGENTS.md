@@ -31,6 +31,26 @@ unpeek is a zero-config, call-graph-aware client-side JavaScript protection and 
 3. Atomic commits: Use the identical Conventional Commit subject in both prepare-version.ps1 and git commit. Stage only files relevant to the change, leaving uncommitted user work untouched. Every commit on main is an independently releasable build candidate.
 </versioning_and_git>
 
+<documentation_synchronization>
+1. Mandatory per-commit check: Every change touching packages/unpeek/src/ must be accompanied by synchronized documentation updates before committing. Verify documentation state with:
+   powershell -File scripts/verify-docs.ps1
+2. Token-optimized surgical reading:
+   - NEVER read entire documentation files (especially apps/web/src/content/i18n.ts, README.md, or packages/unpeek/README.md) into context.
+   - Use targeted grep (`Select-String` or `git grep -n`) to locate the specific key or heading, and read only the 20-50 relevant lines (`StartLine`/`EndLine`).
+   - Run `powershell -File scripts/verify-docs.ps1` to detect exact missing targets before touching docs, avoiding speculative audits.
+3. Source-to-documentation mapping matrix:
+   - CLI (`packages/unpeek/src/cli/**/*`): README.md + README.tr.md (CLI Usage), packages/unpeek/README.md + README.tr.md (CLI Flags), skills/unpeek/references/recipes.md (or quickstart.md), and apps/web/src/content/i18n.ts (CLI subsections in both 'en' and 'tr').
+   - Public Options & API (`packages/unpeek/src/options.ts`, `types.ts`, `config.ts`, `index.ts`): README.md + README.tr.md (Options table), packages/unpeek/README.md + README.tr.md, skills/unpeek/references/api.md, and apps/web/src/content/i18n.ts (Options definitions in both 'en' and 'tr').
+   - Adapters & Plugins (`packages/unpeek/src/next/**/*`, `packages/unpeek/src/plugins/**/*`): skills/unpeek/references/frameworks.md, apps/web/src/content/i18n.ts (Framework tabs in 'en' and 'tr'), and README.md.
+   - Benchmarks (`packages/unpeek/benchmarks/**/*`): README.md + README.tr.md (spec tables), apps/web/src/content/i18n.ts (comparisonRows / specs in 'en' and 'tr').
+   - Internal fix/refactor/perf: CHANGELOG.md entry under the relevant category.
+4. Symmetrical bilingual lockstep (EN/TR):
+   - Documentation updates must be mirrored in English and Turkish in the identical commit:
+     `README.md` <-> `README.tr.md`, `packages/unpeek/README.md` <-> `packages/unpeek/README.tr.md`.
+   - In `apps/web/src/content/i18n.ts`, 'en' dictionary lives in lines 197–999; 'tr' dictionary lives in lines 1000+. Edits made to 'en' must be symmetrically reflected in 'tr'.
+5. Skill reference integrity: All markdown paths referenced in `skills/unpeek/SKILL.md` (under `skills/unpeek/references/`) must point to existing files.
+</documentation_synchronization>
+
 <verification>
 Run checks proportional to the change and inspect actual command output before declaring completion:
 
@@ -42,7 +62,9 @@ pnpm --filter unpeek run bench
 Website & full build:
 pnpm run build
 
-Release readiness & version consistency:
+Documentation & release readiness:
+powershell -File scripts/verify-docs.ps1
+powershell -File scripts/test-verify-docs.ps1
 powershell -File scripts/test-versioning.ps1
 powershell -File scripts/validate-version.ps1 -Message "<exact full commit message>"
 powershell -File scripts/stage-release.ps1
