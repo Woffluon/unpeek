@@ -72,10 +72,6 @@ function useReducedMotion() {
 
 const FRAME_MS = 1000 / 60;
 
-/**
- * Modeled vault cost per frame. The demo loop walks a particle buffer once per
- * frame, so the protected run pays the lookup for every iteration.
- */
 function vaultCost(load: number): number {
   return Math.min(48, load * 12);
 }
@@ -86,10 +82,12 @@ function modeledFps(exempt: boolean, load: number): number {
 }
 
 interface CallGraphLabProps {
-  dict: Dictionary;
+  lab: Dictionary["lab"];
+  hotLabel: string;
+  coldLabel: string;
 }
 
-export function CallGraphLab({ dict }: CallGraphLabProps) {
+export function CallGraphLab({ lab, hotLabel, coldLabel }: CallGraphLabProps) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [exempt, setExempt] = useState(true);
   const [load, setLoad] = useState(2);
@@ -128,39 +126,23 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
       return;
     }
 
-    if (reduce) {
-      setFps(modeledFps(exempt, load));
+    const targetFps = modeledFps(exempt, load);
+    setFps(targetFps);
+
+    if (reduce || !visible) {
       return;
     }
 
-    if (!visible) return;
-
     let raf = 0;
-    let frames = 0;
-    let reportedAt = performance.now();
-    const budget = exempt ? 0 : vaultCost(load);
+    const stepInterval = exempt ? 0 : FRAME_MS + vaultCost(load);
+    let lastDrawn = 0;
 
     const frame = (now: number) => {
-      frames++;
-      if (dotRef.current) {
+      if (dotRef.current && (exempt || now - lastDrawn >= stepInterval)) {
+        lastDrawn = now;
         const progress = (now % 1600) / 1600;
         dotRef.current.setAttribute("cx", String(60 + progress * 200));
       }
-
-      if (budget > 0) {
-        const until = performance.now() + budget;
-        while (performance.now() < until) {
-          // modeled vault cost: the loop blocks the frame on purpose
-        }
-      }
-
-      if (now - reportedAt >= 500) {
-        const measured = Math.min(60, Math.round((frames * 1000) / (now - reportedAt)));
-        setFps(measured);
-        frames = 0;
-        reportedAt = now;
-      }
-
       raf = requestAnimationFrame(frame);
     };
 
@@ -186,8 +168,6 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
     setSelected("renderFrame");
   }, []);
 
-  // Run the demo once on its own so the graph is never an empty frame.
-  // Reset still returns to idle, and the button restarts it manually.
   const autoStarted = useRef(false);
 
   useEffect(() => {
@@ -197,9 +177,9 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
   }, [visible, start]);
 
   const decision = (() => {
-    if (selected === "renderFrame") return dict.lab.decisionHot;
-    if (selected === "lerp" || selected === "stepParticles") return dict.lab.decisionCaller;
-    return dict.lab.decisionCold;
+    if (selected === "renderFrame") return lab.decisionHot;
+    if (selected === "lerp" || selected === "stepParticles") return lab.decisionCaller;
+    return lab.decisionCold;
   })();
 
   const activeKind = NODES.find((node) => node.id === selected)?.kind ?? "hot";
@@ -210,8 +190,8 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
       <div className="grid grid-cols-1 lg:grid-cols-12">
         <div className="border-b border-rule bg-carbon p-4 sm:p-5 lg:col-span-5 lg:border-b-0 lg:border-r">
           <div className="mb-4 flex items-center justify-between gap-4 font-mono text-[11px] text-carbon-text/60">
-            <span className="whitespace-nowrap">{dict.lab.codeTitle}</span>
-            <span className="hidden truncate text-right sm:inline">{dict.lab.codeNote}</span>
+            <span className="whitespace-nowrap">{lab.codeTitle}</span>
+            <span className="hidden truncate text-right sm:inline">{lab.codeNote}</span>
           </div>
           <pre className="code-scroll overflow-x-auto text-[11.5px] leading-[1.9] text-carbon-text/80 sm:text-[12.5px]">
             <code>
@@ -251,10 +231,10 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
               className="rounded-[4px] bg-ink px-3.5 py-2 text-[13px] leading-none text-paper transition-colors duration-150 hover:bg-carbon-2 active:scale-[0.98]"
             >
               {phase === "scanning"
-                ? `${dict.lab.analyzing}...`
+                ? `${lab.analyzing}...`
                 : phase === "ready"
-                  ? dict.lab.reset
-                  : dict.lab.analyze}
+                  ? lab.reset
+                  : lab.analyze}
             </button>
 
             <button
@@ -264,11 +244,11 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
               disabled={phase === "idle"}
               className="rounded-[4px] border border-rule px-3.5 py-2 text-[13px] leading-none text-ink transition-colors duration-150 hover:bg-paper-2 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {exempt ? dict.lab.exemptHot : dict.lab.protectHot}
+              {exempt ? lab.exemptHot : lab.protectHot}
             </button>
 
             <label className="ml-auto flex items-center gap-2 font-mono text-[11px] text-ink-2">
-              <span className="hidden sm:inline">{dict.lab.particleLoad}</span>
+              <span className="hidden sm:inline">{lab.particleLoad}</span>
               <input
                 type="range"
                 min={1}
@@ -277,7 +257,7 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
                 value={load}
                 onChange={(event) => setLoad(Number(event.target.value))}
                 className="h-1 w-20 accent-[#111111]"
-                aria-label={dict.lab.particleLoad}
+                aria-label={lab.particleLoad}
               />
               <span className="tnum w-4 text-right">{load}</span>
             </label>
@@ -294,10 +274,10 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
             }
           >
             <text x="0" y="14" className="fill-ink-3 font-mono" fontSize="9" letterSpacing="0.08em">
-              {dict.hero.hotLabel}
+              {hotLabel}
             </text>
             <text x="0" y="194" className="fill-ink-3 font-mono" fontSize="9" letterSpacing="0.08em">
-              {dict.hero.coldLabel}
+              {coldLabel}
             </text>
 
             {EDGES.map((edge, index) => {
@@ -338,7 +318,7 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
                   key={node.id}
                   role="button"
                   tabIndex={0}
-                  aria-label={`${node.label} ${hot ? dict.lab.legendHot : dict.lab.legendCold}`}
+                  aria-label={`${node.label} ${hot ? lab.legendHot : lab.legendCold}`}
                   onClick={() => setSelected(node.id)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
@@ -364,7 +344,7 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
                     height={NODE_H}
                     rx="4"
                     fill={hot && active ? "#FF3300" : "#111111"}
-                    fillOpacity={hot && !active ? 0.12 : hot ? 0.92 : 0.92}
+                    fillOpacity={hot && !active ? 0.12 : 0.92}
                     stroke={isSelected ? "#FF3300" : hot ? "#FF3300" : "#111111"}
                     strokeWidth={isSelected ? 2 : 1}
                     strokeOpacity={isSelected ? 1 : 0.5}
@@ -389,7 +369,7 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
                       fill={active ? "#FF3300" : "#6E6A5E"}
                       letterSpacing="0.06em"
                     >
-                      {active ? dict.lab.legendHot.toUpperCase() : dict.lab.legendCold.toUpperCase()}
+                      {active ? lab.legendHot.toUpperCase() : lab.legendCold.toUpperCase()}
                     </text>
                   )}
                 </g>
@@ -400,10 +380,10 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
             <line x1="60" y1="286" x2="260" y2="286" stroke="#D5D0C2" strokeWidth="1" />
           </svg>
 
-          <div className="mt-3 grid grid-cols-1 gap-3 border-t border-rule pt-3 sm:grid-cols-[160px_1fr]">
+          <div className="mt-3 grid min-h-[104px] grid-cols-1 gap-3 border-t border-rule pt-3 sm:grid-cols-[160px_1fr]">
             <div>
               <div className="font-mono text-[10px] uppercase tracking-[0.04em] text-ink-3">
-                {dict.lab.fpsLabel}
+                {lab.fpsLabel}
               </div>
               <div className="tnum mt-1 flex items-baseline gap-1.5">
                 <span
@@ -421,13 +401,13 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
                   : "16.7 ms budget"}
               </div>
               <p className="mt-1.5 text-[12px] leading-5 text-ink-2">
-                {exempt ? dict.lab.hotFpsCaption : dict.lab.coldFpsCaption}
+                {exempt ? lab.hotFpsCaption : lab.coldFpsCaption}
               </p>
             </div>
 
             <div className="border-l-0 border-rule pl-0 sm:border-l sm:pl-4">
               <div className="font-mono text-[10px] uppercase tracking-[0.04em] text-ink-3">
-                {dict.lab.evidence}
+                {lab.evidence}
               </div>
               <div className="mt-1 flex items-center gap-2 font-mono text-[12px] text-ink">
                 <span
@@ -439,9 +419,7 @@ export function CallGraphLab({ dict }: CallGraphLabProps) {
             </div>
           </div>
 
-          <p className="mt-3 font-mono text-[10.5px] leading-4 text-ink-3">
-            {dict.lab.disclaimer}
-          </p>
+          <p className="mt-3 font-mono text-[10.5px] leading-4 text-ink-3">{lab.disclaimer}</p>
         </div>
       </div>
     </div>

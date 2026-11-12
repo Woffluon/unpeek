@@ -1,54 +1,35 @@
-"use client";
-
-import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { DICTIONARY } from "@/content/i18n";
-import { useLocale } from "@/lib/use-locale";
+import { DICTIONARY, type Locale } from "@/content/i18n";
+import { GITHUB_URL, NPM_URL } from "@/lib/seo";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { CallGraphLab } from "@/components/call-graph-lab";
 import { SourceTicker } from "@/components/source-ticker";
 import { HighlightedCode } from "@/components/syntax-highlight";
+import { CopyButton, HeroCopyCommand } from "@/components/copy-button";
+import { JsonLd, homeJsonLd } from "@/components/json-ld";
 
 // Bars share one scale per row: the signal bar is the measured unpeek figure
 // drawn against the legacy upper bound, so its width is the real ratio.
 const COMPARE_SHARE = [(2 / 850) * 100, (14 / 340) * 100];
 
+const SPEC_SOURCE_HREFS: Record<string, string> = {
+  "benchmarks/overhead.bench.ts": `${GITHUB_URL}/blob/main/packages/unpeek/benchmarks/overhead.bench.ts`,
+  "src/cli/protect.ts": `${GITHUB_URL}/blob/main/packages/unpeek/src/cli/protect.ts`,
+  "src/ast": `${GITHUB_URL}/tree/main/packages/unpeek/src/ast`,
+  "src/ast/string-vault.ts": `${GITHUB_URL}/blob/main/packages/unpeek/src/ast/string-vault.ts`,
+  "src/runtime & wasm-vault.ts": `${GITHUB_URL}/tree/main/packages/unpeek/src/runtime`,
+  "src/bundler/detector.ts": `${GITHUB_URL}/blob/main/packages/unpeek/src/bundler/detector.ts`,
+};
 
-export default function HomePage() {
-  const [locale, setLocale] = useLocale();
+export function HomePageView({ locale }: { locale: Locale }) {
   const dict = DICTIONARY[locale];
-  const [copied, setCopied] = useState(false);
-  const [installCopied, setInstallCopied] = useState(false);
-  const heroTimer = useRef<number | null>(null);
-  const installTimer = useRef<number | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (heroTimer.current) window.clearTimeout(heroTimer.current);
-      if (installTimer.current) window.clearTimeout(installTimer.current);
-    };
-  }, []);
-
-  const copyHero = useCallback(async () => {
-    if (typeof navigator === "undefined" || !navigator.clipboard) return;
-    await navigator.clipboard.writeText(dict.hero.initCmd);
-    setCopied(true);
-    if (heroTimer.current) window.clearTimeout(heroTimer.current);
-    heroTimer.current = window.setTimeout(() => setCopied(false), 1600);
-  }, [dict.hero.initCmd]);
-
-  const copyInstall = useCallback(async () => {
-    if (typeof navigator === "undefined" || !navigator.clipboard) return;
-    await navigator.clipboard.writeText(dict.installSection.command);
-    setInstallCopied(true);
-    if (installTimer.current) window.clearTimeout(installTimer.current);
-    installTimer.current = window.setTimeout(() => setInstallCopied(false), 1600);
-  }, [dict.installSection.command]);
+  const docsBase = locale === "tr" ? "/tr/docs" : "/docs";
 
   return (
     <div className="flex min-h-screen flex-col">
-      <SiteHeader dict={dict} locale={locale} onLocaleChange={setLocale} />
+      <JsonLd data={homeJsonLd(locale)} />
+      <SiteHeader locale={locale} version={dict.meta.version} nav={dict.nav} />
 
       <main id="main" className="flex-1">
         {/* Hero */}
@@ -66,24 +47,14 @@ export default function HomePage() {
                 </p>
 
                 <div className="mt-8 flex flex-col items-stretch gap-2.5 sm:flex-row sm:items-center">
-                  <button
-                    type="button"
-                    onClick={copyHero}
-                    className="group flex items-center justify-between gap-6 rounded-[3px] bg-ink px-3.5 py-3 text-left transition-colors duration-150 hover:bg-carbon-2 active:scale-[0.99]"
-                  >
-                    <span className="flex items-center gap-2 font-mono text-[13px] text-paper">
-                      <span className="text-paper/45" aria-hidden="true">
-                        $
-                      </span>
-                      {dict.hero.initCmd}
-                    </span>
-                    <span className="shrink-0 border-l border-paper/20 pl-3 font-mono text-[11px] text-paper/70">
-                      {copied ? dict.hero.copiedLabel : dict.hero.copyLabel}
-                    </span>
-                  </button>
+                  <HeroCopyCommand
+                    command={dict.hero.initCmd}
+                    copyLabel={dict.hero.copyLabel}
+                    copiedLabel={dict.hero.copiedLabel}
+                  />
 
                   <a
-                    href="https://github.com/Woffluon/unpeek"
+                    href={GITHUB_URL}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center justify-center gap-2 rounded-[3px] border border-rule px-4 py-3 font-mono text-[12px] leading-none text-ink transition-colors duration-150 hover:bg-paper-2"
@@ -95,13 +66,13 @@ export default function HomePage() {
 
                 <div className="mt-5 flex flex-wrap items-center gap-x-6 gap-y-2 font-mono text-[10.5px] text-ink-3">
                   <Link
-                    href="/docs#doc-architecture"
+                    href={`${docsBase}/architecture/`}
                     className="underline decoration-rule decoration-1 underline-offset-4 transition-colors duration-150 hover:text-ink"
                   >
                     {dict.hero.secondaryCta}
                   </Link>
                   <a
-                    href="https://www.npmjs.com/package/unpeek"
+                    href={NPM_URL}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="underline decoration-rule decoration-1 underline-offset-4 transition-colors duration-150 hover:text-ink"
@@ -249,7 +220,11 @@ export default function HomePage() {
             </div>
 
             <div className="mt-10">
-              <CallGraphLab dict={dict} />
+              <CallGraphLab
+                lab={dict.lab}
+                hotLabel={dict.hero.hotLabel}
+                coldLabel={dict.hero.coldLabel}
+              />
             </div>
           </div>
         </section>
@@ -268,15 +243,29 @@ export default function HomePage() {
             </div>
 
             <dl className="mt-8 border-t border-ink sm:hidden">
-              {dict.specSection.rows.map((row) => (
-                <div key={row.metric} className="border-b border-rule py-4">
-                  <dt className="text-[14px] leading-6 text-ink">{row.metric}</dt>
-                  <dd className="mt-1 font-mono text-[12.5px] leading-5 text-ink">{row.value}</dd>
-                  <dd className="mt-0.5 font-mono text-[11px] leading-5 text-ink-3">
-                    {row.where}
-                  </dd>
-                </div>
-              ))}
+              {dict.specSection.rows.map((row) => {
+                const sourceUrl = SPEC_SOURCE_HREFS[row.where];
+                return (
+                  <div key={row.metric} className="border-b border-rule py-4">
+                    <dt className="text-[14px] leading-6 text-ink">{row.metric}</dt>
+                    <dd className="mt-1 font-mono text-[12.5px] leading-5 text-ink">{row.value}</dd>
+                    <dd className="mt-0.5 font-mono text-[11px] leading-5 text-ink-3">
+                      {sourceUrl ? (
+                        <a
+                          href={sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="underline decoration-rule underline-offset-4 hover:text-ink"
+                        >
+                          {row.where}
+                        </a>
+                      ) : (
+                        row.where
+                      )}
+                    </dd>
+                  </div>
+                );
+              })}
             </dl>
 
             <div className="mt-10 hidden overflow-x-auto sm:block">
@@ -295,20 +284,34 @@ export default function HomePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {dict.specSection.rows.map((row) => (
-                    <tr
-                      key={row.metric}
-                      className="border-b border-rule transition-colors duration-150 hover:bg-paper-2"
-                    >
-                      <td className="py-3.5 pr-4 text-[14px] leading-6 text-ink">{row.metric}</td>
-                      <td className="py-3.5 pr-4 font-mono text-[12.5px] leading-6 text-ink">
-                        {row.value}
-                      </td>
-                      <td className="py-3.5 font-mono text-[11.5px] leading-6 text-ink-3">
-                        {row.where}
-                      </td>
-                    </tr>
-                  ))}
+                  {dict.specSection.rows.map((row) => {
+                    const sourceUrl = SPEC_SOURCE_HREFS[row.where];
+                    return (
+                      <tr
+                        key={row.metric}
+                        className="border-b border-rule transition-colors duration-150 hover:bg-paper-2"
+                      >
+                        <td className="py-3.5 pr-4 text-[14px] leading-6 text-ink">{row.metric}</td>
+                        <td className="py-3.5 pr-4 font-mono text-[12.5px] leading-6 text-ink">
+                          {row.value}
+                        </td>
+                        <td className="py-3.5 font-mono text-[11.5px] leading-6 text-ink-3">
+                          {sourceUrl ? (
+                            <a
+                              href={sourceUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="underline decoration-rule underline-offset-4 transition-colors duration-150 hover:text-ink"
+                            >
+                              {row.where}
+                            </a>
+                          ) : (
+                            row.where
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -414,7 +417,7 @@ export default function HomePage() {
                   {dict.docsCta.body}
                 </p>
                 <Link
-                  href="/docs"
+                  href={`${docsBase}/`}
                   className="mt-7 inline-flex items-center gap-3 rounded-[3px] bg-ink px-4 py-3 font-mono text-[12px] leading-none text-paper transition-colors duration-150 hover:bg-carbon-2"
                 >
                   {dict.docsCta.cta}
@@ -426,7 +429,7 @@ export default function HomePage() {
                 {dict.docsSections.map((section) => (
                   <li key={section.id} className="border-t border-rule first:border-t-0">
                     <Link
-                      href={`/docs#doc-${section.id}`}
+                      href={`${docsBase}/${section.id}/`}
                       className="group flex items-baseline gap-5 py-3.5"
                     >
                       <span className="tnum w-6 shrink-0 font-mono text-[10.5px] text-ink-3">
@@ -469,13 +472,12 @@ export default function HomePage() {
                 <div className="border border-carbon-rule">
                   <div className="flex items-center justify-between gap-3 border-b border-carbon-rule px-4 py-2.5">
                     <span className="font-mono text-[10.5px] text-carbon-text/65">postbuild</span>
-                    <button
-                      type="button"
-                      onClick={copyInstall}
+                    <CopyButton
+                      text={dict.installSection.command}
+                      copyLabel={dict.hero.copyLabel}
+                      copiedLabel={dict.hero.copiedLabel}
                       className="rounded-[3px] border border-carbon-rule px-2.5 py-1 font-mono text-[10.5px] text-carbon-text/70 transition-colors duration-150 hover:text-carbon-text active:scale-[0.98]"
-                    >
-                      {installCopied ? dict.hero.copiedLabel : dict.hero.copyLabel}
-                    </button>
+                    />
                   </div>
                   <div className="px-4 py-6 sm:px-6 sm:py-8">
                     <code className="block font-mono text-[20px] leading-tight text-carbon-text sm:text-[28px]">
@@ -487,7 +489,7 @@ export default function HomePage() {
 
                 <div className="mt-5 flex flex-wrap items-center gap-3">
                   <a
-                    href="https://github.com/Woffluon/unpeek"
+                    href={GITHUB_URL}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center rounded-[4px] bg-carbon-text px-4 py-2.5 text-[13px] font-medium leading-none text-ink transition-opacity duration-150 hover:opacity-85"
@@ -495,7 +497,7 @@ export default function HomePage() {
                     {dict.installSection.starCta}
                   </a>
                   <a
-                    href="https://www.npmjs.com/package/unpeek"
+                    href={NPM_URL}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center rounded-[4px] border border-carbon-rule px-4 py-2.5 text-[13px] leading-none text-carbon-text/80 transition-colors duration-150 hover:text-carbon-text"
@@ -509,7 +511,7 @@ export default function HomePage() {
         </section>
       </main>
 
-      <SiteFooter dict={dict} />
+      <SiteFooter locale={locale} version={dict.meta.version} footer={dict.footer} />
     </div>
   );
 }
