@@ -64,8 +64,10 @@ flowchart TD
    Before modifying an AST node, [`detectHotPaths`](packages/unpeek/src/ast/index.ts) traverses the file call graph bidirectionally. Functions containing loops (`for`, `while`, `do-while`, `for-of`), array higher-order callbacks (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` tickers, React/UI render components (`useState`, `useEffect`, `createElement`), and all helper callees invoked from hot loops are flagged as hot paths. `unpeek` exempts hot loops and their callees from both opaque control-flow predicates and string vault rewriting, while protecting cold functions (such as license checks, request signers, and auth validators). V8 JIT optimization inside hot loops remains untouched.
 2. **O(1) Const-Array String Vault & Tamper Entanglement (`<15%` Gzip Budget)**
    Cold string literals (`minStringLength >= 4`) are encrypted at build time with a period-2 polymorphic XOR stream cipher keyed by a per-build 32-bit seed that preserves LZ77/Gzip compressibility. At module initialization, the injected `const _uC` vault decodes strings once into a V8 `kConst` array slot so every subsequent read resolves in O(1) constant time via direct array indexing, while dual-entangling the XOR key with both the runtime integrity state (`String.prototype._u`) and self-verifying decoder formatting (`/\n/.test(f)`).
-3. **Self-Defending `Function.prototype.toString()` Integrity and Passive Deterrent**
-   When an analyst formats a protected chunk using DevTools Pretty-Print (`{}`) or edits a branch instruction in the Sources panel, the formatted source alters `Function.prototype.toString()`. [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts) validates a seeded 32-bit FNV-1a checksum against the function source representation with zero false positives on untouched minified code, triggering gradual state degradation (`deterrentMode: 'gradual'`) rather than an obvious crash point that attackers can patch out.
+3. **Self-Defending `Function.prototype.toString()` Integrity and Deterrent Modes**
+   When an analyst formats a protected chunk using DevTools Pretty-Print (`{}`) or edits a branch instruction in the Sources panel, the formatted source alters `Function.prototype.toString()`. [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts) validates a seeded 32-bit FNV-1a checksum against the function source representation with zero false positives on untouched minified code. The response is governed by `deterrentMode`:
+   - `passive` (CLI `protect` default): Dispatches a tamper telemetry event (`unpeek:tamper`) to `window` with zero console muting or audible breakage, enabling covert telemetry.
+   - `gradual` (`unplugin` default): Progressively corrupts internal runtime lookups and silences `console` output, neutralizing attackers without providing an immediate crash trace to patch.
 4. **Automatic Source Map Vault (`.unpeek-maps/`)**
    Leaving `.js.map` files in a public build directory reconstructs your original TypeScript project tree inside DevTools. [`protectProject`](packages/unpeek/src/cli/protect.ts) extracts `.map` files from your public build directory into a private `.unpeek-maps/` folder and strips `//# sourceMappingURL=` comments from every client bundle so you can upload maps to Sentry or Datadog without serving them to end users.
 
@@ -103,7 +105,8 @@ npx unpeek protect
 | `protect` | Protect production client bundles in-place (default command) | |
 | `--out-dir <path>` | Explicit client output directory override (e.g., `dist/assets`, `.next/static/chunks`) | Auto-detected from project framework |
 | `--seed <number>` | Deterministic 32-bit polymorphic build seed | Random per build |
-| `--passive` | Use passive deterrent mode instead of gradual state degradation | Default: gradual degradation |
+| `--aggressive` | Enable Tier 2 aggressive protection (Micro-VM & WASM KDF) | Disabled (Tier 1 default: <2% CPU, <15% Gzip) |
+| `--passive` | Use passive deterrent mode (tamper telemetry event without console muting) | CLI default: `passive` (`unplugin` default: `gradual`) |
 | `--no-maps` | Permanently delete `.map` files instead of moving them to `.unpeek-maps/` | Moves to `.unpeek-maps/` |
 | `--min-string-length <num>` | Minimum string length for O(1) `kConst` encryption vault | `4` |
 | `--private-maps-dir <dir>` | Directory to store vaulted private source maps | `.unpeek-maps` |
@@ -112,7 +115,11 @@ npx unpeek protect
 | `-v, --version` | Show CLI version number | |
 
 > [!NOTE]
-> Programmatic execution through `protectProject(options)` supports additional fine-grained options, including `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, and `cwd`.
+> **Protection Tiers:**
+> - **Tier 1 (Default):** Call-graph hot-path exemption (<2% CPU overhead, <15% Gzip budget), polymorphic O(1) `kConst` string vault, identifier mangling, and 32-bit FNV-1a checksum runtime shield.
+> - **Tier 2 (`--aggressive`):** Bytecode Micro-VM virtualization and inline WebAssembly Key Derivation Function (WASM KDF) for security-critical functions.
+>
+> Programmatic execution through `protectProject(options)` supports additional fine-grained options, including `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, `aggressive`, and `cwd`.
 
 > [!IMPORTANT]
 > **CommonJS Users (Dynamic `import()`):**
@@ -192,9 +199,137 @@ const summary = await protectProject({
 
 ---
 
+## Configuration (`unpeek.config.js` / `.mjs` / `.cjs` / `.json`)
+
+`unpeek` supports declarative configuration via a dedicated configuration file in your project root. Both the CLI and bundler plugins discover configuration files in this priority order:
+1. `unpeek.config.js`
+2. `unpeek.config.mjs`
+3. `unpeek.config.cjs`
+4. `unpeek.config.json`
+
+### Type-Safe Configuration (`defineConfig`)
+
+Import `defineConfig` from `'unpeek'` to enable IDE autocompletion and schema validation:
+
+```javascript
+// unpeek.config.mjs (or unpeek.config.js)
+import { defineConfig } from 'unpeek';
+
+export default defineConfig({
+  // Target framework override ('nextjs' | 'vite' | 'webpack' | 'vanilla')
+  framework: 'nextjs',
+
+  // Target environment ('browser' | 'worker' | 'universal')
+  target: 'browser',
+
+  // Explicit client output directory override (auto-detected if omitted)
+  outDir: '.next/static/chunks',
+
+  // Target file extensions to protect
+  extensions: ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'],
+
+  // Public asset directories
+  publicDirs: ['public', 'static'],
+
+  // Inclusion and exclusion glob filters
+  filter: {
+    include: [],
+    exclude: ['node_modules/**', '**/*.test.*', '**/*.spec.*'],
+  },
+
+  // Call-graph analysis and hot-path tuning
+  hotPath: {
+    // Custom animation loop and timer functions to exempt from protection
+    customAnimationCalls: ['requestAnimationFrame', 'ticker', 'renderLoop'],
+    // Custom React hooks to treat as UI render boundaries
+    customHooks: ['useAnimation', 'useCanvas'],
+    // Higher-order array methods treated as hot loops
+    arrayHofMethods: ['map', 'filter', 'reduce', 'forEach'],
+    // Transitive caller traversal depth for hot path exemption (default: 2)
+    maxPipelineCallers: 2,
+    // Component names exempt from AST transformation
+    excludeComponents: ['VirtualTable', 'DataGrid'],
+  },
+
+  // Polymorphic string vault configuration
+  vault: {
+    // Minimum string length to encrypt in O(1) kConst array (default: 4)
+    minStringLength: 4,
+    // CSS framework class extraction ('tailwind' | 'unocss' | 'none')
+    cssFramework: 'tailwind',
+    // Preserve UI class strings and semantic DOM anchors
+    semanticAnchors: {
+      excludeUiClasses: true,
+    },
+    // Generate decoy strings to defeat automated entropy scanners
+    polymorphicDecoys: true,
+  },
+
+  // Identifier and symbol mangler configuration
+  mangler: {
+    // Top-level identifiers preserved from name mangling
+    reservedIdentifiers: ['__NEXT_DATA__', '__PRELOADED_STATE__'],
+    // Property prefixes to preserve
+    excludePrefixes: ['data-', 'aria-'],
+    // Regular expression patterns to preserve
+    excludePatterns: [/^on[A-Z]/],
+  },
+
+  // Private source map vault options
+  sourcemaps: {
+    // Relocate .map files to private vault directory (default: true)
+    keepPrivate: true,
+    // Private directory name for relocated source maps (default: '.unpeek-maps')
+    vaultDir: '.unpeek-maps',
+    // Strip //# sourceMappingURL= directives from client chunks (default: true)
+    stripComments: true,
+  },
+
+  // Next.js specific overrides
+  next: {
+    // Custom build directory (default: '.next')
+    distDir: '.next',
+  },
+
+  // Vite specific overrides
+  vite: {
+    // Output directory (default: 'dist')
+    outDir: 'dist',
+    // Assets directory inside outDir (default: 'assets')
+    assetsDir: 'assets',
+  },
+});
+```
+
+For JSON configurations (`unpeek.config.json`):
+
+```json
+{
+  "framework": "nextjs",
+  "target": "browser",
+  "vault": {
+    "minStringLength": 4,
+    "cssFramework": "tailwind"
+  },
+  "sourcemaps": {
+    "keepPrivate": true,
+    "vaultDir": ".unpeek-maps"
+  },
+  "next": {
+    "distDir": ".next"
+  }
+}
+```
+
+---
+
 ## `.unpeek-maps/` Source Map Vault & Sentry Workflow
 
 When `keepPrivateMaps` is enabled (the default), `unpeek` relocates all `.js.map` files from your public output directory into `.unpeek-maps/` while preserving relative filenames, and strips `//# sourceMappingURL=` directives from public `.js` chunks.
+
+> [!CAUTION]
+> **Container Security Advisory (`.dockerignore`):**
+> When packaging web applications with Docker, ensure `.unpeek-maps/` is explicitly listed in your `.dockerignore` file. If `.unpeek-maps/` is omitted, standard `COPY . .` commands copy private source maps into the published container image layer, allowing anyone with image access to extract your full original source code. `unpeek` CLI automatically audits `.dockerignore` during build execution and prints an advisory warning if the entry is missing.
 
 To retain full stack-trace symbolication in production error trackers:
 
@@ -212,7 +347,7 @@ npx @sentry/cli sourcemaps upload .unpeek-maps --release="$GIT_COMMIT_SHA"
 
 ## AI Coding Agent Integration
 
-`unpeek` ships with an official AI Agent Skill ([`skills/unpeek/SKILL.md`](skills/unpeek/SKILL.md)) following the open Vercel Agent Skills specification and Agent Skills Discovery Optimization (SDO) standards. Installing this skill equips coding agents (Claude Code, Cursor, OpenAI Codex, Gemini CLI, GitHub Copilot, OpenCode) with deep domain knowledge for protecting client-side bundles, preserving hot-path performance budgets (<2% CPU, <15% Gzip), guarding SSR boundaries, and managing `.unpeek-maps/` in CI/CD pipelines.
+`unpeek` ships with an official AI Agent Skill ([`skills/unpeek/SKILL.md`](skills/unpeek/SKILL.md)) following the open Vercel Agent Skills specification and Agent Skills Discovery Optimization (SDO) standards. Installing this skill equips coding agents (Claude Code, Cursor, OpenAI Codex, Gemini CLI, GitHub Copilot, OpenCode) with operational workflows for protecting client-side bundles, preserving hot-path performance budgets (<2% CPU, <15% Gzip), guarding SSR boundaries, and managing `.unpeek-maps/` in CI/CD pipelines.
 
 ### Skill Installation
 

@@ -42,6 +42,25 @@ For static exports (`next export` or Next 13.3+ `output: 'export'`), unpeek auto
 npx unpeek protect --out-dir out
 ```
 
+### Custom Build Directory (`distDir`) via `unpeek.config.ts`
+When Next.js is configured with a non-default build output directory (e.g. `distDir: 'build'` or `distDir: '.build'`), unpeek automatically parses `next.config.*` for the declaration.
+
+You can also explicitly define `distDir` in `unpeek.config.ts` or `unpeek.config.js`:
+
+```ts
+// unpeek.config.ts
+import { defineConfig } from 'unpeek';
+
+export default defineConfig({
+  framework: 'nextjs',
+  next: {
+    distDir: 'build', // Protects build/static/chunks; excludes build/server
+  },
+});
+```
+
+This guarantees unpeek locates client chunks under `<distDir>/static/chunks` while keeping `<distDir>/server` and SSR assets strictly untouched.
+
 ### Option B: `next.config.mjs` with Webpack Plugin
 For chunk protection during the compilation lifecycle:
 ```js
@@ -87,6 +106,22 @@ export default defineConfig({
   ],
   build: {
     sourcemap: true, // unpeek will extract maps to .unpeek-maps/
+  },
+});
+```
+
+### Custom Output Directory via `unpeek.config.ts`
+When Vite customizes `build.outDir` or `build.assetsDir`, unpeek detects them automatically from `vite.config.*`, or you can declare them explicitly:
+
+```ts
+// unpeek.config.ts
+import { defineConfig } from 'unpeek';
+
+export default defineConfig({
+  framework: 'vite',
+  vite: {
+    outDir: 'custom-dist',
+    assetsDir: 'assets',
   },
 });
 ```

@@ -77,12 +77,56 @@ datadog-ci sourcemaps upload .unpeek-maps/ \
 .unpeek-maps/
 ```
 
-### Docker / Container Protection (`.dockerignore`)
-Never copy `.unpeek-maps/` into production container images:
+### Docker / Container Protection (`.dockerignore` Best Practice)
+In containerized deployments, commands like `COPY . .` in a Dockerfile will copy the local `.unpeek-maps/` directory into the Docker image layer unless explicitly ignored. This can inadvertently expose private source maps inside public or shared container images.
+
+#### unpeek Advisory Warning
+During execution, `unpeek protect` inspects `.dockerignore` in your project root. If `.dockerignore` does not exist or omits `.unpeek-maps/`, unpeek issues an advisory:
+
+```text
+[unpeek:advisory] .dockerignore is missing .unpeek-maps/. Private maps may leak into Docker image during 'COPY . .'.
+```
+
+#### Recommended `.dockerignore`
+Ensure `.dockerignore` includes `.unpeek-maps/` alongside standard build caches:
+
 ```dockerignore
+# unpeek private source map vault
 .unpeek-maps/
-.next/cache
+
+# Bundler caches & dependencies
 node_modules
+.next/cache
+.git
+npm-debug.log*
+```
+
+#### Multi-Stage Dockerfile Pattern
+In multi-stage Docker builds, only copy public distribution assets to the runtime stage:
+
+```dockerfile
+# Stage 1: Build & Protect
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY . .
+RUN pnpm run build
+# unpeek protect runs post-build: .unpeek-maps/ created, public chunks stripped
+
+# (Optional CI step: upload .unpeek-maps/ to Sentry / Datadog)
+
+# Stage 2: Production Runner
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+# Copy only public client chunks and standalone server; exclude .unpeek-maps/
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+
+EXPOSE 3000
+CMD ["node", "server.js"]
 ```
 
 ### Verification Command
