@@ -1,8 +1,9 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
+import type { ManglerConfig, UnpeekConfig } from '../types.js';
 import { computeFnv1aHash } from './string-vault.js';
 
-const RESERVED_IDENTIFIERS = new Set([
+export const RESERVED_IDENTIFIERS = new Set([
   'arguments',
   'undefined',
   'NaN',
@@ -42,6 +43,16 @@ const RESERVED_IDENTIFIERS = new Set([
   'module',
   'exports',
   'React',
+  'navigator',
+  'crypto',
+  'location',
+  'history',
+  'indexedDB',
+  'fetch',
+  'WebSocket',
+  'Worker',
+  'AudioContext',
+  'performance',
 ]);
 
 const FUNCTION_TYPES = new Set([
@@ -123,21 +134,38 @@ function collectPatternTargets(
   }
 }
 
-function isMangleableName(origName: string): boolean {
+export function isMangleableName(
+  origName: string,
+  reservedSet: Set<string> = RESERVED_IDENTIFIERS,
+  manglerConfig?: ManglerConfig
+): boolean {
   return (
     origName.length > 2 &&
-    !RESERVED_IDENTIFIERS.has(origName) &&
+    !reservedSet.has(origName) &&
+    !origName.startsWith('$') &&
+    !origName.startsWith('__') &&
     !origName.startsWith('_u') &&
     !origName.startsWith('_0x') &&
-    !origName.startsWith('$$')
+    (!manglerConfig?.excludePrefixes ||
+      !manglerConfig.excludePrefixes.some((p) => origName.startsWith(p))) &&
+    (!manglerConfig?.excludePatterns ||
+      !manglerConfig.excludePatterns.some((re) => re.test(origName)))
   );
 }
 
 export function applyPolymorphicMangler(
   ast: acorn.Program,
   seed = 0x9e3779b9,
-  serializedFunctionNodes?: WeakSet<acorn.Node>
+  serializedFunctionNodes?: WeakSet<acorn.Node>,
+  config?: UnpeekConfig
 ): number {
+  const activeReserved = new Set(RESERVED_IDENTIFIERS);
+  if (config?.mangler?.reservedIdentifiers) {
+    for (const id of config.mangler.reservedIdentifiers) {
+      activeReserved.add(id);
+    }
+  }
+  const manglerConfig = config?.mangler;
   const scopeRecords = new Map<acorn.Node, ScopeRecord>();
   const existingIdentifiers = new Set<string>();
   let counter = 0;
@@ -198,7 +226,8 @@ export function applyPolymorphicMangler(
     const scope = scopeRecords.get(scopeNode);
     if (!scope) return;
     const origName: string = target.idNode.name;
-    let canMangle = shouldMangle && isMangleableName(origName);
+    let canMangle =
+      shouldMangle && isMangleableName(origName, activeReserved, manglerConfig);
     if (canMangle && fnScope) {
       if (serializedFunctionNodes && serializedFunctionNodes.has(fnScope)) {
         canMangle = false;

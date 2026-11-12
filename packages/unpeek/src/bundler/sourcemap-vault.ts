@@ -1,13 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { SourceMapVaultResult } from '../types.js';
-import { scanClientBundles } from './detector.js';
+import type { SourceMapVaultResult, UnpeekConfig } from '../types.js';
+import { hasNextServerSegment, scanClientBundles } from './detector.js';
 
 export const SOURCE_MAP_COMMENT_REGEX =
   /(?:^\s*\/\/[#@]\s*sourceMappingURL=.*$|\/\*[#@]\s*sourceMappingURL=[\s\S]*?\*\/)\s*/gm;
 
-function ensureIgnoreEntry(cwd: string, fileName: string, entryName: string): void {
-  const filePath = path.join(path.resolve(cwd), fileName);
+function ensureIgnoreEntry(dir: string, fileName: string, entryName: string): void {
+  const filePath = path.join(path.resolve(dir), fileName);
   if (!fs.existsSync(filePath)) {
     return;
   }
@@ -15,7 +15,12 @@ function ensureIgnoreEntry(cwd: string, fileName: string, entryName: string): vo
   const normalizedEntry = entryName.endsWith('/') ? entryName : `${entryName}/`;
   const bareEntry = normalizedEntry.slice(0, -1);
   const lines = content.split(/\r?\n/).map((line) => line.trim());
-  if (!lines.includes(normalizedEntry) && !lines.includes(bareEntry)) {
+  if (
+    !lines.includes(normalizedEntry) &&
+    !lines.includes(bareEntry) &&
+    !lines.includes('.unpeek-maps') &&
+    !lines.includes('.unpeek-maps/')
+  ) {
     const prefix = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
     fs.writeFileSync(filePath, `${content}${prefix}${normalizedEntry}\n`, 'utf8');
   }
@@ -26,21 +31,70 @@ function isSubdirectoryOrSame(parent: string, child: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-function isDockerIgnoreMissing(cwd: string, ignoreEntry: string): boolean {
-  const filePath = path.join(path.resolve(cwd), '.dockerignore');
-  if (!fs.existsSync(filePath)) {
-    return true;
+function findMonorepoRoots(cwd: string): string[] {
+  const resolved = path.resolve(cwd);
+  const dirs: string[] = [resolved];
+  let curr = resolved;
+
+  while (true) {
+    const parent = path.dirname(curr);
+    if (!parent || parent === curr) {
+      break;
+    }
+    const hasGit = fs.existsSync(path.join(parent, '.git'));
+    const hasWorkspace = fs.existsSync(path.join(parent, 'pnpm-workspace.yaml'));
+    const hasGitIgnore = fs.existsSync(path.join(parent, '.gitignore'));
+    const hasDockerIgnore = fs.existsSync(path.join(parent, '.dockerignore'));
+    const hasPkgJson = fs.existsSync(path.join(parent, 'package.json'));
+
+    if (hasGit || hasWorkspace || hasGitIgnore || hasDockerIgnore || hasPkgJson) {
+      dirs.push(parent);
+    }
+    if (hasGit || hasWorkspace) {
+      break;
+    }
+    curr = parent;
   }
-  const content = fs.readFileSync(filePath, 'utf8');
-  const normalizedEntry = ignoreEntry.endsWith('/') ? ignoreEntry : `${ignoreEntry}/`;
-  const bareEntry = normalizedEntry.slice(0, -1);
-  const lines = content.split(/\r?\n/).map((line) => line.trim());
-  return (
-    !lines.includes(normalizedEntry) &&
-    !lines.includes(bareEntry) &&
-    !lines.includes('.unpeek-maps') &&
-    !lines.includes('.unpeek-maps/')
-  );
+
+  return dirs;
+}
+
+function checkDockerIgnoreMissing(cwd: string, ignoreEntry: string): boolean {
+  const candidateDirs = findMonorepoRoots(cwd);
+  let foundAnyDockerIgnore = false;
+
+  for (const dir of candidateDirs) {
+    const filePath = path.join(dir, '.dockerignore');
+    if (fs.existsSync(filePath)) {
+      foundAnyDockerIgnore = true;
+      const content = fs.readFileSync(filePath, 'utf8');
+      const normalizedEntry = ignoreEntry.endsWith('/') ? ignoreEntry : `${ignoreEntry}/`;
+      const bareEntry = normalizedEntry.slice(0, -1);
+      const lines = content.split(/\r?\n/).map((line) => line.trim());
+      if (
+        lines.includes(normalizedEntry) ||
+        lines.includes(bareEntry) ||
+        lines.includes('.unpeek-maps') ||
+        lines.includes('.unpeek-maps/')
+      ) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+function updateAllIgnoreFiles(cwd: string, vaultDir: string): void {
+  const candidateDirs = findMonorepoRoots(cwd);
+  for (const dir of candidateDirs) {
+    const relFromDir = path.relative(dir, vaultDir).replace(/\\/g, '/');
+    const entry = relFromDir && !relFromDir.startsWith('..') ? `${relFromDir}/` : '.unpeek-maps/';
+
+    ensureIgnoreEntry(dir, '.gitignore', entry);
+    ensureIgnoreEntry(dir, '.dockerignore', entry);
+    ensureIgnoreEntry(dir, '.npmignore', entry);
+  }
 }
 
 export function relocateSourceMaps(
@@ -48,29 +102,46 @@ export function relocateSourceMaps(
   cwd: string,
   keepPrivateMaps: boolean = true,
   privateMapsDir: string = '.unpeek-maps',
-  stripComments: boolean = true
+  stripComments: boolean = true,
+  config?: UnpeekConfig
 ): SourceMapVaultResult {
   const resolvedOutDir = path.resolve(outDir);
   const resolvedCwd = path.resolve(cwd);
-  const vaultDir = path.resolve(resolvedCwd, privateMapsDir || '.unpeek-maps');
-  const resolvedPublicDir = path.resolve(resolvedCwd, 'public');
+  const effectiveVaultDirName = config?.sourcemaps?.vaultDir ?? privateMapsDir ?? '.unpeek-maps';
+  const effectiveKeepPrivate = config?.sourcemaps?.keepPrivate ?? keepPrivateMaps;
+  const effectiveStripComments = config?.sourcemaps?.stripComments ?? stripComments;
+  const vaultDir = path.resolve(resolvedCwd, effectiveVaultDirName);
 
-  if (keepPrivateMaps !== false) {
+  const publicDirsToCheck = new Set<string>();
+  if (config?.publicDirs && config.publicDirs.length > 0) {
+    for (const d of config.publicDirs) {
+      publicDirsToCheck.add(d);
+    }
+  } else {
+    publicDirsToCheck.add('public');
+    publicDirsToCheck.add('static');
+    publicDirsToCheck.add('assets');
+  }
+
+  if (effectiveKeepPrivate !== false) {
     if (isSubdirectoryOrSame(resolvedOutDir, vaultDir)) {
       throw new Error(
         `[unpeek] Security Error: privateMapsDir cannot be located inside outDir (${resolvedOutDir}). This would expose private source maps to the web server.`
       );
     }
-    if (isSubdirectoryOrSame(resolvedPublicDir, vaultDir)) {
-      throw new Error(
-        `[unpeek] Security Error: privateMapsDir cannot be located inside publicDir (${resolvedPublicDir}). This would expose private source maps to the web server.`
-      );
+    for (const pubDir of publicDirsToCheck) {
+      const resolvedPublicDir = path.resolve(resolvedCwd, pubDir);
+      if (isSubdirectoryOrSame(resolvedPublicDir, vaultDir)) {
+        throw new Error(
+          `[unpeek] Security Error: privateMapsDir cannot be located inside publicDir (${resolvedPublicDir}). This would expose private source maps to the web server.`
+        );
+      }
     }
   }
 
   const relVault = path.relative(resolvedCwd, vaultDir).replace(/\\/g, '/');
   const ignoreEntry = relVault && !relVault.startsWith('..') ? `${relVault}/` : '.unpeek-maps/';
-  const dockerIgnoreMissing = isDockerIgnoreMissing(resolvedCwd, ignoreEntry);
+  const dockerIgnoreMissing = checkDockerIgnoreMissing(resolvedCwd, ignoreEntry);
 
   const movedFiles: string[] = [];
   let movedMapsCount = 0;
@@ -87,12 +158,7 @@ export function relocateSourceMaps(
   }
 
   function walkForMaps(currentDir: string): void {
-    const normalized = currentDir.replace(/\\/g, '/');
-    if (
-      normalized.includes('/.next/server') ||
-      normalized.includes('/node_modules') ||
-      normalized.includes('/.unpeek-maps')
-    ) {
+    if (hasNextServerSegment(currentDir, resolvedOutDir)) {
       return;
     }
 
@@ -106,17 +172,15 @@ export function relocateSourceMaps(
     for (const entry of entries) {
       const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
-        if (
-          entry.name === 'node_modules' ||
-          entry.name === '.unpeek-maps' ||
-          entry.name === 'server' ||
-          entry.name === 'ssr'
-        ) {
+        if (entry.name === 'node_modules' || entry.name === '.unpeek-maps') {
+          continue;
+        }
+        if (hasNextServerSegment(fullPath, resolvedOutDir)) {
           continue;
         }
         walkForMaps(fullPath);
       } else if (entry.isFile() && entry.name.endsWith('.map')) {
-        if (keepPrivateMaps !== false) {
+        if (effectiveKeepPrivate !== false) {
           const relPath = path.relative(resolvedOutDir, fullPath);
           const targetPath = path.join(vaultDir, relPath);
           fs.mkdirSync(path.dirname(targetPath), { recursive: true });
@@ -133,16 +197,12 @@ export function relocateSourceMaps(
 
   walkForMaps(resolvedOutDir);
 
-  if (keepPrivateMaps !== false && movedMapsCount > 0) {
-    const relVault = path.relative(resolvedCwd, vaultDir).replace(/\\/g, '/');
-    const ignoreEntry = relVault && !relVault.startsWith('..') ? `${relVault}/` : '.unpeek-maps/';
-    ensureIgnoreEntry(resolvedCwd, '.gitignore', ignoreEntry);
-    ensureIgnoreEntry(resolvedCwd, '.dockerignore', ignoreEntry);
-    ensureIgnoreEntry(resolvedCwd, '.npmignore', ignoreEntry);
+  if (effectiveKeepPrivate !== false && movedMapsCount > 0) {
+    updateAllIgnoreFiles(resolvedCwd, vaultDir);
   }
 
-  if (stripComments) {
-    const clientFiles = scanClientBundles(resolvedOutDir);
+  if (effectiveStripComments) {
+    const clientFiles = scanClientBundles(resolvedOutDir, config);
     for (const filePath of clientFiles) {
       const original = fs.readFileSync(filePath, 'utf8');
       if (original.includes('sourceMappingURL=')) {

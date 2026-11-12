@@ -1,6 +1,6 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
-import type { HotPathReport } from '../types.js';
+import type { HotPathReport, UnpeekConfig } from '../types.js';
 
 const LOOP_NODE_TYPES = new Set([
   'ForStatement',
@@ -32,6 +32,28 @@ const ANIMATION_FRAME_CALLS = new Set([
   'updateMatrixWorld',
   'raf',
 ]);
+
+const DEFAULT_IMPORT_SOURCES: Record<string, string[]> = {
+  '@react-three/fiber': ['useFrame'],
+  lenis: ['useLenis', 'raf'],
+  'lenis/react': ['useLenis'],
+  three: ['onBeforeRender', 'updateMatrixWorld', 'useFrame'],
+  gsap: ['ticker'],
+};
+
+const DEFAULT_HOC_WRAPPERS = new Set([
+  'memo',
+  'forwardRef',
+  'React.memo',
+  'React.forwardRef',
+  'observer',
+  'connect',
+]);
+
+const DEFAULT_EVENT_HANDLER_REGEX =
+  /^(?:on|handle)(?!Tick|Render|Update|Frame|Animate|Physics)[A-Z]/;
+
+const DEFAULT_HOOK_REGEX = /^use[A-Z0-9]/;
 
 const REACT_HOOK_OR_RENDER_CALLS = new Set([
   'useState',
@@ -84,7 +106,33 @@ export function parseJavaScriptAst(code: string): acorn.Program | null {
   }
 }
 
-function getFunctionLabel(node: any, ancestors: acorn.Node[]): string {
+function isHocCall(callNode: any, hocWrappers?: Set<string>): boolean {
+  if (!callNode || callNode.type !== 'CallExpression') return false;
+  const callee = callNode.callee;
+  if (!callee) return false;
+  const wrappers = hocWrappers ?? DEFAULT_HOC_WRAPPERS;
+  if (callee.type === 'Identifier') {
+    return wrappers.has(callee.name);
+  }
+  if (
+    callee.type === 'MemberExpression' &&
+    !callee.computed &&
+    callee.property?.type === 'Identifier'
+  ) {
+    if (wrappers.has(callee.property.name)) return true;
+    if (callee.object?.type === 'Identifier') {
+      const full = `${callee.object.name}.${callee.property.name}`;
+      if (wrappers.has(full)) return true;
+    }
+  }
+  return false;
+}
+
+function getFunctionLabel(
+  node: any,
+  ancestors: acorn.Node[],
+  hocWrappers?: Set<string>
+): string {
   if (node.id && typeof node.id.name === 'string') {
     return node.id.name;
   }
@@ -110,6 +158,28 @@ function getFunctionLabel(node: any, ancestors: acorn.Node[]): string {
     ) {
       return parent.left.name;
     }
+    // HOC & forwardRef detection: when node is inside CallExpression (e.g. React.memo, forwardRef, or hocWrappers)
+    if (parent.type === 'CallExpression') {
+      let idx = ancestors.length - 2;
+      let matchedHoc = false;
+      while (idx >= 0 && ancestors[idx].type === 'CallExpression') {
+        if (isHocCall(ancestors[idx], hocWrappers)) {
+          matchedHoc = true;
+          idx--;
+        } else {
+          break;
+        }
+      }
+      if (matchedHoc && idx >= 0) {
+        const outer = ancestors[idx] as any;
+        if (outer.type === 'VariableDeclarator' && outer.id?.type === 'Identifier') {
+          return outer.id.name;
+        }
+        if (outer.type === 'AssignmentExpression' && outer.left?.type === 'Identifier') {
+          return outer.left.name;
+        }
+      }
+    }
   }
   return `anonymous_${node.start}`;
 }
@@ -118,8 +188,11 @@ function isPascalCaseComponent(name: string): boolean {
   return /^[A-Z][a-zA-Z0-9]*$/.test(name);
 }
 
-function isEventHandlerName(name: string): boolean {
-  return /^(?:on|handle)[A-Z]/.test(name);
+function isEventHandlerName(
+  name: string,
+  regex: RegExp = DEFAULT_EVENT_HANDLER_REGEX
+): boolean {
+  return regex.test(name);
 }
 
 function findEnclosingScopeNode(ancestors: acorn.Node[], selfNode: acorn.Node): acorn.Node {
@@ -174,7 +247,10 @@ function isZeroArgIifeFactoryFunction(node: any): boolean {
   );
 }
 
-function containsLoopOrAnimation(fnNode: acorn.Node): boolean {
+function containsLoopOrAnimation(
+  fnNode: acorn.Node,
+  animationCalls: Set<string> = ANIMATION_FRAME_CALLS
+): boolean {
   let found = false;
   walk.simple(fnNode, {
     ForStatement() {
@@ -209,8 +285,8 @@ function containsLoopOrAnimation(fnNode: acorn.Node): boolean {
         (callNode.callee?.object?.name === 'ticker' ||
           callNode.callee?.object?.property?.name === 'ticker');
       if (
-        ANIMATION_FRAME_CALLS.has(cName) ||
-        ANIMATION_FRAME_CALLS.has(mProp) ||
+        animationCalls.has(cName) ||
+        animationCalls.has(mProp) ||
         isTickerAdd
       ) {
         found = true;
@@ -220,7 +296,10 @@ function containsLoopOrAnimation(fnNode: acorn.Node): boolean {
   return found;
 }
 
-export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
+export function analyzeAstHotPaths(
+  ast: acorn.Program,
+  config?: UnpeekConfig
+): HotPathAnalysis {
   const hotFunctionNodes = new WeakSet<acorn.Node>();
   const coldFunctionNodes = new WeakSet<acorn.Node>();
   const hotExemptNodes = new WeakSet<acorn.Node>();
@@ -247,6 +326,74 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
     calleeKey: string;
     args: any[];
   }[] = [];
+
+  const animationCalls = new Set(ANIMATION_FRAME_CALLS);
+  if (config?.hotPath?.customAnimationCalls) {
+    for (const c of config.hotPath.customAnimationCalls) {
+      animationCalls.add(c);
+    }
+  }
+
+  const mergedImportSources: Record<string, string[]> = {
+    ...DEFAULT_IMPORT_SOURCES,
+    ...(config?.hotPath?.importSources ?? {}),
+  };
+
+  // Pre-scan ImportDeclarations to track aliased animation calls and imported identifiers
+  if (ast && Array.isArray((ast as any).body)) {
+    for (const stmt of (ast as any).body) {
+      if (stmt.type === 'ImportDeclaration' && stmt.source?.value) {
+        const sourcePkg = String(stmt.source.value);
+        const sourceMethods = mergedImportSources[sourcePkg];
+        for (const spec of stmt.specifiers || []) {
+          if (spec.type === 'ImportSpecifier') {
+            const importedName = spec.imported?.name ?? spec.imported?.value;
+            const localName = spec.local?.name;
+            if (localName && importedName) {
+              const isKnownSource = sourceMethods !== undefined;
+              const isListedMethod =
+                sourceMethods &&
+                (sourceMethods.includes(importedName) ||
+                  sourceMethods.includes('*'));
+              const isKnownAnimCall = ANIMATION_FRAME_CALLS.has(importedName);
+
+              if ((isKnownSource && isListedMethod) || isKnownAnimCall) {
+                animationCalls.add(localName);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const hocWrappers = new Set(DEFAULT_HOC_WRAPPERS);
+  if (config?.hotPath?.hocWrappers) {
+    for (const h of config.hotPath.hocWrappers) {
+      hocWrappers.add(h);
+    }
+  }
+
+  const arrayHofMethods = new Set(ARRAY_HOF_METHODS);
+  if (config?.hotPath?.arrayHofMethods) {
+    for (const m of config.hotPath.arrayHofMethods) {
+      arrayHofMethods.add(m);
+    }
+  }
+
+  const eventHandlerRegex =
+    config?.hotPath?.eventHandlerRegex ?? DEFAULT_EVENT_HANDLER_REGEX;
+
+  const hookRegex = config?.hotPath?.hookPattern ?? DEFAULT_HOOK_REGEX;
+  const customHooksSet = new Set(config?.hotPath?.customHooks ?? []);
+
+  function isHookName(name: string): boolean {
+    if (!name) return false;
+    return customHooksSet.has(name) || hookRegex.test(name);
+  }
+
+  const excludedComponents = new Set(config?.hotPath?.excludeComponents ?? []);
+  const maxPipelineCallers = config?.hotPath?.maxPipelineCallers ?? 2;
 
   function ensureFnParams(fnNode: any): Set<string> {
     let paramSet = fnParams.get(fnNode);
@@ -301,7 +448,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
   }
 
   function registerFunctionNode(node: any, ancestors: acorn.Node[]): void {
-    const name = getFunctionLabel(node, ancestors);
+    const name = getFunctionLabel(node, ancestors, hocWrappers);
     allFunctions.push({ node, name });
     fnByName.set(name, node);
 
@@ -374,7 +521,14 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
     }
     fnScopeChain.set(node, chain);
 
-    if (isPascalCaseComponent(name)) {
+    if (isPascalCaseComponent(name) && !excludedComponents.has(name)) {
+      shallowComponentNodes.add(node);
+      hotFunctionNodes.add(node);
+      directHotNodes.add(node);
+      hotExemptNodes.add(node);
+    }
+
+    if (isHookName(name)) {
       shallowComponentNodes.add(node);
       hotFunctionNodes.add(node);
       directHotNodes.add(node);
@@ -547,7 +701,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
             callerToCallees.set(enclosingFn, set);
           }
           if (qualifiedCall) set.add(qualifiedCall);
-          if (memberProp && !ARRAY_HOF_METHODS.has(memberProp)) {
+          if (memberProp && !arrayHofMethods.has(memberProp)) {
             set.add(memberProp);
           }
         }
@@ -613,8 +767,8 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
         (callee?.object?.name === 'ticker' ||
           callee?.object?.property?.name === 'ticker');
       if (
-        ANIMATION_FRAME_CALLS.has(calleeName) ||
-        ANIMATION_FRAME_CALLS.has(memberProp) ||
+        animationCalls.has(calleeName) ||
+        animationCalls.has(memberProp) ||
         isTickerAdd
       ) {
         if (enclosingFn) {
@@ -640,7 +794,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
       }
 
       // Category: ARRAY_HOF_METHODS (.map, .filter, .reduce, .forEach, .flatMap, .find, .findIndex, .some, .every)
-      if (ARRAY_HOF_METHODS.has(memberProp)) {
+      if (arrayHofMethods.has(memberProp)) {
         if (enclosingFn !== null) {
           // Inside a function or loop: classified as TRUE_HOT_60FPS
           for (const arg of node.arguments || []) {
@@ -659,9 +813,13 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
           }
         } else {
           // Module top-level (Program scope, enclosingFn === null): 1-time run initializer
-          // e.g. COMMITTEES = CONTENT_COMMITTEES.map(...) -> COLD PATH (coldFunctionNodes)
+          // Only force cold if node is an anonymous function expression / arrow function,
+          // not a standalone named/exported function.
           for (const arg of node.arguments || []) {
-            if (FUNCTION_NODE_TYPES.has(arg.type)) {
+            const isAnonymousFunction =
+              (arg.type === 'FunctionExpression' && !arg.id) ||
+              arg.type === 'ArrowFunctionExpression';
+            if (isAnonymousFunction) {
               coldForcedNodes.add(arg);
             }
           }
@@ -677,7 +835,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
       ) {
         const effectArg = node.arguments?.[0];
         if (effectArg && FUNCTION_NODE_TYPES.has(effectArg.type)) {
-          if (!containsLoopOrAnimation(effectArg)) {
+          if (!containsLoopOrAnimation(effectArg, animationCalls)) {
             coldForcedNodes.add(effectArg);
             // Also check if effect callback returns a loop-free cleanup function
             if (effectArg.body?.type === 'BlockStatement') {
@@ -686,7 +844,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
                   s.type === 'ReturnStatement' &&
                   s.argument &&
                   FUNCTION_NODE_TYPES.has(s.argument.type) &&
-                  !containsLoopOrAnimation(s.argument)
+                  !containsLoopOrAnimation(s.argument, animationCalls)
                 ) {
                   coldForcedNodes.add(s.argument);
                 }
@@ -696,10 +854,12 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
         }
       }
 
-      // Category: SHALLOW_RENDER_COMPONENT (React hooks / createElement / jsx)
+      // Category: SHALLOW_RENDER_COMPONENT (React hooks / createElement / jsx / custom hooks)
       if (
         REACT_HOOK_OR_RENDER_CALLS.has(calleeName) ||
-        REACT_HOOK_OR_RENDER_CALLS.has(memberProp)
+        REACT_HOOK_OR_RENDER_CALLS.has(memberProp) ||
+        isHookName(calleeName) ||
+        isHookName(memberProp)
       ) {
         if (enclosingFn) {
           shallowComponentNodes.add(enclosingFn);
@@ -785,12 +945,17 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
 
   // Identify cold candidates:
   // - async functions (node.async === true)
-  // - event handlers (isEventHandlerName(fn.name))
-  // unless they contain loops or 60fps animation frames
+  // - event handlers (isEventHandlerName(fn.name, eventHandlerRegex))
+  // unless they contain loops or 60fps animation frames or are shallow components/hooks
   for (const fn of allFunctions) {
-    if (!trueHotNodes.has(fn.node) && !containsLoopOrAnimation(fn.node)) {
-      if ((fn.node as any).async === true || isEventHandlerName(fn.name)) {
-        coldForcedNodes.add(fn.node);
+    if (!trueHotNodes.has(fn.node) && !containsLoopOrAnimation(fn.node, animationCalls)) {
+      if (!shallowComponentNodes.has(fn.node)) {
+        if (
+          (fn.node as any).async === true ||
+          isEventHandlerName(fn.name, eventHandlerRegex)
+        ) {
+          coldForcedNodes.add(fn.node);
+        }
       }
     }
   }
@@ -917,7 +1082,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
         const targetNode = resolveCalleeNode(callerNode, cName);
         if (targetNode && trueHotNodes.has(targetNode)) {
           const callers = calleeToCallers.get(targetNode);
-          const isDedicatedPipeline = callers && callers.size <= 2;
+          const isDedicatedPipeline = callers && callers.size <= maxPipelineCallers;
           if (isDedicatedPipeline) {
             trueHotNodes.add(callerNode);
             hotFunctionNodes.add(callerNode);
@@ -977,7 +1142,10 @@ function markEnclosingFunctionHot(
   }
 }
 
-export function detectHotPaths(code: string): HotPathReport {
+export function detectHotPaths(
+  code: string,
+  config?: UnpeekConfig
+): HotPathReport {
   const ast = parseJavaScriptAst(code);
   if (!ast) {
     return {
@@ -986,5 +1154,5 @@ export function detectHotPaths(code: string): HotPathReport {
       coldFunctionsProtected: [],
     };
   }
-  return analyzeAstHotPaths(ast).report;
+  return analyzeAstHotPaths(ast, config).report;
 }

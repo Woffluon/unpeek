@@ -124,6 +124,270 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(report.hotFunctionsSkipped).toContain('FormStatusComponent');
       expect(report.coldFunctionsProtected).toContain('verifyPaymentSignature');
     });
+
+    it('tracks aliased animation imports and custom animation calls as hot paths', () => {
+      const code = `
+        import { useFrame as onTick } from '@react-three/fiber';
+        import { useLenis as useSmoothScroll } from 'lenis/react';
+
+        function ThreeScene() {
+          onTick(function rotateMesh(state, delta) {
+            return delta * 0.01;
+          });
+        }
+
+        function ScrollContainer() {
+          useSmoothScroll(function onScroll(lenis) {
+            return lenis.scroll;
+          });
+        }
+
+        function CustomEngine() {
+          customTick(function stepEngine(t) {
+            return t;
+          });
+        }
+
+        function coldAuthCheck(user) {
+          return user.isAdmin;
+        }
+      `;
+
+      const report = detectHotPaths(code, {
+        hotPath: {
+          customAnimationCalls: ['customTick'],
+        },
+      });
+
+      expect(report.hotFunctionsSkipped).toContain('ThreeScene');
+      expect(report.hotFunctionsSkipped).toContain('rotateMesh');
+      expect(report.hotFunctionsSkipped).toContain('ScrollContainer');
+      expect(report.hotFunctionsSkipped).toContain('onScroll');
+      expect(report.hotFunctionsSkipped).toContain('CustomEngine');
+      expect(report.hotFunctionsSkipped).toContain('stepEngine');
+      expect(report.coldFunctionsProtected).toContain('coldAuthCheck');
+    });
+
+    it('does not classify frame/render functions (onTick, onRender, onUpdate, onFrame, onAnimate, handlePhysicsStep) as cold event handlers', () => {
+      const code = `
+        function onTick(state, delta) {
+          return delta * 2;
+        }
+        function onRender(renderer) {
+          return renderer.time;
+        }
+        function onUpdate(delta) {
+          return delta;
+        }
+        function onFrame(timestamp) {
+          return timestamp;
+        }
+        function onAnimate(alpha) {
+          return alpha;
+        }
+        function handlePhysicsStep(dt) {
+          return dt;
+        }
+        function onClick(event) {
+          return event.target;
+        }
+        function handleSubmit(e) {
+          e.preventDefault();
+        }
+
+        // Pass them into an animation loop or call to test exemption retention
+        requestAnimationFrame(onTick);
+        requestAnimationFrame(onRender);
+        requestAnimationFrame(onUpdate);
+        requestAnimationFrame(onFrame);
+        requestAnimationFrame(onAnimate);
+        requestAnimationFrame(handlePhysicsStep);
+      `;
+
+      const report = detectHotPaths(code);
+      expect(report.hotFunctionsSkipped).toContain('onTick');
+      expect(report.hotFunctionsSkipped).toContain('onRender');
+      expect(report.hotFunctionsSkipped).toContain('onUpdate');
+      expect(report.hotFunctionsSkipped).toContain('onFrame');
+      expect(report.hotFunctionsSkipped).toContain('onAnimate');
+      expect(report.hotFunctionsSkipped).toContain('handlePhysicsStep');
+      expect(report.coldFunctionsProtected).toContain('onClick');
+      expect(report.coldFunctionsProtected).toContain('handleSubmit');
+    });
+
+    it('respects custom eventHandlerRegex override', () => {
+      const code = `
+        function onCustomAction(data) {
+          return data;
+        }
+        function handleSomething(evt) {
+          return evt;
+        }
+      `;
+      const report = detectHotPaths(code, {
+        hotPath: {
+          eventHandlerRegex: /^onCustom[A-Z]/,
+        },
+      });
+      expect(report.coldFunctionsProtected).toContain('onCustomAction');
+    });
+
+    it('detects component names wrapped in HOCs and forwardRef and exempts them', () => {
+      const code = `
+        const Button = React.memo(function(props) {
+          return createElement("button", null, props.label);
+        });
+
+        const Input = forwardRef((props, ref) => {
+          return createElement("input", { ref });
+        });
+
+        const ModalDialog = React.memo(forwardRef(function(props, ref) {
+          return createElement("div", { ref });
+        }));
+
+        const CustomCard = customWrapper((props) => {
+          return createElement("div", null, props.title);
+        });
+
+        function ValidateJwtToken(token) {
+          return token.valid;
+        }
+      `;
+
+      const report = detectHotPaths(code, {
+        hotPath: {
+          hocWrappers: ['customWrapper'],
+          excludeComponents: ['ValidateJwtToken'],
+        },
+      });
+
+      expect(report.hotFunctionsSkipped).toContain('Button');
+      expect(report.hotFunctionsSkipped).toContain('Input');
+      expect(report.hotFunctionsSkipped).toContain('ModalDialog');
+      expect(report.hotFunctionsSkipped).toContain('CustomCard');
+      expect(report.coldFunctionsProtected).toContain('ValidateJwtToken');
+    });
+
+    it('exempts custom hooks matching hook pattern or customHooks list', () => {
+      const code = `
+        function usePhysics(bodyRef, config) {
+          const step = () => {
+            return bodyRef.x + config.gravity;
+          };
+          return { step };
+        }
+
+        const useGameLoop = (callback) => {
+          return callback();
+        };
+
+        function attachPhysicsEngine(body) {
+          return body.id;
+        }
+
+        function UserComponent() {
+          const { step } = usePhysics({}, { gravity: 9.8 });
+          return createElement("div", null);
+        }
+
+        function coldBillingService(account) {
+          return account.balance;
+        }
+      `;
+
+      const report = detectHotPaths(code, {
+        hotPath: {
+          customHooks: ['attachPhysicsEngine'],
+        },
+      });
+
+      expect(report.hotFunctionsSkipped).toContain('usePhysics');
+      expect(report.hotFunctionsSkipped).toContain('useGameLoop');
+      expect(report.hotFunctionsSkipped).toContain('attachPhysicsEngine');
+      expect(report.hotFunctionsSkipped).toContain('UserComponent');
+      expect(report.coldFunctionsProtected).toContain('coldBillingService');
+    });
+
+    it('only forces cold on anonymous top-level HOF callbacks, preserving named/exported functions', () => {
+      const code = `
+        // Standalone named function that contains a loop
+        function transformEntity(item) {
+          let sum = 0;
+          for (let i = 0; i < item.length; i++) {
+            sum += item[i];
+          }
+          return sum;
+        }
+
+        // Top level HOF using named standalone function
+        const PRELOADED = [[1, 2], [3, 4]].map(transformEntity);
+
+        // Top level HOF using anonymous function
+        const IDS = [10, 20].map(function(x) {
+          return x * 2;
+        });
+
+        // Top level HOF using arrow function
+        const DOUBLED = [10, 20].map((x) => x * 3);
+      `;
+
+      const report = detectHotPaths(code);
+      // transformEntity has a loop and was passed as named function, so it must stay hot
+      expect(report.hotFunctionsSkipped).toContain('transformEntity');
+      // Anonymous functions passed to top-level HOF should be forced cold
+      expect(report.coldFunctionsProtected.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('supports custom arrayHofMethods in config', () => {
+      const code = `
+        function processBatch(items) {
+          return items.times(function worker(x) {
+            return x + 1;
+          });
+        }
+      `;
+      const report = detectHotPaths(code, {
+        hotPath: {
+          arrayHofMethods: ['times'],
+        },
+      });
+      expect(report.hotFunctionsSkipped).toContain('worker');
+    });
+
+    it('propagates hotness through call-graph based on maxPipelineCallers threshold', () => {
+      const code = `
+        function solveIK(joints) {
+          let total = 0;
+          for (let i = 0; i < joints.length; i++) {
+            total += joints[i];
+          }
+          return total;
+        }
+
+        function animateArm() { return solveIK([1, 2]); }
+        function animateLeg() { return solveIK([3, 4]); }
+        function animateSpine() { return solveIK([5, 6]); }
+      `;
+
+      // With default maxPipelineCallers = 2, solveIK has 3 callers so callers do not propagate
+      const defaultReport = detectHotPaths(code);
+      expect(defaultReport.hotFunctionsSkipped).toContain('solveIK');
+      expect(defaultReport.coldFunctionsProtected).toContain('animateArm');
+      expect(defaultReport.coldFunctionsProtected).toContain('animateLeg');
+      expect(defaultReport.coldFunctionsProtected).toContain('animateSpine');
+
+      // With maxPipelineCallers = 3, solveIK's 3 callers propagate hotness
+      const relaxedReport = detectHotPaths(code, {
+        hotPath: {
+          maxPipelineCallers: 3,
+        },
+      });
+      expect(relaxedReport.hotFunctionsSkipped).toContain('solveIK');
+      expect(relaxedReport.hotFunctionsSkipped).toContain('animateArm');
+      expect(relaxedReport.hotFunctionsSkipped).toContain('animateLeg');
+      expect(relaxedReport.hotFunctionsSkipped).toContain('animateSpine');
+    });
   });
 
   describe('transformJavaScript semantic preservation & obfuscation', () => {

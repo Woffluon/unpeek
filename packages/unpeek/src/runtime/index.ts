@@ -17,7 +17,8 @@ export function generateRuntimeShield(config: ShieldConfig): ShieldPayload {
   });
 
   const fnStart = preambleCode.indexOf('function');
-  const fnEnd = preambleCode.lastIndexOf('(') - 1;
+  const endMarker = preambleCode.indexOf('})(');
+  const fnEnd = endMarker !== -1 ? endMarker + 1 : preambleCode.lastIndexOf('(') - 1;
   const fnDecl = preambleCode.slice(fnStart, fnEnd);
   const computedHash = computeIntegrityHash(fnDecl, 0);
 

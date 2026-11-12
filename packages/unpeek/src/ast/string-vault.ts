@@ -1,6 +1,6 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
-import type { DeterrentMode } from '../types.js';
+import type { DeterrentMode, UnpeekConfig } from '../types.js';
 import { derivePolymorphicIdent, generateCompactJs } from './codegen.js';
 import {
   deriveWindowKeySymbol,
@@ -16,14 +16,18 @@ import {
 export const SAFE_ALPHA =
   " !#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~";
 
-const DIRECTIVE_STRINGS = new Set([
+export const DIRECTIVE_STRINGS = new Set([
   'use strict',
   'use client',
   'use server',
   'use asm',
+  'use cache',
+  'use worklet',
+  'use worker',
+  'use memo',
 ]);
 
-const STANDARD_PROP_KEYS = new Set([
+export const STANDARD_PROP_KEYS = new Set([
   'id',
   'type',
   'key',
@@ -38,7 +42,26 @@ const STANDARD_PROP_KEYS = new Set([
   'alt',
   'role',
   'tabIndex',
+  'class',
+  'part',
+  'slot',
+  'is',
+  'innerHTML',
+  'disabled',
+  'title',
 ]);
+
+const STANDARD_PROP_PREFIX_RE = /^(?:data-|aria-|on[A-Z]|v-|bind:)/;
+
+export function isReservedProp(
+  propName: string,
+  customReserved?: Set<string>
+): boolean {
+  if (STANDARD_PROP_KEYS.has(propName)) return true;
+  if (customReserved && customReserved.has(propName)) return true;
+  if (STANDARD_PROP_PREFIX_RE.test(propName)) return true;
+  return false;
+}
 
 const LOOP_NODE_TYPES = new Set([
   'ForStatement',
@@ -48,8 +71,13 @@ const LOOP_NODE_TYPES = new Set([
   'DoWhileStatement',
 ]);
 
-function isReactDomSpecialProp(val: string, node: any, parent: any): boolean {
-  if (STANDARD_PROP_KEYS.has(val)) return true;
+function isReactDomSpecialProp(
+  val: string,
+  node: any,
+  parent: any,
+  customReserved?: Set<string>
+): boolean {
+  if (isReservedProp(val, customReserved)) return true;
   if (!parent) return false;
   if (parent.type === 'Property') {
     if (parent.key === node && !parent.computed) {
@@ -61,44 +89,138 @@ function isReactDomSpecialProp(val: string, node: any, parent: any): boolean {
         : parent.key?.type === 'Literal'
           ? String(parent.key.value)
           : '';
-    if (keyName && STANDARD_PROP_KEYS.has(keyName)) {
+    if (keyName && isReservedProp(keyName, customReserved)) {
       return true;
     }
   }
   return false;
 }
 
-function isTailwindNoise(val: string): boolean {
+const TAILWIND_TOKEN_RE =
+  /^(?:flex|grid|block|inline|hidden|relative|absolute|fixed|w-|h-|min-|max-|p[xytrbl]?-|m[xytrbl]?-|space-[xy]-|text-|font-|bg-|border|rounded|shadow|ring|outline|transition|duration|opacity|cursor|pointer-events|select-|items-|justify-|gap-|overflow-|z-|inset-|top-|left-|right-|bottom-|hover:|focus:|focus-visible:|disabled:|dark:|data-\[|aria-|\[&_)/;
+
+const TAILWIND_VARIANT_PREFIX_RE = /^(?:[a-zA-Z0-9_@-]+:)+/;
+
+export function stripTailwindVariants(token: string): string {
+  return token.replace(TAILWIND_VARIANT_PREFIX_RE, '');
+}
+
+export function isTailwindNoise(val: string): boolean {
   const trimmed = val.trim();
   if (!trimmed) return false;
+  const isMatch = (t: string) => {
+    const stripped = stripTailwindVariants(t);
+    return (
+      TAILWIND_TOKEN_RE.test(stripped) ||
+      stripped.startsWith('btn') ||
+      stripped.startsWith('p-') ||
+      stripped.startsWith('m-')
+    );
+  };
   if (trimmed.includes(' ')) {
     const tokens = trimmed.split(/\s+/);
     let twHits = 0;
     for (const t of tokens) {
-      if (
-        TAILWIND_TOKEN_RE.test(t) ||
-        t.startsWith('btn') ||
-        t.startsWith('p-') ||
-        t.startsWith('m-')
-      ) {
+      if (isMatch(t)) {
         twHits++;
       }
     }
     if (twHits / tokens.length >= 0.5) return true;
   } else {
-    if (TAILWIND_TOKEN_RE.test(trimmed)) return true;
+    if (isMatch(trimmed)) return true;
   }
   return false;
 }
 
-function isSvgPathString(val: string): boolean {
+function isParentSvgPathProperty(parent: any): boolean {
+  if (!parent) return false;
+  if (parent.type === 'Property') {
+    const keyName =
+      parent.key?.type === 'Identifier'
+        ? parent.key.name
+        : parent.key?.type === 'Literal'
+          ? String(parent.key.value)
+          : '';
+    if (keyName === 'd' || keyName === 'path') return true;
+  }
+  if (parent.type === 'JSXAttribute') {
+    const attrName = parent.name?.name;
+    if (attrName === 'd' || attrName === 'path') return true;
+  }
+  return false;
+}
+
+export function isSvgPathString(val: string, parent?: any): boolean {
+  if (typeof val !== 'string' || val.length < 4) return false;
+  const trimmed = val.trim();
+  // An SVG path must start with M or m followed by a number/decimal point/sign
+  if (!/^[Mm]\s*[-+]?(?:\d*\.\d+|\d+)/.test(trimmed)) {
+    return false;
+  }
+  // Check if parent property/attribute is 'd' or 'path'
+  if (parent && isParentSvgPathProperty(parent)) {
+    return true;
+  }
+  // Strict check for SVG path commands and coordinates
   return (
-    SVG_PATH_RE.test(val) ||
-    /^M\s*[-+]?\d*\.?\d+(?:[\s,]+[-+]?\d*\.?\d+)*[a-df-z]/i.test(val) ||
-    (val.length > 15 &&
-      (/^M\s*[-+]?\d/i.test(val.trim()) ||
-        /[Mm]\s*[-+]?\d.*[a-df-z]/i.test(val)))
+    /[zZ]$/.test(trimmed) ||
+    /[Mm]\s*[-+]?\d.*[a-df-zA-DF-Z]\s*[-+]?\d/.test(trimmed) ||
+    /^[Mm]\s*[-+]?\d+(?:\.\d+)?[\s,]+-?\d+(?:\.\d+)?(?:\s+[a-zA-Z][-+]?\d+.*)?$/.test(
+      trimmed
+    )
   );
+}
+
+const DEFAULT_SEMANTIC_ANCHOR_RE =
+  /(?:\bapi\/|\bcheckout\b|\badmin\b|\bauth\b|\btoken\b|\bcredential\b|\bsecret\b|\bpassword\b|\bbearer\b)/i;
+
+function isUiClassName(val: string, parent?: any): boolean {
+  if (parent) {
+    if (parent.type === 'Property') {
+      const k =
+        parent.key?.type === 'Identifier'
+          ? parent.key.name
+          : parent.key?.type === 'Literal'
+            ? String(parent.key.value)
+            : '';
+      if (k === 'className' || k === 'class' || k === 'classList') return true;
+    }
+    if (parent.type === 'JSXAttribute') {
+      const name = parent.name?.name;
+      if (name === 'className' || name === 'class') return true;
+    }
+  }
+  if (isTailwindNoise(val)) return true;
+  if (/^[a-z0-9_-]+(?:\s+[a-z0-9_-]+)+$/i.test(val.trim())) {
+    return true;
+  }
+  return false;
+}
+
+export function isAdversaryDecoy(val: string, seed: number): boolean {
+  if (
+    val.startsWith('/api/v2/auth/') ||
+    val === 'superadmin_token' ||
+    val === 'elevate' ||
+    val === '_verifyMasterToken' ||
+    val === 'mock_jwt_bypass_signature' ||
+    val === 'debug_supervisor_override' ||
+    val.startsWith('_decoy_') ||
+    val.startsWith('_auth_bypass_')
+  ) {
+    return true;
+  }
+  const s = ((seed >>> 0) & 0xffff).toString(36);
+  if (
+    val.includes(s) &&
+    (val.includes('auth') ||
+      val.includes('token') ||
+      val.includes('decoy') ||
+      val.includes('elevate'))
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function isEligibleHotLiteral(
@@ -106,12 +228,17 @@ function isEligibleHotLiteral(
   node: any,
   parent: any,
   ancestors: any[],
-  minLen: number
+  minLen: number,
+  seed = 0x9e3779b9,
+  customReserved?: Set<string>,
+  activeDirectives: Set<string> = DIRECTIVE_STRINGS,
+  semanticAnchorPatterns?: RegExp[],
+  excludeUiClasses = true
 ): boolean {
-  if (val.length < minLen || DIRECTIVE_STRINGS.has(val)) return false;
-  if (isReactDomSpecialProp(val, node, parent)) return false;
+  if (val.length < minLen || activeDirectives.has(val)) return false;
+  if (isReactDomSpecialProp(val, node, parent, customReserved)) return false;
   if (isTailwindNoise(val)) return false;
-  if (isSvgPathString(val)) return false;
+  if (isSvgPathString(val, parent)) return false;
 
   // Preserve 0.00% hot-loop overhead by exempting literals inside loop constructs
   for (let i = ancestors.length - 2; i >= 0; i--) {
@@ -130,10 +257,17 @@ function isEligibleHotLiteral(
   // Preserve test fixtures for hot loop helpers
   if (val.startsWith('HOT_')) return false;
 
-  const isSemanticAnchor =
-    /(?:api\/|checkout|admin|auth|token|credential|secret|password|bearer)/i.test(
-      val
-    );
+  let isSemanticAnchor = false;
+  if (semanticAnchorPatterns && semanticAnchorPatterns.length > 0) {
+    isSemanticAnchor = semanticAnchorPatterns.some((re) => re.test(val));
+  } else {
+    isSemanticAnchor = DEFAULT_SEMANTIC_ANCHOR_RE.test(val);
+  }
+
+  if (isSemanticAnchor && excludeUiClasses && isUiClassName(val, parent)) {
+    isSemanticAnchor = false;
+  }
+
   let isInsideRender = false;
   for (let i = ancestors.length - 2; i >= 0; i--) {
     const a: any = ancestors[i];
@@ -155,14 +289,7 @@ function isEligibleHotLiteral(
   if (!isSemanticAnchor && !isInsideRender) return false;
 
   // Preserve adversarial decoys injected by cold flow guard
-  if (
-    val.startsWith('/api/v2/auth/') ||
-    val === 'superadmin_token' ||
-    val === 'elevate' ||
-    val === '_verifyMasterToken' ||
-    val === 'mock_jwt_bypass_signature' ||
-    val === 'debug_supervisor_override'
-  ) {
+  if (isAdversaryDecoy(val, seed)) {
     return false;
   }
 
@@ -196,27 +323,20 @@ function isEligibleHotLiteral(
   return true;
 }
 
-const TAILWIND_TOKEN_RE =
-  /^(?:flex|grid|block|inline|hidden|relative|absolute|fixed|w-|h-|min-|max-|p[xytrbl]?-|m[xytrbl]?-|space-[xy]-|text-|font-|bg-|border|rounded|shadow|ring|outline|transition|duration|opacity|cursor|pointer-events|select-|items-|justify-|gap-|overflow-|z-|inset-|top-|left-|right-|bottom-|hover:|focus:|focus-visible:|disabled:|dark:|data-\[|aria-|\[&_)/;
-
-const SVG_PATH_RE = /^[Mm]\s*-?\d+(?:\.\d+)?[\s,]+-?\d+/;
-
 const SHADER_SIG_RE =
   /@group|@binding|@vertex|@fragment|@compute|vec4f|gl_Position|uniform/;
 
-export function shouldEncryptString(val: string, minLen: number): boolean {
-  if (val.length < minLen || DIRECTIVE_STRINGS.has(val)) return false;
-  if (SVG_PATH_RE.test(val)) return false;
-  if (val.includes(' ')) {
-    const tokens = val.trim().split(/\s+/);
-    if (tokens.length >= 3) {
-      let twHits = 0;
-      for (const t of tokens) {
-        if (TAILWIND_TOKEN_RE.test(t)) twHits++;
-      }
-      if (twHits / tokens.length >= 0.5) return false;
-    }
-  }
+export function shouldEncryptString(
+  val: string,
+  minLen: number,
+  parent?: any,
+  activeDirectives: Set<string> = DIRECTIVE_STRINGS,
+  customReserved?: Set<string>
+): boolean {
+  if (val.length < minLen || activeDirectives.has(val)) return false;
+  if (isReservedProp(val, customReserved)) return false;
+  if (isSvgPathString(val, parent)) return false;
+  if (isTailwindNoise(val)) return false;
   return true;
 }
 
@@ -326,8 +446,24 @@ export function applyStringVault(
   hotExemptNodes?: WeakSet<acorn.Node>,
   windowKeySymbol?: string,
   expectedDelta?: number,
-  deterrentMode?: DeterrentMode
+  deterrentMode?: DeterrentMode,
+  config?: UnpeekConfig
 ): StringVaultResult {
+  const minLen = config?.vault?.minStringLength ?? minStringLength;
+  const activeDirectives = new Set(DIRECTIVE_STRINGS);
+  if (config?.vault?.customDirectives) {
+    for (const dir of config.vault.customDirectives) {
+      activeDirectives.add(dir);
+    }
+  }
+
+  const customReserved = config?.vault?.reservedProps
+    ? new Set(config.vault.reservedProps)
+    : undefined;
+
+  const semanticPatterns = config?.vault?.semanticAnchors?.patterns;
+  const excludeUi = config?.vault?.semanticAnchors?.excludeUiClasses !== false;
+
   const suffix = ((seed >>> 0) & 0xffff).toString(36);
   const decryptFnName = `_uD${suffix}`;
   const cacheVarName = derivePolymorphicIdent(seed, 'vault');
@@ -416,7 +552,7 @@ export function applyStringVault(
       Literal(node: any, _state: any, ancestors: any[]) {
         if (typeof node.value !== 'string') return;
         const val: string = node.value;
-        if (DIRECTIVE_STRINGS.has(val)) return;
+        if (activeDirectives.has(val)) return;
 
         let isHotExempt = false;
         if (hotExemptNodes) {
@@ -431,8 +567,22 @@ export function applyStringVault(
         const parent = ancestors[ancestors.length - 2] as any;
         if (!parent) return;
 
-        // Skip directives at top of program or function body
-        if (parent.type === 'ExpressionStatement' && parent.directive) return;
+        // Skip directives at top of program or function body, or any ExpressionStatement where directive is truthy
+        if (
+          parent.type === 'ExpressionStatement' &&
+          (Boolean(parent.directive) || activeDirectives.has(val))
+        ) {
+          return;
+        }
+
+        for (let i = ancestors.length - 2; i >= 0; i--) {
+          if (
+            ancestors[i].type === 'ExpressionStatement' &&
+            Boolean((ancestors[i] as any).directive)
+          ) {
+            return;
+          }
+        }
 
         // Skip import/export source specifiers
         if (
@@ -463,7 +613,20 @@ export function applyStringVault(
         }
 
         if (isHotExempt) {
-          if (isEligibleHotLiteral(val, node, parent, ancestors, minStringLength)) {
+          if (
+            isEligibleHotLiteral(
+              val,
+              node,
+              parent,
+              ancestors,
+              minLen,
+              seed,
+              customReserved,
+              activeDirectives,
+              semanticPatterns,
+              excludeUi
+            )
+          ) {
             hotTargetsToReplace.push({
               node,
               parent,
@@ -474,16 +637,20 @@ export function applyStringVault(
           return;
         }
 
-        // Preserve standard React/DOM prop keys (id, type, key, ref, className, style, etc.)
+        // Preserve standard React/DOM/Vue/Svelte prop keys
         if (
           parent.type === 'Property' &&
           parent.key === node &&
           !parent.computed
         ) {
-          if (STANDARD_PROP_KEYS.has(val)) {
+          if (isReservedProp(val, customReserved)) {
             return;
           }
         }
+
+        if (isReservedProp(val, customReserved)) return;
+        if (isTailwindNoise(val)) return;
+        if (isSvgPathString(val, parent)) return;
 
         const isShader = val.length >= 256 || SHADER_SIG_RE.test(val);
         if (isShader) {
@@ -495,7 +662,7 @@ export function applyStringVault(
           }
           targetsToReplace.push({ type: 'shader', node, parent, idx });
         } else {
-          if (!shouldEncryptString(val, minStringLength)) return;
+          if (!shouldEncryptString(val, minLen, parent, activeDirectives, customReserved)) return;
           let idx = stringToIndex.get(val);
           if (idx === undefined) {
             idx = encryptedPayloads.length;
@@ -514,7 +681,7 @@ export function applyStringVault(
         if (node.expressions && node.expressions.length !== 0) return;
 
         const val: string = node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
-        if (typeof val !== 'string' || DIRECTIVE_STRINGS.has(val)) return;
+        if (typeof val !== 'string' || activeDirectives.has(val)) return;
 
         let isHotExempt = false;
         if (hotExemptNodes) {
@@ -529,8 +696,37 @@ export function applyStringVault(
         const parent = ancestors[ancestors.length - 2] as any;
         if (!parent) return;
 
+        if (
+          parent.type === 'ExpressionStatement' &&
+          (Boolean(parent.directive) || activeDirectives.has(val))
+        ) {
+          return;
+        }
+
+        for (let i = ancestors.length - 2; i >= 0; i--) {
+          if (
+            ancestors[i].type === 'ExpressionStatement' &&
+            Boolean((ancestors[i] as any).directive)
+          ) {
+            return;
+          }
+        }
+
         if (isHotExempt) {
-          if (isEligibleHotLiteral(val, node, parent, ancestors, minStringLength)) {
+          if (
+            isEligibleHotLiteral(
+              val,
+              node,
+              parent,
+              ancestors,
+              minLen,
+              seed,
+              customReserved,
+              activeDirectives,
+              semanticPatterns,
+              excludeUi
+            )
+          ) {
             hotTargetsToReplace.push({
               node,
               parent,
@@ -540,6 +736,10 @@ export function applyStringVault(
           }
           return;
         }
+
+        if (isReservedProp(val, customReserved)) return;
+        if (isTailwindNoise(val)) return;
+        if (isSvgPathString(val, parent)) return;
 
         const isShader = val.length >= 256 || SHADER_SIG_RE.test(val);
         if (isShader) {
@@ -551,7 +751,7 @@ export function applyStringVault(
           }
           targetsToReplace.push({ type: 'shader', node, parent, idx });
         } else {
-          if (!shouldEncryptString(val, minStringLength)) return;
+          if (!shouldEncryptString(val, minLen, parent, activeDirectives, customReserved)) return;
           let idx = stringToIndex.get(val);
           if (idx === undefined) {
             idx = encryptedPayloads.length;
@@ -666,10 +866,11 @@ export function applyStringVault(
     const stmt: any = ast.body[insertIdx];
     const isDirective =
       stmt.type === 'ExpressionStatement' &&
-      (stmt.directive ||
+      (Boolean(stmt.directive) ||
         (stmt.expression?.type === 'Literal' &&
           typeof stmt.expression.value === 'string' &&
-          DIRECTIVE_STRINGS.has(stmt.expression.value)));
+          (activeDirectives.has(stmt.expression.value) ||
+            /^(?:use\s+[a-zA-Z0-9_-]+)/.test(stmt.expression.value.trim()))));
     if (isDirective || stmt.type === 'ImportDeclaration') {
       insertIdx++;
     } else {
