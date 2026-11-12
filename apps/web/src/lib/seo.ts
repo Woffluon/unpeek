@@ -86,6 +86,9 @@ export function buildLayoutMetadata(locale: Locale): Metadata {
       index: true,
       follow: true,
     },
+    verification: {
+      google: "e2H52KdBOn8S9I02QDT2i6SjBhHFGINmL97t4jTs_Sc",
+    },
     openGraph: {
       title: ogTitle,
       description: ogDescription,
