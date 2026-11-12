@@ -26,6 +26,11 @@ const ANIMATION_FRAME_CALLS = new Set([
   'requestAnimationFrame',
   'cancelAnimationFrame',
   'useFrame',
+  'useLenis',
+  'setAnimationLoop',
+  'onBeforeRender',
+  'updateMatrixWorld',
+  'raf',
 ]);
 
 const REACT_HOOK_OR_RENDER_CALLS = new Set([
@@ -35,6 +40,9 @@ const REACT_HOOK_OR_RENDER_CALLS = new Set([
   'useCallback',
   'useRef',
   'useLayoutEffect',
+  'useActionState',
+  'useFormStatus',
+  'useOptimistic',
   'jsx',
   'jsxs',
   '_jsx',
@@ -196,7 +204,15 @@ function containsLoopOrAnimation(fnNode: acorn.Node): boolean {
       ) {
         mProp = callNode.callee.property.name;
       }
-      if (ANIMATION_FRAME_CALLS.has(cName) || ANIMATION_FRAME_CALLS.has(mProp)) {
+      const isTickerAdd =
+        mProp === 'add' &&
+        (callNode.callee?.object?.name === 'ticker' ||
+          callNode.callee?.object?.property?.name === 'ticker');
+      if (
+        ANIMATION_FRAME_CALLS.has(cName) ||
+        ANIMATION_FRAME_CALLS.has(mProp) ||
+        isTickerAdd
+      ) {
         found = true;
       }
     },
@@ -225,6 +241,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
   const fnVarAliases = new Map<acorn.Node, Map<string, string>>();
   const callerToCallees = new Map<acorn.Node, Set<string>>();
   const pendingSerializedRefs: { scopeNode: acorn.Node; name: string }[] = [];
+  const pendingHotRefs: { scopeNode: acorn.Node; name: string }[] = [];
   const allCallSites: {
     scopeNode: acorn.Node;
     calleeKey: string;
@@ -589,11 +606,16 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
         if (outerFn) markSerializedFunction(outerFn);
       }
 
-      // Category: ANIMATION_FRAME_CALLS (requestAnimationFrame, cancelAnimationFrame, useFrame)
+      // Category: ANIMATION_FRAME_CALLS (requestAnimationFrame, cancelAnimationFrame, useFrame, GSAP ticker, Lenis, WebGPU/Three.js)
       // Classified as TRUE_HOT_60FPS
+      const isTickerAdd =
+        memberProp === 'add' &&
+        (callee?.object?.name === 'ticker' ||
+          callee?.object?.property?.name === 'ticker');
       if (
         ANIMATION_FRAME_CALLS.has(calleeName) ||
-        ANIMATION_FRAME_CALLS.has(memberProp)
+        ANIMATION_FRAME_CALLS.has(memberProp) ||
+        isTickerAdd
       ) {
         if (enclosingFn) {
           trueHotNodes.add(enclosingFn);
@@ -607,6 +629,7 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
             directHotNodes.add(arg);
             hotExemptNodes.add(arg);
           } else if (arg?.type === 'Identifier') {
+            pendingHotRefs.push({ scopeNode: currentScope, name: arg.name });
             allCallSites.push({
               scopeNode: currentScope,
               calleeKey: arg.name,
@@ -747,6 +770,16 @@ export function analyzeAstHotPaths(ast: acorn.Program): HotPathAnalysis {
     const targetNode = resolveCalleeNode(ref.scopeNode, ref.name);
     if (targetNode) {
       markSerializedFunction(targetNode);
+    }
+  }
+
+  for (const ref of pendingHotRefs) {
+    const targetNode = resolveCalleeNode(ref.scopeNode, ref.name);
+    if (targetNode) {
+      trueHotNodes.add(targetNode);
+      hotFunctionNodes.add(targetNode);
+      directHotNodes.add(targetNode);
+      hotExemptNodes.add(targetNode);
     }
   }
 
