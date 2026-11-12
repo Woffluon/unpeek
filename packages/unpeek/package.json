@@ -1,6 +1,6 @@
 {
   "name": "unpeek",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "description": "Zero-config, call-graph-aware polymorphic AST obfuscation and passive runtime anti-tamper with <2% CPU overhead.",
   "type": "module",
   "license": "MIT",
@@ -110,6 +110,22 @@
       },
       "import": "./dist/runtime/index.js",
       "require": "./dist/runtime/index.cjs"
+    },
+    "./next": {
+      "types": {
+        "import": "./dist/next/index.d.ts",
+        "require": "./dist/next/index.d.cts"
+      },
+      "import": "./dist/next/index.js",
+      "require": "./dist/next/index.cjs"
+    },
+    "./next/adapter": {
+      "types": {
+        "import": "./dist/next/adapter.d.ts",
+        "require": "./dist/next/adapter.d.cts"
+      },
+      "import": "./dist/next/adapter.js",
+      "require": "./dist/next/adapter.cjs"
     }
   },
   "files": [
