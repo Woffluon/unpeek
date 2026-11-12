@@ -650,4 +650,199 @@ describe('Aggressive Profile & Advanced Protection (Layer 2 & Red-Team Verificat
       expect(await ctx.resolveAsyncValue(5, 10)).toBe(15);
     });
   });
+
+  // =========================================================================
+  // 7. UNP-01, UNP-03, UNP-05 Hardening Regressions
+  // =========================================================================
+  describe('7. UNP-01, UNP-03 & UNP-05 Hardening Regressions', () => {
+    it('UNP-01: non-linear WASM KDF resists kdf(0,0,0) * modInv32(0x01000193) seed inversion and skips 0-string chunks', async () => {
+      const { generateWasmKdfBinary, fallbackKdf } = await import('../src/ast/wasm-vault.js');
+
+      // 32-bit modular inverse of 0x01000193 mod 2^32
+      function modInv32(a: number): number {
+        let x = 1;
+        for (let i = 0; i < 5; i++) {
+          x = Math.imul(x, 2 - Math.imul(a, x));
+        }
+        return x >>> 0;
+      }
+      const fnvInv = modInv32(0x01000193);
+
+      for (const seed of [0x12345678, 0x9e3779b9, 0xdeadbeef, 0x55aa3311]) {
+        const wasmBytes = generateWasmKdfBinary(seed);
+        expect(wasmBytes.byteLength).toBeLessThan(512);
+        const mod = new WebAssembly.Module(wasmBytes as BufferSource);
+        const inst = new WebAssembly.Instance(mod);
+        const kdf = inst.exports.kdf as (f: number, s: number, h: number) => number;
+
+        const out000 = kdf(0, 0, 0);
+        expect(out000).toBe(fallbackKdf(0, 0, 0, seed));
+        // Must NOT invert to seed via legacy linear FNV inverse
+        const linearGuess = Math.imul(out000, fnvInv) >>> 0;
+        expect(linearGuess).not.toBe(seed >>> 0);
+      }
+
+      // 0-string chunk must NOT receive WASM KDF boilerplate in Tier 2 (--aggressive)
+      const zeroStringCode = 'function add(a, b) { return a + b; } add(2, 3);';
+      const res = transformJavaScript(zeroStringCode, {
+        seed: 0x424242,
+        aggressive: true,
+        minStringLength: 4,
+      });
+      expect(res.encryptedStringsCount).toBe(0);
+      expect(res.code).not.toContain('_wKdf');
+      expect(res.code).not.toContain('WebAssembly');
+    });
+
+    it('UNP-03: Micro-VM captures lexical closures/upvalues (React.lazy pattern + outer mutations) and honors block scoping', async () => {
+      const { applyMicroVm } = await import('../src/ast/micro-vm.js');
+      const { generateCompactJs } = await import('../src/ast/codegen.js');
+
+      const source = `
+        var cachedComponent = null;
+        var loadAttempts = 0;
+        var checksumAcc = 10;
+
+        function resolveLazyModule(loader, flag) {
+          var bonus = 5;
+          if (flag) {
+            let bonus = 100;
+            checksumAcc += bonus;
+          }
+          loadAttempts++;
+          if (cachedComponent === null) {
+            cachedComponent = loader(bonus + checksumAcc);
+          }
+          return cachedComponent;
+        }
+
+        function bumpCounters(delta) {
+          var prev = ++loadAttempts;
+          checksumAcc -= delta;
+          checksumAcc ^= 3;
+          return prev + checksumAcc;
+        }
+      `;
+
+      const ast = acorn.parse(source, { ecmaVersion: 'latest', sourceType: 'script' }) as any;
+      const vmRes = applyMicroVm(ast, undefined, undefined, 0x778899aa);
+      expect(vmRes.virtualizedCount).toBe(2);
+
+      const outCode = generateCompactJs(ast);
+      expect(outCode).toContain(vmRes.vmHelperName);
+
+      // Execute both original and VM-protected code and compare results identically
+      const makeCtx = (code: string) => {
+        const ctx: Record<string, any> = { Promise, Math, String };
+        ctx.globalThis = ctx;
+        vm.createContext(ctx);
+        vm.runInContext(code, ctx);
+        return ctx;
+      };
+
+      const origCtx = makeCtx(source);
+      const vmCtx = makeCtx(outCode);
+
+      const loader = (v: number) => ({ mounted: true, score: v });
+      expect(vmCtx.resolveLazyModule(loader, true)).toEqual(origCtx.resolveLazyModule(loader, true));
+      expect(vmCtx.resolveLazyModule(loader, false)).toEqual(origCtx.resolveLazyModule(loader, false));
+      expect(vmCtx.loadAttempts).toBe(origCtx.loadAttempts);
+      expect(vmCtx.checksumAcc).toBe(origCtx.checksumAcc);
+
+      expect(vmCtx.bumpCounters(7)).toBe(origCtx.bumpCounters(7));
+      expect(vmCtx.loadAttempts).toBe(origCtx.loadAttempts);
+      expect(vmCtx.checksumAcc).toBe(origCtx.checksumAcc);
+    });
+
+    it('UNP-03 & UNP-05: Micro-VM and Salted Vault omit +!String and couple cleanly to runtime shield state', async () => {
+      const source = `
+        function computeProtectedToken(userId, multiplier) {
+          var prefix = "TIER2_SHIELD_COUPLED_KEY_";
+          var factor = multiplier * 2;
+          if (factor > 10) {
+            return prefix + userId + ":" + (factor + 1);
+          }
+          return prefix + userId + ":" + factor;
+        }
+        return computeProtectedToken("usr_9", 8);
+      `;
+
+      const res = transformJavaScript(source, {
+        seed: 0x55aa77cc,
+        minStringLength: 4,
+        aggressive: true,
+        injectRuntimeShield: true,
+      });
+
+      expect(res.virtualizedFunctionsCount).toBeGreaterThanOrEqual(1);
+      expect(res.code).not.toContain('TIER2_SHIELD_COUPLED_KEY_');
+
+      // Micro-VM (_uVm*), Salted Vault (_uD*), and MBA guards must NOT contain static +!String
+      const parsedOut = acorn.parse(res.code, { ecmaVersion: 'latest', allowReturnOutsideFunction: true }) as any;
+      for (const stmt of parsedOut.body) {
+        const declName =
+          stmt.type === 'FunctionDeclaration'
+            ? stmt.id?.name
+            : stmt.type === 'VariableDeclaration'
+              ? stmt.declarations?.[0]?.id?.name
+              : undefined;
+        if (typeof declName === 'string' && (declName.startsWith('_uVm') || declName.startsWith('_uD'))) {
+          const { generateCompactJs } = await import('../src/ast/codegen.js');
+          expect(generateCompactJs(stmt)).not.toContain('+!String');
+        }
+      }
+
+      // 1. Clean browser execution succeeds
+      const cleanCtx: Record<string, any> = {
+        window: {},
+        Math,
+        String,
+        Uint8Array,
+        Promise,
+        WebAssembly,
+        CustomEvent: class {},
+      };
+      cleanCtx.globalThis = cleanCtx;
+      vm.createContext(cleanCtx);
+      expect(vm.runInContext(`(function(){${res.code}})()`, cleanCtx)).toBe(
+        'TIER2_SHIELD_COUPLED_KEY_usr_9:17'
+      );
+
+      // 2. Stripping runtime shield preamble in browser context corrupts/blocks decryption & VM
+      const strippedCode = res.code.split('\n').slice(1).join('\n');
+      const strippedCtx: Record<string, any> = {
+        window: {},
+        Math,
+        String,
+        Uint8Array,
+        Promise,
+        WebAssembly,
+        CustomEvent: class {},
+      };
+      strippedCtx.globalThis = strippedCtx;
+      vm.createContext(strippedCtx);
+      let strippedOut: unknown;
+      let threw = false;
+      try {
+        strippedOut = vm.runInContext(`(function(){${strippedCode}})()`, strippedCtx);
+      } catch {
+        threw = true;
+      }
+      expect(threw || strippedOut !== 'TIER2_SHIELD_COUPLED_KEY_usr_9:17').toBe(true);
+
+      // 3. SSR execution (window undefined) still returns exact value
+      const ssrCtx: Record<string, any> = {
+        Math,
+        String,
+        Uint8Array,
+        Promise,
+        WebAssembly,
+      };
+      ssrCtx.globalThis = ssrCtx;
+      vm.createContext(ssrCtx);
+      expect(vm.runInContext(`(function(){${res.code}})()`, ssrCtx)).toBe(
+        'TIER2_SHIELD_COUPLED_KEY_usr_9:17'
+      );
+    });
+  });
 });

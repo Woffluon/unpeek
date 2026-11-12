@@ -1,7 +1,9 @@
 import { createUnplugin } from 'unplugin';
 import type { ProtectOptions, UnpeekConfig } from '../types.js';
 import { computeFnv1aHash, transformJavaScript } from '../ast/index.js';
-import { generateRuntimeShield } from '../runtime/index.js';
+import { deriveWindowKeySymbol, generateRuntimeShield } from '../runtime/index.js';
+
+const ENTRY_CHUNK_PATTERN = /(?:^|\/)(?:webpack|main|index|runtime|turbopack|pages\/_app|pages\/index)(?:[-._/]|$)/i;
 
 export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options = {}) => {
   const config: UnpeekConfig | undefined =
@@ -11,6 +13,7 @@ export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options 
       'vault' in options ||
       'hotPath' in options ||
       'mangler' in options ||
+      'shield' in options ||
       'sourcemaps' in options)
       ? (options as UnpeekConfig)
       : undefined);
@@ -19,10 +22,21 @@ export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options 
     typeof options.seed === 'number'
       ? options.seed
       : Math.floor(Math.random() * 0x7fffffff) || 0x1337beef;
-  const deterrentMode = options.deterrentMode ?? 'gradual';
+  const deterrentMode = options.deterrentMode ?? config?.shield?.deterrentMode ?? 'passive';
+  const detectHeadless = options.detectHeadless ?? config?.shield?.detectHeadless ?? false;
   const injectRuntimeShield = options.injectRuntimeShield ?? true;
   const minStringLength = options.minStringLength ?? config?.vault?.minStringLength ?? 4;
   const aggressive = options.aggressive ?? false;
+
+  const masterSym = deriveWindowKeySymbol(baseSeed);
+  const masterShield = injectRuntimeShield
+    ? generateRuntimeShield({
+        seed: baseSeed,
+        deterrentMode,
+        detectHeadless,
+        windowKeySymbol: masterSym,
+      })
+    : undefined;
 
   return {
     name: 'unpeek',
@@ -44,33 +58,37 @@ export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options 
         return null;
       }
 
-      const shouldInjectShield = injectRuntimeShield;
+      const isEntry =
+        chunk.isEntry !== undefined
+          ? chunk.isEntry
+          : ENTRY_CHUNK_PATTERN.test(normalizedFileName);
+      const shouldInjectShield = injectRuntimeShield && isEntry;
       const chunkSeed = computeFnv1aHash(chunk.fileName, baseSeed);
       const result = transformJavaScript(code, {
         seed: chunkSeed,
         minStringLength,
         filename: chunk.fileName,
         injectRuntimeShield: shouldInjectShield,
+        skipShieldPreamble: true,
+        shieldCoupled: injectRuntimeShield,
+        windowKeySymbol: masterSym,
+        expectedDelta: masterShield?.expectedDelta,
         deterrentMode,
+        detectHeadless,
         aggressive,
         config,
       });
 
       let finalCode = result.code;
-      if (shouldInjectShield) {
-        const shield = generateRuntimeShield({
-          seed: chunkSeed,
-          deterrentMode,
-          expectedIntegrityHash: result.integrityToken,
-        });
-        if (
-          shield.preambleCode &&
-          !finalCode.includes('(function _u$') &&
-          !finalCode.includes(shield.integrityCheckFnName) &&
-          !finalCode.startsWith(shield.preambleCode)
-        ) {
-          finalCode = `${shield.preambleCode}\n${finalCode}`;
-        }
+      if (
+        shouldInjectShield &&
+        masterShield?.preambleCode &&
+        !finalCode.includes('__unpeek_tampered') &&
+        !finalCode.includes('(function _u$') &&
+        !finalCode.includes(masterShield.integrityCheckFnName) &&
+        !finalCode.startsWith(masterShield.preambleCode)
+      ) {
+        finalCode = `${masterShield.preambleCode}\n${finalCode}`;
       }
 
       return {

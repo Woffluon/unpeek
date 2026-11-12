@@ -350,14 +350,38 @@ describe('Reverse Engineering & Deobfuscation Resistance (Acceptance Thresholds)
       injectRuntimeShield: true,
     });
 
-    // SSR fallback literal must not expose plaintext expectedDelta directly
+    // SSR fallback literal must not expose plaintext expectedDelta directly or use static +!String
     expect(res.code).not.toContain(`w?0:${shield.expectedDelta}`);
-    expect(res.code).toContain('+!String');
+    expect(res.code).not.toContain('+!String');
+    expect(res.code).toContain('w?-1:');
 
-    // Extract encrypted array literal and P table from transformed output
-    const vaultMatch = res.code.match(/\(\[([^\]]+)\]\)/);
-    expect(vaultMatch).not.toBeNull();
-    const cipherArray: string[] = JSON.parse(`[${vaultMatch![1]}]`);
+    // Browser-only target omits SSR maskA ^ maskB fallback completely (w?-1:0)
+    const browserRes = transformJavaScript(src, {
+      seed,
+      minStringLength: 4,
+      injectRuntimeShield: true,
+      config: { target: 'browser' },
+    });
+    expect(browserRes.code).toContain('w?-1:0');
+
+    // Extract encrypted array literal and P table from transformed output via AST
+    const acorn = await import('acorn');
+    const parsed = acorn.parse(res.code, { ecmaVersion: 'latest', allowReturnOutsideFunction: true }) as any;
+    let cipherArray: string[] = [];
+    for (const stmt of parsed.body) {
+      if (stmt.type === 'VariableDeclaration') {
+        for (const decl of stmt.declarations) {
+          if (
+            decl.id?.name?.startsWith('_uD') &&
+            decl.init?.type === 'CallExpression' &&
+            decl.init.arguments?.[0]?.type === 'ArrayExpression'
+          ) {
+            cipherArray = decl.init.arguments[0].elements.map((el: any) => el.value);
+          }
+        }
+      }
+    }
+    expect(cipherArray.length).toBeGreaterThan(0);
     const targetCipher = cipherArray.find((s) => s.length === secret.length);
     expect(targetCipher).toBeDefined();
 

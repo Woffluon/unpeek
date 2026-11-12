@@ -425,24 +425,27 @@ function createShaderVaultAst(
   shaderPayloads: string[],
   seed: number
 ): any {
+  const sSeed = seed >>> 0;
+  const fnCode = `(function f(B){var c=Function.prototype.toString.call(f),h=0x811c9dc5;for(var i=0;i<c.length;i++)h=Math.imul(h^c.charCodeAt(i),0x01000193)>>>0;var S=h^${sSeed},b=B.map(function(s){var n=typeof atob=="function"?atob(s):typeof Buffer<"u"?Buffer.from(s,"base64").toString("binary"):"",u=new Uint8Array(n.length);for(var i=0;i<n.length;i++)u[i]=n.charCodeAt(i);return u;}),d=typeof TextDecoder<"u"?new TextDecoder():null;function x(u,i){for(var r=(S^Math.imul(i+1,0x9e3779b1))|0,j=0;j<u.length;j++){r=(Math.imul(r^(j+1),0x45d9f3b)+0x85ebca6b)|0;u[j]^=(r>>>16)&255;}}return function(i){var u=b[i];x(u,i);try{return d?d.decode(u):String.fromCharCode.apply(null,u);}finally{x(u,i);}};})`;
+  const fnAst = (
+    acorn.parse(fnCode, { ecmaVersion: 'latest', sourceType: 'script' }) as any
+  ).body[0].expression;
+  const buildH = computeIntegrityHash(generateCompactJs(fnAst), 0);
+  const S = (buildH ^ sSeed) >>> 0;
+
   const b64List: string[] = [];
-  const key = ((seed >>> 0) & 0xff) ^ 0x5a;
   for (let idx = 0; idx < shaderPayloads.length; idx++) {
     const str = shaderPayloads[idx];
     const buf = Buffer.from(str, 'utf8');
-    for (let i = 0; i < buf.length; i++) {
-      buf[i] ^= key;
+    let r = (S ^ Math.imul(idx + 1, 0x9e3779b1)) | 0;
+    for (let j = 0; j < buf.length; j++) {
+      r = (Math.imul(r ^ (j + 1), 0x45d9f3b) + 0x85ebca6b) | 0;
+      buf[j] ^= (r >>> 16) & 255;
     }
     b64List.push(buf.toString('base64'));
   }
 
-  const shaderCode = `var ${shaderVarName} = (function(){var B=${JSON.stringify(
-    b64List
-  )};var k=${key};var b=B.map(function(s){var bin=typeof atob==='function'?atob(s):(typeof Buffer!=='undefined'?Buffer.from(s,'base64').toString('binary'):'');var u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u;});var d=typeof TextDecoder!=='undefined'?new TextDecoder():null;return function(i){var u=b[i];for(var j=0;j<u.length;j++)u[j]^=k;try{return d?d.decode(u):String.fromCharCode.apply(null,u);}finally{for(var j=0;j<u.length;j++)u[j]^=k;}};})();`;
-
-  return (
-    acorn.parse(shaderCode, { ecmaVersion: 'latest', sourceType: 'script' }) as any
-  ).body[0];
+  return createSaltedVaultHelperAst(shaderVarName, b64List, fnAst);
 }
 
 export function applyStringVault(
@@ -453,7 +456,9 @@ export function applyStringVault(
   windowKeySymbol?: string,
   expectedDelta?: number,
   deterrentMode?: DeterrentMode,
-  config?: UnpeekConfig
+  config?: UnpeekConfig,
+  shieldCoupled = true,
+  detectHeadless = false
 ): StringVaultResult {
   const minLen = config?.vault?.minStringLength ?? minStringLength;
   const activeDirectives = new Set(DIRECTIVE_STRINGS);
@@ -475,13 +480,15 @@ export function applyStringVault(
   const cacheVarName = derivePolymorphicIdent(seed, 'vault');
   const shaderVarName = derivePolymorphicIdent(seed, 'shader');
   const sym = windowKeySymbol ?? deriveWindowKeySymbol(seed);
+  const browserOnly = config?.target === 'browser';
 
-  let expDelta = expectedDelta;
-  if (expDelta === undefined) {
+  let expDelta = shieldCoupled ? expectedDelta : 0;
+  if (shieldCoupled && expDelta === undefined) {
     const shield = generateRuntimeShield({
       seed,
       windowKeySymbol: sym,
       deterrentMode: deterrentMode ?? 'passive',
+      detectHeadless,
     });
     expDelta = shield.expectedDelta ?? 0;
   }
@@ -517,13 +524,15 @@ export function applyStringVault(
   const fnAst = createSaltedDecryptorFnAst(
     seed,
     P_CHARS,
-    expDelta,
+    expDelta ?? 0,
     sym,
-    SAFE_ALPHA
+    SAFE_ALPHA,
+    shieldCoupled,
+    browserOnly
   );
   const compactFnStr = generateCompactJs(fnAst);
   const buildH = computeIntegrityHash(compactFnStr, 0);
-  const expectedKey = (buildH ^ 0 ^ (expDelta & 0xffff)) >>> 0;
+  const expectedKey = (buildH ^ 0 ^ (shieldCoupled ? (expDelta ?? 0) & 0xffff : 0)) >>> 0;
 
   const stringToIndex = new Map<string, number>();
   const encryptedPayloads: string[] = [];

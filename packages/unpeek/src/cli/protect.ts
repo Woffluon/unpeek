@@ -6,9 +6,9 @@ import { loadUnpeekConfig } from '../config.js';
 import { detectTargetFramework, scanClientBundles } from '../bundler/detector.js';
 import { relocateSourceMaps, SOURCE_MAP_COMMENT_REGEX } from '../bundler/sourcemap-vault.js';
 import { computeFnv1aHash, transformJavaScript } from '../ast/index.js';
-import { generateRuntimeShield } from '../runtime/index.js';
+import { deriveWindowKeySymbol, generateRuntimeShield } from '../runtime/index.js';
 
-const ENTRY_PATTERN = /^(?:main|index|turbopack|webpack|runtime|app\/layout|app\/page|pages\/_app|pages\/index)[-._/]/i;
+const ENTRY_PATTERN = /^(?:webpack|main|index|runtime|turbopack|pages\/_app|pages\/index)(?:[-._/]|$)/i;
 
 function isEntryChunk(relPath: string, index: number, allRelPaths: string[]): boolean {
   const norm = relPath.replace(/\\/g, '/');
@@ -38,10 +38,21 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
       : Math.floor(Math.random() * 0x7fffffff) || 0x5f3759df;
   const keepPrivateMaps = options.keepPrivateMaps ?? config.sourcemaps?.keepPrivate ?? true;
   const privateMapsDir = options.privateMapsDir ?? config.sourcemaps?.vaultDir ?? '.unpeek-maps';
-  const deterrentMode = options.deterrentMode ?? 'passive';
+  const deterrentMode = options.deterrentMode ?? config.shield?.deterrentMode ?? 'passive';
+  const detectHeadless = options.detectHeadless ?? config.shield?.detectHeadless ?? false;
   const injectRuntimeShield = options.injectRuntimeShield ?? true;
   const minStringLength = options.minStringLength ?? config.vault?.minStringLength ?? 4;
   const aggressive = options.aggressive ?? false;
+
+  const masterSym = deriveWindowKeySymbol(seed);
+  const masterShield = injectRuntimeShield
+    ? generateRuntimeShield({
+        seed,
+        deterrentMode,
+        detectHeadless,
+        windowKeySymbol: masterSym,
+      })
+    : undefined;
 
   const vaultResult = relocateSourceMaps(outDir, cwd, keepPrivateMaps, privateMapsDir, false, config);
   const clientFiles = scanClientBundles(outDir, config);
@@ -75,32 +86,32 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
 
       const relPath = allRelPaths[i];
       const isEntry = isEntryChunk(relPath, i, allRelPaths);
-      const shouldInjectShield = injectRuntimeShield;
+      const shouldInjectShield = injectRuntimeShield && isEntry;
       const fileSeed = computeFnv1aHash(`${relPath}:${i}`, seed);
       const result = transformJavaScript(codeToTransform, {
         seed: fileSeed,
         minStringLength,
         filename: path.basename(filePath),
         injectRuntimeShield: shouldInjectShield,
+        skipShieldPreamble: true,
+        shieldCoupled: injectRuntimeShield,
+        windowKeySymbol: masterSym,
+        expectedDelta: masterShield?.expectedDelta,
         deterrentMode,
+        detectHeadless,
         aggressive,
         config,
       });
 
       let finalCode = result.code;
-      if (shouldInjectShield && !finalCode.includes('__unpeek_tampered')) {
-        const shield = generateRuntimeShield({
-          seed: fileSeed,
-          deterrentMode,
-          expectedIntegrityHash: result.integrityToken,
-        });
-        if (
-          shield.preambleCode &&
-          !finalCode.includes(shield.integrityCheckFnName) &&
-          !finalCode.startsWith(shield.preambleCode)
-        ) {
-          finalCode = `${shield.preambleCode}\n${finalCode}`;
-        }
+      if (
+        shouldInjectShield &&
+        masterShield?.preambleCode &&
+        !finalCode.includes('__unpeek_tampered') &&
+        !finalCode.includes(masterShield.integrityCheckFnName) &&
+        !finalCode.startsWith(masterShield.preambleCode)
+      ) {
+        finalCode = `${masterShield.preambleCode}\n${finalCode}`;
       }
 
       const tmpPath = `${filePath}.unpeek.tmp`;

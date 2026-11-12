@@ -9,9 +9,8 @@ import { applyPolymorphicMangler } from './polymorphic-mangler.js';
 import { applyColdFlowGuard } from './cold-flow-guard.js';
 import { generateCompactJs, derivePolymorphicIdent } from './codegen.js';
 import { applyMicroVm } from './micro-vm.js';
-import { injectWasmVault } from './wasm-vault.js';
 import { applySaltedStringVault } from './salted-vault.js';
-import { generateRuntimeShield } from '../runtime/index.js';
+import { deriveWindowKeySymbol, generateRuntimeShield } from '../runtime/index.js';
 
 export { detectHotPaths, analyzeAstHotPaths } from './hot-path-detector.js';
 export { applyStringVault, computeFnv1aHash } from './string-vault.js';
@@ -122,13 +121,35 @@ export function transformJavaScript(
     serializedFunctionNodes,
   } = analyzeAstHotPaths(ast, options.config);
 
+  const shieldCoupled =
+    options.shieldCoupled ?? Boolean(options.injectRuntimeShield);
+  const deterrentMode =
+    options.deterrentMode ?? options.config?.shield?.deterrentMode ?? 'passive';
+  const detectHeadless =
+    options.detectHeadless ?? options.config?.shield?.detectHeadless ?? false;
+  const sym = shieldCoupled
+    ? options.windowKeySymbol ?? deriveWindowKeySymbol(seed)
+    : undefined;
+  let shieldDelta = shieldCoupled ? options.expectedDelta : undefined;
+  if (shieldCoupled && shieldDelta === undefined) {
+    const shieldInfo = generateRuntimeShield({
+      seed,
+      windowKeySymbol: sym,
+      deterrentMode,
+      detectHeadless,
+    });
+    shieldDelta = shieldInfo.expectedDelta ?? 0;
+  }
+
   let virtualizedFunctionsCount = 0;
   if (isAggressive) {
     const vmRes = applyMicroVm(
       ast,
       coldFunctionNodes,
       serializedFunctionNodes,
-      seed
+      seed,
+      sym,
+      shieldDelta
     );
     virtualizedFunctionsCount = vmRes.virtualizedCount;
   }
@@ -149,13 +170,17 @@ export function transformJavaScript(
   let shaderBuffersCount = 0;
 
   if (isAggressive) {
-    injectWasmVault(ast, seed);
     const saltedRes = applySaltedStringVault(
       ast,
       seed,
       minStringLength,
       hotExemptNodes,
-      options.config
+      options.config,
+      sym,
+      shieldDelta,
+      deterrentMode,
+      shieldCoupled,
+      detectHeadless
     );
     encryptedStringsCount = saltedRes.encryptedStringsCount;
     integrityToken = saltedRes.integrityToken;
@@ -165,10 +190,12 @@ export function transformJavaScript(
       seed,
       minStringLength,
       hotExemptNodes,
-      undefined,
-      undefined,
-      options.deterrentMode,
-      options.config
+      sym,
+      shieldDelta,
+      deterrentMode,
+      options.config,
+      shieldCoupled,
+      detectHeadless
     );
     encryptedStringsCount = vaultRes.encryptedStringsCount;
     integrityToken = vaultRes.integrityToken;
@@ -179,10 +206,13 @@ export function transformJavaScript(
   const outputCode = generateCompactJs(ast);
 
   let finalCode = outputCode;
-  if (options.injectRuntimeShield) {
+  if (options.injectRuntimeShield && !options.skipShieldPreamble) {
     const shield = generateRuntimeShield({
       seed,
-      deterrentMode: options.deterrentMode ?? 'passive',
+      windowKeySymbol: sym,
+      expectedDelta: shieldDelta,
+      deterrentMode,
+      detectHeadless,
       expectedIntegrityHash: integrityToken,
     });
     if (shield.preambleCode) {

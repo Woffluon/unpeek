@@ -5,7 +5,7 @@ import type { DeterrentMode, ProtectOptions, ProtectSummary } from '../types.js'
 import { initProject } from './init.js';
 import { protectProject } from './protect.js';
 
-const VERSION = '1.13.0';
+const VERSION = '1.14.0';
 
 function getPackageVersion(): string {
   try {
@@ -64,7 +64,9 @@ function printHelp(): void {
     '  Options:',
     '    --out-dir <dir>                explicit client output directory',
     '    --seed <number>                deterministic polymorphic seed',
-    '    --passive                      passive deterrent mode instead of gradual',
+    '    --passive                      passive deterrent mode (default: marks tamper, keeps console)',
+    '    --gradual                      gradual deterrent mode (silences console on tamper)',
+    '    --detect-headless              treat navigator.webdriver / HeadlessChrome as tamper',
     '    --no-maps                      delete .map files instead of vaulting them',
     '    --min-string-length <num>      minimum string length for the vault (default: 4)',
     '    --private-maps-dir <dir>       vault directory (default: .unpeek-maps)',
@@ -243,6 +245,10 @@ export async function runCli(args: string[]): Promise<void> {
         options.injectRuntimeShield = false;
       } else if (arg === '--passive') {
         options.deterrentMode = 'passive' as DeterrentMode;
+      } else if (arg === '--gradual') {
+        options.deterrentMode = 'gradual' as DeterrentMode;
+      } else if (arg === '--detect-headless') {
+        options.detectHeadless = true;
       } else if (arg === '--no-maps') {
         options.keepPrivateMaps = false;
       }

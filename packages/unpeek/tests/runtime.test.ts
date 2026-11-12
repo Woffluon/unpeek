@@ -227,29 +227,40 @@ describe('Runtime Integrity Guard & DevTools Deterrent', () => {
       }
     });
 
-    it('triggers tamper flag and seed poisoning on navigator.webdriver and HeadlessChrome user agent', () => {
+    it('leaves webdriver and HeadlessChrome unflagged by default (detectHeadless: false) and triggers tamper when detectHeadless: true', () => {
       const seed = 12345;
-      const snippet = createDeterrentSnippet({ seed });
+      const defaultSnippet = createDeterrentSnippet({ seed });
+      const optInSnippet = createDeterrentSnippet({ seed, detectHeadless: true });
 
-      // 1. navigator.webdriver === true
+      // 1. Default (detectHeadless: false): navigator.webdriver === true is safe (no false positive in Playwright/Puppeteer)
+      const defaultWebdriverWindow: Record<string, unknown> = {
+        navigator: { webdriver: true, userAgent: 'Mozilla/5.0' },
+      };
+      vm.runInContext(defaultSnippet, vm.createContext({ window: defaultWebdriverWindow }));
+      expect(defaultWebdriverWindow.__unpeek_tampered).toBeUndefined();
+      expect(defaultWebdriverWindow.__unpeek_seed).toBeUndefined();
+
+      // 2. Default (detectHeadless: false): HeadlessChrome userAgent is safe
+      const defaultHeadlessWindow: Record<string, unknown> = {
+        navigator: { webdriver: false, userAgent: 'Mozilla/5.0 HeadlessChrome/122.0.0.0 Safari/537.36' },
+      };
+      vm.runInContext(defaultSnippet, vm.createContext({ window: defaultHeadlessWindow }));
+      expect(defaultHeadlessWindow.__unpeek_tampered).toBeUndefined();
+      expect(defaultHeadlessWindow.__unpeek_seed).toBeUndefined();
+
+      // 3. Opt-in (detectHeadless: true): navigator.webdriver === true triggers tamper + seed poisoning
       const webdriverWindow: Record<string, unknown> = {
         navigator: { webdriver: true, userAgent: 'Mozilla/5.0' },
       };
-      const webdriverContext = vm.createContext({
-        window: webdriverWindow,
-      });
-      vm.runInContext(snippet, webdriverContext);
+      vm.runInContext(optInSnippet, vm.createContext({ window: webdriverWindow }));
       expect(webdriverWindow.__unpeek_tampered).toBe(true);
       expect(webdriverWindow.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
 
-      // 2. HeadlessChrome userAgent
+      // 4. Opt-in (detectHeadless: true): HeadlessChrome userAgent triggers tamper + seed poisoning
       const headlessWindow: Record<string, unknown> = {
         navigator: { webdriver: false, userAgent: 'Mozilla/5.0 HeadlessChrome/122.0.0.0 Safari/537.36' },
       };
-      const headlessContext = vm.createContext({
-        window: headlessWindow,
-      });
-      vm.runInContext(snippet, headlessContext);
+      vm.runInContext(optInSnippet, vm.createContext({ window: headlessWindow }));
       expect(headlessWindow.__unpeek_tampered).toBe(true);
       expect(headlessWindow.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
     });
@@ -272,18 +283,101 @@ describe('Runtime Integrity Guard & DevTools Deterrent', () => {
       // Synchronous attestation completes immediately without queueMicrotask race
       expect(windowObj.__unpeek_tampered).toBeUndefined();
       expect(typeof windowObj[windowKeySymbol]).toBe('number');
+      const cleanDelta = windowObj[windowKeySymbol];
 
-      // Tampered environment poisons key synchronously
+      // Tampered environment (pretty-printed code OR detectHeadless: true under webdriver) poisons key synchronously
       const tamperedWindow: Record<string, unknown> = {
         navigator: { webdriver: true },
       };
+      const optInSnippet = createDeterrentSnippet({ seed, windowKeySymbol, detectHeadless: true });
       const tamperedContext = vm.createContext({
         window: tamperedWindow,
       });
-      vm.runInContext(snippet, tamperedContext);
+      vm.runInContext(optInSnippet, tamperedContext);
       expect(tamperedWindow.__unpeek_tampered).toBe(true);
       expect(tamperedWindow.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
       expect(typeof tamperedWindow[windowKeySymbol]).toBe('number');
+      expect(tamperedWindow[windowKeySymbol]).not.toBe(cleanDelta);
+    });
+
+    it('detects arrow, bound, and spoofed Function.prototype.toString hooks via prototype/name/length/call(0) checks (UNP-02)', () => {
+      const seed = 0x4242;
+      const windowKeySymbol = '_zHook';
+      const snippet = createDeterrentSnippet({ seed, windowKeySymbol });
+      const cleanWindow: Record<string, unknown> = {};
+      vm.runInContext(snippet, vm.createContext({ window: cleanWindow }));
+      const cleanDelta = cleanWindow[windowKeySymbol];
+
+      const hookFactories: Array<{ label: string; makeHook: () => unknown }> = [
+        {
+          label: 'arrow function returning [native code]',
+          makeHook: () => () => 'function toString() { [native code] }',
+        },
+        {
+          label: 'bound function returning [native code]',
+          makeHook: () => (function () { return 'function toString() { [native code] }'; }).bind(null),
+        },
+        {
+          label: 'named toString function with prototype',
+          makeHook: () => function toString() { return 'function toString() { [native code] }'; },
+        },
+        {
+          label: 'getter/object lacking call',
+          makeHook: () => ({ call: () => 'function toString() { [native code] }' }),
+        },
+      ];
+
+      for (const { makeHook } of hookFactories) {
+        const w: Record<string, unknown> = {};
+        const ctx = vm.createContext({
+          window: w,
+          Function: {
+            prototype: {
+              toString: makeHook(),
+            },
+          },
+        });
+        vm.runInContext(snippet, ctx);
+        expect(w.__unpeek_tampered).toBe(true);
+        expect(w.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
+        expect(w[windowKeySymbol]).not.toBe(cleanDelta);
+      }
+    });
+
+    it('resists early-throw setter traps on __unpeek_tampered and windowKeySymbol without aborting poisoning (UNP-02)', () => {
+      const seed = 0x7777;
+      const windowKeySymbol = '_zTrap';
+      const snippet = createDeterrentSnippet({ seed, windowKeySymbol });
+
+      // 1. Setter trap on window.__unpeek_tampered must NOT prevent poisoning of window[sym], __unpeek_delta, String.prototype._u, __unpeek_seed
+      const trapTamperedWin: Record<string, unknown> = {};
+      Object.defineProperty(trapTamperedWin, '__unpeek_tampered', {
+        configurable: true,
+        get() { return false; },
+        set() { throw new Error('early-throw tampered setter'); },
+      });
+      const trapCtx1 = vm.createContext({ window: trapTamperedWin });
+      trapCtx1.globalThis = trapCtx1;
+      expect(() => vm.runInContext(snippet, trapCtx1)).not.toThrow();
+      expect(typeof trapCtx1.__unpeek_delta).toBe('number');
+      expect(trapTamperedWin.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
+      expect(vm.runInContext('String.prototype._u', trapCtx1)).toBe(14);
+      expect(typeof trapTamperedWin[windowKeySymbol]).toBe('number');
+
+      // 2. Setter trap on window[windowKeySymbol] must be detected and still poison __unpeek_tampered, __unpeek_delta, String.prototype._u, __unpeek_seed
+      const trapSymWin: Record<string, unknown> = {};
+      Object.defineProperty(trapSymWin, windowKeySymbol, {
+        configurable: true,
+        get() { return 0; },
+        set() { throw new Error('early-throw sym setter'); },
+      });
+      const trapCtx2 = vm.createContext({ window: trapSymWin });
+      trapCtx2.globalThis = trapCtx2;
+      expect(() => vm.runInContext(snippet, trapCtx2)).not.toThrow();
+      expect(trapSymWin.__unpeek_tampered).toBe(true);
+      expect(trapSymWin.__unpeek_seed).toBe(((seed) ^ 1) >>> 0);
+      expect(typeof trapSymWin.__unpeek_delta).toBe('number');
+      expect(vm.runInContext('String.prototype._u', trapCtx2)).toBe(14);
     });
 
     it('defeats AST shield pruning by coupling string decryptor to runtime shield state such that removing the shield IIFE produces corrupt garbage strings', () => {

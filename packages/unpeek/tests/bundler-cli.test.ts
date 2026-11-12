@@ -678,4 +678,143 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
       fs.rmSync(monorepoRoot, { recursive: true, force: true });
     }
   });
+
+  it('UNP-04: injects runtime shield only into entry chunks while sharing masterSym across all chunks regardless of load order', async () => {
+    const vm = await import('node:vm');
+    fs.writeFileSync(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        name: 'entry-only-shield-app',
+        dependencies: { next: '15.2.0', react: '19.0.0' },
+      }),
+      'utf8'
+    );
+
+    const chunksDir = path.join(tmpDir, '.next', 'static', 'chunks');
+    const appDir = path.join(chunksDir, 'app');
+    fs.mkdirSync(appDir, { recursive: true });
+
+    const polyfillsPath = path.join(chunksDir, 'polyfills-11111111.js');
+    const webpackPath = path.join(chunksDir, 'webpack-22222222.js');
+    const mainPath = path.join(chunksDir, 'main-33333333.js');
+    const lazyZeroPath = path.join(chunksDir, '13-zero-strings.js');
+    const pagePath = path.join(appDir, 'page-44444444.js');
+
+    fs.writeFileSync(
+      polyfillsPath,
+      'self.__poly = function(){ return "POLYFILL_SECRET_VALUE"; };',
+      'utf8'
+    );
+    fs.writeFileSync(
+      webpackPath,
+      'self.__webpackBootstrap = function(){ return "WEBPACK_ENTRY_SECRET"; };',
+      'utf8'
+    );
+    fs.writeFileSync(
+      mainPath,
+      'self.__mainBoot = function(){ return "MAIN_ENTRY_SECRET"; };',
+      'utf8'
+    );
+    fs.writeFileSync(
+      lazyZeroPath,
+      'self.__pureMath = function(a, b){ return a + b; };',
+      'utf8'
+    );
+    fs.writeFileSync(
+      pagePath,
+      'self.__pageRender = function(){ return "PAGE_CHUNK_SECRET"; };',
+      'utf8'
+    );
+
+    const summary = await protectProject({
+      cwd: tmpDir,
+      seed: 0x13572468,
+      aggressive: true,
+    });
+    expect(summary.processedFiles).toBe(5);
+
+    const polyCode = fs.readFileSync(polyfillsPath, 'utf8');
+    const webpackCode = fs.readFileSync(webpackPath, 'utf8');
+    const mainCode = fs.readFileSync(mainPath, 'utf8');
+    const zeroCode = fs.readFileSync(lazyZeroPath, 'utf8');
+    const pageCode = fs.readFileSync(pagePath, 'utf8');
+
+    // Entry chunks (webpack-*, main-*) receive shield preamble; non-entry chunks do NOT
+    expect(webpackCode).toContain('__unpeek_tampered');
+    expect(mainCode).toContain('__unpeek_tampered');
+    expect(polyCode).not.toContain('__unpeek_tampered');
+    expect(zeroCode).not.toContain('__unpeek_tampered');
+    expect(pageCode).not.toContain('__unpeek_tampered');
+
+    // 0-string chunk receives zero WASM bloat even in --aggressive
+    expect(zeroCode).not.toContain('_wKdf');
+    expect(zeroCode).not.toContain('WebAssembly');
+
+    // Execute polyfills BEFORE webpack/main (matching Next.js runtime order!) and verify lazy G[sym] works
+    const sharedWindow: Record<string, any> = {
+      Uint8Array,
+      WebAssembly,
+      Math,
+      String,
+      Promise,
+    };
+    sharedWindow.self = sharedWindow;
+    sharedWindow.window = sharedWindow;
+    sharedWindow.globalThis = sharedWindow;
+    const ctx = vm.createContext(sharedWindow);
+
+    vm.runInContext(polyCode, ctx);
+    vm.runInContext(webpackCode, ctx);
+    vm.runInContext(mainCode, ctx);
+    vm.runInContext(zeroCode, ctx);
+    vm.runInContext(pageCode, ctx);
+
+    expect(sharedWindow.__poly()).toBe('POLYFILL_SECRET_VALUE');
+    expect(sharedWindow.__webpackBootstrap()).toBe('WEBPACK_ENTRY_SECRET');
+    expect(sharedWindow.__mainBoot()).toBe('MAIN_ENTRY_SECRET');
+    expect(sharedWindow.__pureMath(4, 9)).toBe(13);
+    expect(sharedWindow.__pageRender()).toBe('PAGE_CHUNK_SECRET');
+  });
+
+  it('UNP-06: supports shield.detectHeadless in config and --detect-headless / --gradual CLI flags', async () => {
+    const vm = await import('node:vm');
+    const { runCli } = await import('../src/cli/index.js');
+
+    fs.writeFileSync(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'headless-cfg-app', scripts: { build: 'vite build' } }),
+      'utf8'
+    );
+    const distDir = path.join(tmpDir, 'dist');
+    fs.mkdirSync(distDir, { recursive: true });
+    const entryFile = path.join(distDir, 'index.js');
+    fs.writeFileSync(
+      entryFile,
+      'function getApiKey() { return "HEADLESS_OPTIN_TEST_KEY"; } self.__k = getApiKey;',
+      'utf8'
+    );
+
+    const origCwd = process.cwd();
+    try {
+      process.chdir(tmpDir);
+      await runCli(['protect', '--out-dir', 'dist', '--seed', '4242', '--detect-headless', '--gradual']);
+    } finally {
+      process.chdir(origCwd);
+    }
+
+    const protectedCode = fs.readFileSync(entryFile, 'utf8');
+    expect(protectedCode).toContain('webdriver');
+    expect(protectedCode).toContain('console[k]');
+
+    const win: Record<string, any> = {
+      navigator: { webdriver: true, userAgent: 'Mozilla/5.0' },
+      console: { log: () => 'real' },
+    };
+    win.self = win;
+    win.window = win;
+    win.globalThis = win;
+    vm.runInContext(protectedCode, vm.createContext(win));
+    expect(win.__unpeek_tampered).toBe(true);
+    expect(win.console.log()).toBe(0);
+  });
 });

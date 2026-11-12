@@ -547,8 +547,9 @@ describe('AST & Call-Graph Transformation Engine', () => {
       });
     });
 
-    it('injects runtime shield preamble when injectRuntimeShield option is true', () => {
-      const code = 'function hello() { return "world"; } hello();';
+    it('injects runtime shield preamble when injectRuntimeShield option is true', async () => {
+      const vm = await import('node:vm');
+      const code = 'function hello() { return "world"; } return hello();';
       const withoutShield = transformJavaScript(code, {
         injectRuntimeShield: false,
       });
@@ -558,7 +559,22 @@ describe('AST & Call-Graph Transformation Engine', () => {
 
       expect(withoutShield.code).not.toContain('__unpeek');
       expect(withShield.code).toContain('__unpeek');
-      expect(withShield.code.endsWith(withoutShield.code)).toBe(true);
+      expect(withShield.code.startsWith('(function ')).toBe(true);
+      expect(new Function(withoutShield.code)()).toBe('world');
+
+      const browserWin: Record<string, any> = {};
+      const browserCtx: Record<string, any> = { window: browserWin };
+      browserCtx.globalThis = browserCtx;
+      vm.createContext(browserCtx);
+      expect(vm.runInContext(`(function(){${withShield.code}})()`, browserCtx)).toBe('world');
+
+      // Stripping the shield preamble in browser context corrupts the coupled vault decryption
+      const stripped = withShield.code.split('\n').slice(1).join('\n');
+      const strippedWin: Record<string, any> = {};
+      const strippedCtx: Record<string, any> = { window: strippedWin };
+      strippedCtx.globalThis = strippedCtx;
+      vm.createContext(strippedCtx);
+      expect(vm.runInContext(`(function(){${stripped}})()`, strippedCtx)).not.toBe('world');
     });
 
     it('is idempotent when transformJavaScript is called multiple times on already-protected code', () => {
@@ -868,27 +884,25 @@ describe('AST & Call-Graph Transformation Engine', () => {
   });
 
   describe('Non-Linear MBA Opaque Invariants (JIT-friendly algebraic invariants)', () => {
-    it('generates algebraically sound 32-bit MBA predicates evaluating to 0 and comparing to 0x7fffffff', () => {
+    it('generates algebraically sound 32-bit live-parameter MBA predicates without static +!String', () => {
       for (const seed of [0, 42, 0x9e3779b9, 0xdeadbeef, 0x12345678]) {
-        for (let fnIndex = 0; fnIndex < 10; fnIndex++) {
-          const guard = createSotaMbaPredicate(seed, fnIndex);
-          expect(guard.type).toBe('IfStatement');
-          expect(guard.test.type).toBe('BinaryExpression');
-          expect(guard.test.operator).toBe('===');
-          expect(guard.test.right.type).toBe('Literal');
-          expect(typeof guard.test.right.value).toBe('number');
-          expect(guard.test.right.value).toBeGreaterThan(0);
+        for (let fnIndex = 0; fnIndex < 5; fnIndex++) {
+          // 1. Live parameter binding: (param | 0)
+          const paramGuard = createSotaMbaPredicate(seed, fnIndex, 'userInput');
+          expect(paramGuard.type).toBe('IfStatement');
+          expect(paramGuard.test.type).toBe('BinaryExpression');
+          expect(paramGuard.test.operator).toBe('===');
+          expect(paramGuard.test.right.type).toBe('Literal');
+          expect(paramGuard.test.right.value).toBeGreaterThan(0);
 
-          let foundString = false;
-          walk.simple(guard.test, {
-            Identifier(idNode: any) {
-              if (idNode.name === 'String') foundString = true;
-            },
-          });
-          expect(foundString).toBe(true);
-
+          let foundStaticString = false;
+          let foundLiveParam = false;
           let foundImul = false;
-          walk.simple(guard.test, {
+          walk.simple(paramGuard.test, {
+            Identifier(idNode: any) {
+              if (idNode.name === 'String') foundStaticString = true;
+              if (idNode.name === 'userInput') foundLiveParam = true;
+            },
             CallExpression(call: any) {
               if (
                 call.callee?.type === 'MemberExpression' &&
@@ -899,15 +913,41 @@ describe('AST & Call-Graph Transformation Engine', () => {
               }
             },
           });
+          expect(foundStaticString).toBe(false);
+          expect(foundLiveParam).toBe(true);
           expect(foundImul).toBe(true);
 
-          const evalCode = `(function() { return (${generate(guard.test.left)}); })()`;
-          const evalResult = new Function('String', 'return ' + evalCode)(String);
-          expect(evalResult | 0).toBe(0);
-          expect(evalResult === guard.test.right.value).toBe(false);
+          const paramCode = generate(paramGuard.test.left);
+          const evalParamFn = new Function('userInput', `return (${paramCode});`);
+          for (const liveVal of [0, 1, -1, 42, 0x7fffffff, -0x80000000, 'abc', undefined]) {
+            const res = evalParamFn(liveVal);
+            expect(res | 0).toBe(0);
+            expect(res === paramGuard.test.right.value).toBe(false);
+          }
+
+          // 2. 0-param standard function binding: arguments.length
+          const argsGuard = createSotaMbaPredicate(seed, fnIndex);
+          const argsCode = generate(argsGuard.test.left);
+          expect(argsCode).toContain('arguments.length');
+          expect(argsCode).not.toContain('String');
+          const evalArgsFn = new Function(`return (${argsCode});`);
+          for (const args of [[], [1], [1, 2, 3]]) {
+            const res = evalArgsFn(...args);
+            expect(res | 0).toBe(0);
+            expect(res === argsGuard.test.right.value).toBe(false);
+          }
+
+          // 3. 0-param arrow function binding: (typeof globalThis).length
+          const arrowGuard = createSotaMbaPredicate(seed, fnIndex, undefined, undefined, true);
+          const arrowCode = generate(arrowGuard.test.left);
+          expect(arrowCode).toContain('globalThis');
+          expect(arrowCode).not.toContain('String');
+          const evalArrowFn = new Function(`return (${arrowCode});`);
+          const arrowRes = evalArrowFn();
+          expect(arrowRes | 0).toBe(0);
+          expect(arrowRes === arrowGuard.test.right.value).toBe(false);
         }
       }
-
     });
 
     it('generates 3 distinct adversarial decoy models across modulated fnIndex', () => {
@@ -960,37 +1000,45 @@ describe('AST & Call-Graph Transformation Engine', () => {
       const ast = acorn.parse(res.code, { ecmaVersion: 'latest', allowReturnOutsideFunction: true });
       let coldGuardFound = false;
       let stringIdentifierFound = false;
+      let liveParamFound = false;
       let maxSmiComparisonFound = false;
 
       walk.simple(ast, {
-        IfStatement(node: any) {
-          if (
-            node.test?.type === 'BinaryExpression' &&
-            node.test.operator === '===' &&
-            node.test.right?.type === 'Literal' &&
-            typeof node.test.right.value === 'number'
-          ) {
-            coldGuardFound = true;
-            maxSmiComparisonFound = true;
-            walk.simple(node.test, {
-              Identifier(id: any) {
-                if (id.name === 'String') stringIdentifierFound = true;
-              },
-            });
+        FunctionDeclaration(fnNode: any) {
+          if (fnNode.id?.name !== 'verifyToken') return;
+          const firstParamName = fnNode.params?.[0]?.name;
+          for (const stmt of fnNode.body?.body || []) {
+            if (
+              stmt.type === 'IfStatement' &&
+              stmt.test?.type === 'BinaryExpression' &&
+              stmt.test.operator === '===' &&
+              stmt.test.right?.type === 'Literal' &&
+              typeof stmt.test.right.value === 'number'
+            ) {
+              coldGuardFound = true;
+              maxSmiComparisonFound = true;
+              walk.simple(stmt.test, {
+                Identifier(id: any) {
+                  if (id.name === 'String') stringIdentifierFound = true;
+                  if (firstParamName && id.name === firstParamName) liveParamFound = true;
+                },
+              });
+            }
           }
         },
       });
 
       expect(coldGuardFound).toBe(true);
-      expect(stringIdentifierFound).toBe(true);
+      expect(stringIdentifierFound).toBe(false);
+      expect(liveParamFound).toBe(true);
       expect(maxSmiComparisonFound).toBe(true);
 
       const fn = new Function(res.code);
       expect(fn()).toBe('TOKEN_VALID:60');
 
       const instrumentedCode = res.code.replace(
-        /\{return\{endpoint:"\/api\/v2\/auth\/admin-bypass",superadmin_token:1,elevate:1\};?\}/g,
-        '{throw new Error("GUARD_BRANCH_EXECUTED");}'
+        /endpoint:"\/api\/v2\/auth\/admin-bypass"/g,
+        'endpoint:(()=>{throw new Error("GUARD_BRANCH_EXECUTED");})()'
       );
       const instrumentedFn = new Function(instrumentedCode);
       expect(() => instrumentedFn()).not.toThrow();
@@ -1131,6 +1179,98 @@ describe('AST & Call-Graph Transformation Engine', () => {
         'Unicode_ğüşiöç_🚀_payload',
         'Unicode_ğüşiöç_🚀_payload',
       ]);
+    });
+
+    it('UNP-05: hardens Shader Vault with self-hashed rolling keystream (no plaintext var k = <num>) and preserves StrictMode idempotency', () => {
+      const wgsl = `@group(0) @binding(0) var<uniform> cam: mat4x4f; @vertex fn vs_main() -> @builtin(position) vec4f { return vec4f(0.0,0.0,0.0,1.0); }`;
+      const source = `
+        function loadShaderSource() {
+          return ${JSON.stringify(wgsl)};
+        }
+        return [loadShaderSource(), loadShaderSource()];
+      `;
+
+      const res = transformJavaScript(source, {
+        seed: 0x31415926,
+        minStringLength: 4,
+      });
+
+      expect(res.shaderBuffersCount).toBe(1);
+      expect(res.code).not.toContain('@group(0)');
+      // Must NOT emit single-byte plaintext `var k = <num>`
+      expect(res.code).not.toMatch(/\bvar\s+k\s*=\s*\d+/);
+      // Must bind shader key to Function.prototype.toString.call(f) self-hash
+      expect(res.code).toContain('Function.prototype.toString.call(f)');
+
+      const out = new Function(res.code)();
+      expect(out).toEqual([wgsl, wgsl]);
+    });
+
+    it('UNP-07: skips <3 char SWC locals by default to preserve gzip budget, and mangles 1-2 char locals polymorphically when minLength: 1 or 2 is opted in', () => {
+      const swcMinifiedSource = `
+        function computeAuth(a, b) {
+          var c = "SWC_MINIFIED_SECRET_TOKEN";
+          let d = a + ":" + b;
+          {
+            let a = 7;
+            d = d + ":" + a;
+          }
+          return d + ":" + c;
+        }
+        return computeAuth("usr", "pro");
+      `;
+
+      // Default minLength (3) skips 1-char SWC locals so gzip budget stays <15%
+      const defaultRes = transformJavaScript(swcMinifiedSource, {
+        seed: 0x11111111,
+        minStringLength: 4,
+      });
+      expect(defaultRes.mangledSymbolsCount).toBe(0);
+      expect(new Function(defaultRes.code)()).toBe('usr:pro:7:SWC_MINIFIED_SECRET_TOKEN');
+
+      // Opt-in minLength: 1 mangles all 5 1-char local bindings polymorphically across seeds
+      const resA = transformJavaScript(swcMinifiedSource, {
+        seed: 0x11111111,
+        minStringLength: 4,
+        config: { mangler: { minLength: 1 } },
+      });
+      const resB = transformJavaScript(swcMinifiedSource, {
+        seed: 0x22222222,
+        minStringLength: 4,
+        config: { mangler: { minLength: 1 } },
+      });
+
+      // All 5 local bindings (a, b, c, d, inner a) are mangled when minLength: 1 is specified
+      expect(resA.mangledSymbolsCount).toBeGreaterThanOrEqual(5);
+      expect(resB.mangledSymbolsCount).toBeGreaterThanOrEqual(5);
+      expect(resA.code).not.toBe(resB.code);
+
+      // Exact runtime semantics preserved
+      expect(new Function(resA.code)()).toBe('usr:pro:7:SWC_MINIFIED_SECRET_TOKEN');
+      expect(new Function(resB.code)()).toBe('usr:pro:7:SWC_MINIFIED_SECRET_TOKEN');
+
+      // Explicit config.mangler.minLength: 2 skips 1-char locals and mangles 2-char locals
+      const twoCharSource = `
+        function check(x, ab) {
+          var y = 1;
+          var cd = 2;
+          return x + ab + y + cd;
+        }
+        return check(10, 20);
+      `;
+      const defaultTwoCharRes = transformJavaScript(twoCharSource, {
+        seed: 0x33333333,
+      });
+      expect(defaultTwoCharRes.mangledSymbolsCount).toBe(0);
+
+      const minLen2Res = transformJavaScript(twoCharSource, {
+        seed: 0x33333333,
+        config: { mangler: { minLength: 2 } },
+      });
+      // Only ab and cd (2 bindings) should be mangled; x and y remain
+      expect(minLen2Res.mangledSymbolsCount).toBe(2);
+      expect(minLen2Res.code).toContain('function check(x,');
+      expect(new Function(minLen2Res.code)()).toBe(33);
     });
   });
 });
