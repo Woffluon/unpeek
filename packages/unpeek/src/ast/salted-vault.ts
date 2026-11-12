@@ -1,14 +1,16 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
-import { computeFnv1aHash, SAFE_ALPHA } from './string-vault.js';
+import type { UnpeekConfig } from '../types.js';
+import {
+  computeFnv1aHash,
+  SAFE_ALPHA,
+  DIRECTIVE_STRINGS,
+  isReservedProp,
+  isTailwindNoise,
+  isSvgPathString,
+} from './string-vault.js';
 import { fallbackKdf, injectWasmVault } from './wasm-vault.js';
-
-const DIRECTIVE_STRINGS = new Set([
-  'use strict',
-  'use client',
-  'use server',
-  'use asm',
-]);
+import { deriveWindowKeySymbol } from '../runtime/index.js';
 
 export interface SaltedVaultResult {
   encryptedStringsCount: number;
@@ -34,7 +36,7 @@ export function createSaltedDecryptorFnAst(
   windowKeySymbol: string,
   safeAlpha = SAFE_ALPHA
 ): any {
-  const fBody = `var memo=[];var s=Function.prototype.toString,w=typeof window!=='undefined'&&window,src=s.call(f);for(var h=0x811c9dc5,j=0;j<src.length;j++)h=Math.imul(h^src.charCodeAt(j),0x01000193)>>>0;var rot=(h^((""._u||a._u||0))^(w?(w['${windowKeySymbol}']!=null?w['${windowKeySymbol}']:0):${expectedDelta}))&31;var A="${safeAlpha}",P="${pChars}";return function(i,s){if(memo[i]!==void 0)return memo[i];var p=a[i];if(!p)return "";var o="";for(var j=0;j<p.length;j++){var c=p.charAt(j),k=A.indexOf(c);if(k<0){o+=c;}else{var y=(k-s+rot+9200)%92;var z=A.indexOf(P.charAt(y));o+=A.charAt((z-rot+9200)%92);}}return(memo[i]=o);};`;
+  const fBody = `var memo=[],s=Function.prototype.toString,G=typeof globalThis!=='undefined'?globalThis:(typeof window!=='undefined'?window:(typeof self!=='undefined'?self:this)),w=typeof window!=='undefined'?window:(typeof self!=='undefined'?self:0),src=s.call(f);for(var h=0x811c9dc5,j=0;j<src.length;j++)h=Math.imul(h^src.charCodeAt(j),0x01000193)>>>0;var delta=G['${windowKeySymbol}']!=null?G['${windowKeySymbol}']:(w?0:${expectedDelta}),rot=(h^((""._u||a._u||0))^delta)&31,A="${safeAlpha}",P="${pChars}";return function(i,s){if(memo[i]!==void 0)return memo[i];var p=a[i],o="";if(!p)return "";for(var j=0;j<p.length;j++){var c=p.charAt(j),k=A.indexOf(c);if(k<0)o+=c;else{var y=(k-s+rot+9200)%92;o+=A.charAt((A.indexOf(P.charAt(y))-rot+9200)%92);}}return(memo[i]=o);};`;
 
   return (
     acorn.parse(`(function f(a){${fBody}})`, {
@@ -147,7 +149,8 @@ export function applySaltedStringVault(
   ast: acorn.Program,
   seed = 0x9e3779b9,
   minStringLength = 4,
-  hotExemptNodes?: WeakSet<acorn.Node>
+  hotExemptNodes?: WeakSet<acorn.Node>,
+  config?: UnpeekConfig
 ): SaltedVaultResult {
   if (isAstAlreadySalted(ast)) {
     return {
@@ -157,6 +160,18 @@ export function applySaltedStringVault(
       decryptFnName: '',
     };
   }
+
+  const minLen = config?.vault?.minStringLength ?? minStringLength;
+  const activeDirectives = new Set(DIRECTIVE_STRINGS);
+  if (config?.vault?.customDirectives) {
+    for (const dir of config.vault.customDirectives) {
+      activeDirectives.add(dir);
+    }
+  }
+
+  const customReserved = config?.vault?.reservedProps
+    ? new Set(config.vault.reservedProps)
+    : undefined;
 
   interface TargetEntry {
     node: any;
@@ -172,17 +187,34 @@ export function applySaltedStringVault(
   walk.ancestor(ast, {
     Literal(node: any, ancestors: any[]) {
       if (typeof node.value !== 'string') return;
-      if (node.value.length < minStringLength) return;
-      if (DIRECTIVE_STRINGS.has(node.value)) return;
+      if (node.value.length < minLen) return;
+      if (activeDirectives.has(node.value)) return;
 
       const parent = ancestors[ancestors.length - 2];
       if (!parent) return;
+
+      if (
+        parent.type === 'ExpressionStatement' &&
+        (Boolean(parent.directive) || activeDirectives.has(node.value))
+      ) {
+        return;
+      }
+
+      for (let i = ancestors.length - 2; i >= 0; i--) {
+        if (
+          ancestors[i].type === 'ExpressionStatement' &&
+          Boolean((ancestors[i] as any).directive)
+        ) {
+          return;
+        }
+      }
 
       // Do not encrypt module import/export source paths
       if (
         (parent.type === 'ImportDeclaration' ||
           parent.type === 'ExportNamedDeclaration' ||
-          parent.type === 'ExportAllDeclaration') &&
+          parent.type === 'ExportAllDeclaration' ||
+          parent.type === 'ImportExpression') &&
         parent.source === node
       ) {
         return;
@@ -209,6 +241,10 @@ export function applySaltedStringVault(
           }
         }
       }
+
+      if (isReservedProp(node.value, customReserved)) return;
+      if (isTailwindNoise(node.value)) return;
+      if (isSvgPathString(node.value, parent)) return;
 
       const callSiteIdx = targetsToReplace.length;
       const localSalt =
@@ -274,12 +310,15 @@ export function applySaltedStringVault(
   const serializedTable = JSON.stringify(encryptedPayloads);
   const integrityToken = computeFnv1aHash(serializedTable, seed);
 
+  const sym = deriveWindowKeySymbol(seed);
+
   // Injected lazy idempotent decryptor helper
   const helperSnippet = `var ${vaultVarName} = ${serializedTable};
 var ${cacheVarName} = [];
 function ${decryptFnName}(i, s) {
   if (${cacheVarName}[i] !== void 0) return ${cacheVarName}[i];
-  var d = typeof window !== 'undefined' && window.__unpeek_delta != null ? window.__unpeek_delta : 0;
+  var G = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : (typeof self !== 'undefined' ? self : this));
+  var d = G && G.__unpeek_delta != null ? G.__unpeek_delta : 0;
   var k = ${kdfFnName}(i, s, d);
   var p = ${vaultVarName}[i], o = '';
   for (var j = 0; j < p.length; j++) {
@@ -293,7 +332,24 @@ function ${decryptFnName}(i, s) {
     sourceType: 'script',
   }) as acorn.Program;
 
-  ast.body.unshift(...(parsedHelper.body as any[]));
+  let insertIdx = 0;
+  while (insertIdx < ast.body.length) {
+    const stmt: any = ast.body[insertIdx];
+    const isDirective =
+      stmt.type === 'ExpressionStatement' &&
+      (Boolean(stmt.directive) ||
+        (stmt.expression?.type === 'Literal' &&
+          typeof stmt.expression.value === 'string' &&
+          (activeDirectives.has(stmt.expression.value) ||
+            /^(?:use\s+[a-zA-Z0-9_-]+)/.test(stmt.expression.value.trim()))));
+    if (isDirective || stmt.type === 'ImportDeclaration') {
+      insertIdx++;
+    } else {
+      break;
+    }
+  }
+
+  ast.body.splice(insertIdx, 0, ...(parsedHelper.body as any[]));
 
   return {
     encryptedStringsCount: targetsToReplace.length,

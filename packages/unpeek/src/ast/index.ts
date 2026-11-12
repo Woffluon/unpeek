@@ -76,7 +76,8 @@ export function transformJavaScript(
   options: TransformOptions = {}
 ): TransformResult {
   const seed = options.seed ?? 0x9e3779b9;
-  const minStringLength = options.minStringLength ?? 4;
+  const minStringLength =
+    options.minStringLength ?? options.config?.vault?.minStringLength ?? 4;
   const isAggressive = options.aggressive ?? false;
 
   if (!code || !code.trim()) {
@@ -119,7 +120,7 @@ export function transformJavaScript(
     hotFunctionNodes,
     hotExemptNodes,
     serializedFunctionNodes,
-  } = analyzeAstHotPaths(ast);
+  } = analyzeAstHotPaths(ast, options.config);
 
   let virtualizedFunctionsCount = 0;
   if (isAggressive) {
@@ -139,7 +140,8 @@ export function transformJavaScript(
   const mangledSymbolsCount = applyPolymorphicMangler(
     ast,
     seed,
-    serializedFunctionNodes
+    serializedFunctionNodes,
+    options.config
   );
 
   let encryptedStringsCount = 0;
@@ -152,7 +154,8 @@ export function transformJavaScript(
       ast,
       seed,
       minStringLength,
-      hotExemptNodes
+      hotExemptNodes,
+      options.config
     );
     encryptedStringsCount = saltedRes.encryptedStringsCount;
     integrityToken = saltedRes.integrityToken;
@@ -164,7 +167,8 @@ export function transformJavaScript(
       hotExemptNodes,
       undefined,
       undefined,
-      options.deterrentMode
+      options.deterrentMode,
+      options.config
     );
     encryptedStringsCount = vaultRes.encryptedStringsCount;
     integrityToken = vaultRes.integrityToken;

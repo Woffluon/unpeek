@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import type { ProtectOptions, ProtectSummary } from '../types.js';
+import { loadUnpeekConfig } from '../config.js';
 import { detectTargetFramework, scanClientBundles } from '../bundler/detector.js';
 import { relocateSourceMaps, SOURCE_MAP_COMMENT_REGEX } from '../bundler/sourcemap-vault.js';
 import { computeFnv1aHash, transformJavaScript } from '../ast/index.js';
@@ -28,21 +29,22 @@ function isEntryChunk(relPath: string, index: number, allRelPaths: string[]): bo
 export async function protectProject(options: ProtectOptions = {}): Promise<ProtectSummary> {
   const startTime = performance.now();
   const cwd = path.resolve(options.cwd ?? process.cwd());
-  const { framework, outDir } = detectTargetFramework(cwd, options.outDir);
+  const config = await loadUnpeekConfig(cwd, options.config);
+  const { framework, outDir } = detectTargetFramework(cwd, options.outDir, config);
 
   const seed =
     typeof options.seed === 'number'
       ? options.seed
       : Math.floor(Math.random() * 0x7fffffff) || 0x5f3759df;
-  const keepPrivateMaps = options.keepPrivateMaps ?? true;
-  const privateMapsDir = options.privateMapsDir ?? '.unpeek-maps';
+  const keepPrivateMaps = options.keepPrivateMaps ?? config.sourcemaps?.keepPrivate ?? true;
+  const privateMapsDir = options.privateMapsDir ?? config.sourcemaps?.vaultDir ?? '.unpeek-maps';
   const deterrentMode = options.deterrentMode ?? 'passive';
   const injectRuntimeShield = options.injectRuntimeShield ?? true;
-  const minStringLength = options.minStringLength ?? 4;
+  const minStringLength = options.minStringLength ?? config.vault?.minStringLength ?? 4;
   const aggressive = options.aggressive ?? false;
 
-  const vaultResult = relocateSourceMaps(outDir, cwd, keepPrivateMaps, privateMapsDir, false);
-  const clientFiles = scanClientBundles(outDir);
+  const vaultResult = relocateSourceMaps(outDir, cwd, keepPrivateMaps, privateMapsDir, false, config);
+  const clientFiles = scanClientBundles(outDir, config);
   const allRelPaths = clientFiles.map((f) => path.relative(outDir, f).replace(/\\/g, '/'));
 
   let originalBytes = 0;
@@ -82,6 +84,7 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
         injectRuntimeShield: shouldInjectShield,
         deterrentMode,
         aggressive,
+        config,
       });
 
       let finalCode = result.code;

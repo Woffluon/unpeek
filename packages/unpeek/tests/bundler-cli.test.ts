@@ -534,4 +534,148 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
       expect(actual).toBe(expected);
     }
   });
+
+  it('scans client route with "server" in path name, supports .cjs and .mjs, and excludes server bundles', () => {
+    const nextStaticChunks = path.join(tmpDir, '.next', 'static', 'chunks');
+    const clientServerRouteDir = path.join(nextStaticChunks, 'app', 'server', 'dashboard');
+    const nextServerDir = path.join(tmpDir, '.next', 'server', 'app');
+
+    fs.mkdirSync(clientServerRouteDir, { recursive: true });
+    fs.mkdirSync(nextServerDir, { recursive: true });
+
+    const clientPageJs = path.join(clientServerRouteDir, 'page.js');
+    const clientWidgetCjs = path.join(clientServerRouteDir, 'widget.cjs');
+    const clientMainMjs = path.join(nextStaticChunks, 'main.mjs');
+    const serverPageJs = path.join(nextServerDir, 'page.js');
+
+    fs.writeFileSync(clientPageJs, 'export default function Dashboard() { return "client"; }', 'utf8');
+    fs.writeFileSync(clientWidgetCjs, 'module.exports = { widget: "active" };', 'utf8');
+    fs.writeFileSync(clientMainMjs, 'export const version = 1;', 'utf8');
+    fs.writeFileSync(serverPageJs, 'export async function getServerSideProps() { return {}; }', 'utf8');
+
+    // 1. Scanning .next/static/chunks should include client routes that have 'server' in their name
+    const clientFiles = scanClientBundles(nextStaticChunks);
+    expect(clientFiles).toContain(clientPageJs);
+    expect(clientFiles).toContain(clientWidgetCjs);
+    expect(clientFiles).toContain(clientMainMjs);
+    expect(clientFiles).not.toContain(serverPageJs);
+
+    // 2. Scanning .next directory directly should exclude .next/server but include static chunks
+    const allNextFiles = scanClientBundles(path.join(tmpDir, '.next'));
+    expect(allNextFiles).toContain(clientPageJs);
+    expect(allNextFiles).toContain(clientWidgetCjs);
+    expect(allNextFiles).not.toContain(serverPageJs);
+  });
+
+  it('auto-discovers next.config distDir and vite.config outDir, and respects explicit config overrides', () => {
+    // Next.js auto-discovery
+    fs.writeFileSync(
+      path.join(tmpDir, 'next.config.js'),
+      'module.exports = { distDir: "custom-next-dist" };',
+      'utf8'
+    );
+    const customNextChunks = path.join(tmpDir, 'custom-next-dist', 'static', 'chunks');
+    fs.mkdirSync(customNextChunks, { recursive: true });
+
+    const detectedNext = detectTargetFramework(tmpDir);
+    expect(detectedNext.framework).toBe('nextjs');
+    expect(detectedNext.outDir).toBe(customNextChunks);
+
+    // Override with explicit config
+    const overriddenNext = detectTargetFramework(tmpDir, undefined, {
+      next: { distDir: 'configured-next-dist' },
+    });
+    expect(overriddenNext.outDir).toBe(path.join(tmpDir, 'configured-next-dist', 'static', 'chunks'));
+
+    // Vite auto-discovery
+    const viteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unpeek-vite-'));
+    try {
+      fs.writeFileSync(
+        path.join(viteDir, 'vite.config.ts'),
+        'export default defineConfig({ build: { outDir: "custom-vite-out", assetsDir: "bundle-assets" } });',
+        'utf8'
+      );
+      const customViteAssets = path.join(viteDir, 'custom-vite-out', 'bundle-assets');
+      fs.mkdirSync(customViteAssets, { recursive: true });
+
+      const detectedVite = detectTargetFramework(viteDir);
+      expect(detectedVite.framework).toBe('vite');
+      expect(detectedVite.outDir).toBe(customViteAssets);
+    } finally {
+      fs.rmSync(viteDir, { recursive: true, force: true });
+    }
+  });
+
+  it('unplugin normalizes Windows backslashes and processes .cjs chunks while skipping server and node_modules', () => {
+    const rawInstance = unpeekPlugin.raw({ seed: 42, deterrentMode: 'passive' }, { framework: 'vite' } as any);
+    const pluginObj = Array.isArray(rawInstance) ? rawInstance[0] : rawInstance;
+    const renderChunk = pluginObj.renderChunk as any;
+
+    // 1. Client route with Windows backslashes (.cjs) must be protected
+    const clientChunkRes = renderChunk(
+      'function testSecret(x) { const s = "client_secret"; return s + x; }',
+      { fileName: 'chunks\\app\\dashboard.cjs', isEntry: false }
+    );
+    expect(clientChunkRes).not.toBeNull();
+    expect(clientChunkRes.code).toBeDefined();
+    expect(clientChunkRes.code).not.toContain('client_secret');
+
+    // 2. Server chunk with Windows backslashes must be skipped
+    const serverChunkRes = renderChunk(
+      'function ssrCode() { return "ssr"; }',
+      { fileName: 'server\\chunks\\page.js', isEntry: false }
+    );
+    expect(serverChunkRes).toBeNull();
+
+    // 3. node_modules chunk with Windows backslashes must be skipped
+    const vendorChunkRes = renderChunk(
+      'function vendorCode() { return "vendor"; }',
+      { fileName: 'node_modules\\dep\\index.mjs', isEntry: false }
+    );
+    expect(vendorChunkRes).toBeNull();
+  });
+
+  it('sourcemap-vault dynamically validates static/assets publicDirs and discovers monorepo root ignore files', async () => {
+    const { relocateSourceMaps } = await import('../src/bundler/sourcemap-vault.js');
+    const outDir = path.join(tmpDir, 'dist');
+    fs.mkdirSync(outDir, { recursive: true });
+
+    // 1. Dynamic public dir checking (e.g. 'static' and 'assets')
+    expect(() => {
+      relocateSourceMaps(outDir, tmpDir, true, 'static/maps');
+    }).toThrow(/privateMapsDir cannot be located inside publicDir/i);
+
+    expect(() => {
+      relocateSourceMaps(outDir, tmpDir, true, 'assets/maps');
+    }).toThrow(/privateMapsDir cannot be located inside publicDir/i);
+
+    // Custom config.publicDirs
+    expect(() => {
+      relocateSourceMaps(outDir, tmpDir, true, 'custom-public/maps', true, {
+        publicDirs: ['custom-public'],
+      });
+    }).toThrow(/privateMapsDir cannot be located inside publicDir/i);
+
+    // 2. Monorepo root ignore discovery
+    const monorepoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'unpeek-mono-'));
+    try {
+      fs.mkdirSync(path.join(monorepoRoot, '.git'), { recursive: true });
+      const rootGitignore = path.join(monorepoRoot, '.gitignore');
+      const rootDockerignore = path.join(monorepoRoot, '.dockerignore');
+      fs.writeFileSync(rootGitignore, 'node_modules\n', 'utf8');
+      fs.writeFileSync(rootDockerignore, 'node_modules\n', 'utf8');
+
+      const pkgSubDir = path.join(monorepoRoot, 'packages', 'web-app');
+      const pkgOutDir = path.join(pkgSubDir, 'dist');
+      fs.mkdirSync(pkgOutDir, { recursive: true });
+      fs.writeFileSync(path.join(pkgOutDir, 'bundle.js.map'), '{}', 'utf8');
+
+      relocateSourceMaps(pkgOutDir, pkgSubDir, true, '.unpeek-maps');
+
+      expect(fs.readFileSync(rootGitignore, 'utf8')).toContain('.unpeek-maps/');
+      expect(fs.readFileSync(rootDockerignore, 'utf8')).toContain('.unpeek-maps/');
+    } finally {
+      fs.rmSync(monorepoRoot, { recursive: true, force: true });
+    }
+  });
 });

@@ -196,7 +196,7 @@ export function validateLicense($k0){
 export const DICTIONARY: Record<Locale, Dictionary> = {
   en: {
     meta: {
-      version: "v1.11.0",
+      version: "v1.12.0",
       license: "MIT License",
     },
     nav: {
@@ -834,7 +834,7 @@ unpeek protect --no-shield`,
   },
   tr: {
     meta: {
-      version: "v1.11.0",
+      version: "v1.12.0",
       license: "MIT Lisansı",
     },
     nav: {

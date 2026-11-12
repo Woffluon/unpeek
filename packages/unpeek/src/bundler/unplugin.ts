@@ -1,29 +1,45 @@
 import { createUnplugin } from 'unplugin';
-import type { ProtectOptions } from '../types.js';
+import type { ProtectOptions, UnpeekConfig } from '../types.js';
 import { computeFnv1aHash, transformJavaScript } from '../ast/index.js';
 import { generateRuntimeShield } from '../runtime/index.js';
 
 export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options = {}) => {
+  const config: UnpeekConfig | undefined =
+    options.config ??
+    (('framework' in options ||
+      'target' in options ||
+      'vault' in options ||
+      'hotPath' in options ||
+      'mangler' in options ||
+      'sourcemaps' in options)
+      ? (options as UnpeekConfig)
+      : undefined);
+
   const baseSeed =
     typeof options.seed === 'number'
       ? options.seed
       : Math.floor(Math.random() * 0x7fffffff) || 0x1337beef;
   const deterrentMode = options.deterrentMode ?? 'gradual';
   const injectRuntimeShield = options.injectRuntimeShield ?? true;
-  const minStringLength = options.minStringLength ?? 4;
+  const minStringLength = options.minStringLength ?? config?.vault?.minStringLength ?? 4;
   const aggressive = options.aggressive ?? false;
 
   return {
     name: 'unpeek',
     enforce: 'post',
     renderChunk(code: string, chunk: { fileName: string; isEntry?: boolean }) {
-      if (!chunk.fileName.endsWith('.js') && !chunk.fileName.endsWith('.mjs')) {
+      const normalizedFileName = chunk.fileName.replace(/\\/g, '/');
+      if (
+        !normalizedFileName.endsWith('.js') &&
+        !normalizedFileName.endsWith('.mjs') &&
+        !normalizedFileName.endsWith('.cjs')
+      ) {
         return null;
       }
       if (
-        chunk.fileName.includes('server/') ||
-        chunk.fileName.includes('ssr/') ||
-        chunk.fileName.includes('node_modules/')
+        normalizedFileName.includes('server/') ||
+        normalizedFileName.includes('ssr/') ||
+        normalizedFileName.includes('node_modules/')
       ) {
         return null;
       }
@@ -37,6 +53,7 @@ export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options 
         injectRuntimeShield: shouldInjectShield,
         deterrentMode,
         aggressive,
+        config,
       });
 
       let finalCode = result.code;

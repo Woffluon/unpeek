@@ -2,6 +2,77 @@ export type DetectedFramework = 'nextjs' | 'vite' | 'webpack' | 'vanilla';
 
 export type DeterrentMode = 'gradual' | 'passive';
 
+export type ConfigFramework = 'nextjs' | 'vite' | 'webpack' | 'vanilla';
+
+export type ConfigTarget = 'browser' | 'worker' | 'universal';
+
+export interface FilterConfig {
+  include?: string[];
+  exclude?: string[];
+}
+
+export interface HotPathConfig {
+  customAnimationCalls?: string[];
+  importSources?: Record<string, string[]>;
+  hookPattern?: RegExp;
+  customHooks?: string[];
+  arrayHofMethods?: string[];
+  eventHandlerRegex?: RegExp;
+  maxPipelineCallers?: number;
+  hocWrappers?: string[];
+  excludeComponents?: string[];
+}
+
+export interface SemanticAnchorsConfig {
+  patterns?: RegExp[];
+  excludeUiClasses?: boolean;
+}
+
+export interface VaultConfig {
+  minStringLength?: number;
+  customDirectives?: string[];
+  reservedProps?: string[];
+  cssFramework?: 'tailwind' | 'unocss' | 'none';
+  semanticAnchors?: SemanticAnchorsConfig;
+  polymorphicDecoys?: boolean;
+}
+
+export interface ManglerConfig {
+  reservedIdentifiers?: string[];
+  excludePrefixes?: string[];
+  excludePatterns?: RegExp[];
+}
+
+export interface SourcemapsConfig {
+  keepPrivate?: boolean;
+  vaultDir?: string;
+  stripComments?: boolean;
+}
+
+export interface NextConfigOptions {
+  distDir?: string;
+}
+
+export interface ViteConfigOptions {
+  outDir?: string;
+  assetsDir?: string;
+}
+
+export interface UnpeekConfig {
+  framework?: ConfigFramework;
+  target?: ConfigTarget;
+  outDir?: string;
+  extensions?: string[];
+  publicDirs?: string[];
+  filter?: FilterConfig;
+  hotPath?: HotPathConfig;
+  vault?: VaultConfig;
+  mangler?: ManglerConfig;
+  sourcemaps?: SourcemapsConfig;
+  next?: NextConfigOptions;
+  vite?: ViteConfigOptions;
+}
+
 export interface ProtectOptions {
   /** Target project root directory (defaults to process.cwd()) */
   cwd?: string;
@@ -21,6 +92,8 @@ export interface ProtectOptions {
   minStringLength?: number;
   /** Enable Layer 2 aggressive protection (Bytecode Micro-VM, Inline WASM KDF, Call-Site Salted Vault) */
   aggressive?: boolean;
+  /** Optional Unpeek configuration */
+  config?: UnpeekConfig;
 }
 
 export interface HotPathReport {
@@ -37,6 +110,8 @@ export interface TransformOptions {
   deterrentMode?: DeterrentMode;
   /** Enable Layer 2 aggressive protection */
   aggressive?: boolean;
+  /** Optional Unpeek configuration */
+  config?: UnpeekConfig;
 }
 
 export interface TransformResult {
