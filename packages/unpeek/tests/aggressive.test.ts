@@ -45,10 +45,10 @@ describe('Aggressive Profile & Advanced Protection (Layer 2 & Red-Team Verificat
       expect(code2).toContain('debug_supervisor_override');
     });
 
-    it('Kusur 2: 0x7fffffff sabit katlama imzası statik aramalara karşı kaldırılmış ve 4-aileli bağlamsal MBA kullanılmıştır', () => {
-      // 4 farklı fnIndex ile 4 ailenin her birini incele
+    it('Kusur 2: 0x7fffffff sabit katlama imzası statik aramalara karşı kaldırılmış ve 5-aileli bağlamsal MBA (Euler Karesel Kalanlar dahil) kullanılmıştır', () => {
+      // 5 farklı fnIndex ile 5 ailenin (0-3 MBA + 4 Euler Diophantine Karesel Kalanlar) her birini incele
       const seed = 0x9e3779b9;
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 5; i++) {
         const guard = createSotaMbaPredicate(seed, i);
         const code = generate(guard);
 
