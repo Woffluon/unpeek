@@ -184,17 +184,37 @@ export function createUnpeekNextAdapter(
 
 export function getUnpeekAdapterPath(): string {
   try {
+    const req = typeof require !== 'undefined' ? require : createRequire(import.meta.url);
+    try {
+      const resolved = req.resolve('unpeek/next/adapter');
+      if (fs.existsSync(resolved)) {
+        return resolved;
+      }
+    } catch {
+      // ignore
+    }
+
     const isCjs = typeof __dirname !== 'undefined';
     const currentDir = isCjs ? __dirname : path.dirname(fileURLToPath(import.meta.url));
-    const primary = path.resolve(currentDir, isCjs ? 'adapter.cjs' : 'adapter.js');
-    if (fs.existsSync(primary)) {
-      return primary;
+
+    const candidates = [
+      path.resolve(currentDir, isCjs ? 'next/adapter.cjs' : 'next/adapter.js'),
+      path.resolve(currentDir, isCjs ? 'next/adapter.js' : 'next/adapter.cjs'),
+      path.resolve(currentDir, isCjs ? 'adapter.cjs' : 'adapter.js'),
+      path.resolve(currentDir, isCjs ? 'adapter.js' : 'adapter.cjs'),
+      path.resolve(currentDir, '../dist/next/adapter.cjs'),
+      path.resolve(currentDir, '../dist/next/adapter.js'),
+      path.resolve(process.cwd(), 'node_modules/unpeek/dist/next/adapter.cjs'),
+      path.resolve(process.cwd(), 'node_modules/unpeek/dist/next/adapter.js'),
+    ];
+
+    for (const cand of candidates) {
+      if (fs.existsSync(cand)) {
+        return cand;
+      }
     }
-    const secondary = path.resolve(currentDir, isCjs ? 'adapter.js' : 'adapter.cjs');
-    if (fs.existsSync(secondary)) {
-      return secondary;
-    }
-    return primary;
+
+    return candidates[0];
   } catch {
     return path.resolve(process.cwd(), 'node_modules/unpeek/dist/next/adapter.js');
   }
