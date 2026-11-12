@@ -1,0 +1,236 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
+import type { ProtectOptions, ProtectSummary, UnpeekConfig } from '../types.js';
+import { protectProject } from '../cli/protect.js';
+import { computeFnv1aHash } from '../ast/index.js';
+
+export interface NextAdapterContext {
+  distDir: string;
+  buildId?: string;
+  config?: any;
+  routing?: any;
+  outputs?: {
+    staticFiles?: Array<{
+      filePath: string;
+      immutableHash?: string;
+      size?: number;
+      [key: string]: any;
+    }> | Map<string, any> | Record<string, any>;
+    [key: string]: any;
+  };
+  [key: string]: any;
+}
+
+export interface UnpeekNextAdapterOptions extends ProtectOptions {
+  upstreamAdapterPath?: string;
+  config?: UnpeekConfig;
+}
+
+export interface UnpeekNextAdapter {
+  name: string;
+  modifyConfig?: (config: any, context?: any) => Promise<any> | any;
+  onBuildComplete: (context: NextAdapterContext) => Promise<ProtectSummary>;
+}
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __unpeekNextOptions: UnpeekNextAdapterOptions | undefined;
+}
+
+async function loadUpstreamAdapter(adapterPath: string): Promise<any> {
+  const resolved = path.isAbsolute(adapterPath)
+    ? adapterPath
+    : path.resolve(process.cwd(), adapterPath);
+
+  try {
+    const mod = await import(pathToFileURL(resolved).href);
+    return mod.default ?? mod;
+  } catch {
+    const req = createRequire(import.meta.url);
+    const mod = req(resolved);
+    return mod.default ?? mod;
+  }
+}
+
+function recomputeHash(content: Buffer, existingHash?: string): string {
+  const len = existingHash?.length;
+  const algo = len === 64 ? 'sha256' : len === 40 ? 'sha1' : len === 32 ? 'md5' : 'sha256';
+  return crypto.createHash(algo).update(content).digest('hex');
+}
+
+export function createUnpeekNextAdapter(
+  options: UnpeekNextAdapterOptions = {}
+): UnpeekNextAdapter {
+  const upstreamPath =
+    options.upstreamAdapterPath ||
+    process.env.UNPEEK_UPSTREAM_ADAPTER_PATH ||
+    process.env.NEXT_ADAPTER_PATH;
+
+  return {
+    name: 'unpeek',
+
+    async modifyConfig(config: any, context?: any) {
+      if (upstreamPath) {
+        try {
+          const upstream = await loadUpstreamAdapter(upstreamPath);
+          if (typeof upstream?.modifyConfig === 'function') {
+            config = await upstream.modifyConfig(config, context);
+          }
+        } catch (err) {
+          console.warn('[unpeek:next] Failed to invoke upstream modifyConfig:', err);
+        }
+      }
+      return config;
+    },
+
+    async onBuildComplete(context: NextAdapterContext): Promise<ProtectSummary> {
+      const cwd = options.cwd ?? process.cwd();
+      const distDir = path.resolve(cwd, context.distDir || '.next');
+
+      // Client bundles live under distDir/static (chunks, immutable, etc.)
+      // Server/SSR bundles are under distDir/server and distDir/ssr - these MUST NOT be modified.
+      const staticDir = path.join(distDir, 'static');
+      const targetDir = fs.existsSync(staticDir) ? staticDir : distDir;
+
+      // Deterministic seed based on Next.js buildId if not explicitly provided
+      const deterministicSeed =
+        typeof options.seed === 'number'
+          ? options.seed
+          : context.buildId
+            ? computeFnv1aHash(context.buildId, 0x5f3759df)
+            : 0x5f3759df;
+
+      const summary = await protectProject({
+        ...options,
+        cwd,
+        outDir: targetDir,
+        seed: deterministicSeed,
+      });
+
+      // Update immutable hashes for modified client assets in Next.js 16 outputs
+      if (context.outputs?.staticFiles) {
+        const rawStatic = context.outputs.staticFiles;
+        const fileList: any[] = Array.isArray(rawStatic)
+          ? rawStatic
+          : rawStatic instanceof Map
+            ? Array.from(rawStatic.values())
+            : typeof rawStatic === 'object'
+              ? Object.values(rawStatic)
+              : [];
+
+        for (const item of fileList) {
+          if (!item || typeof item !== 'object') continue;
+          const rawFilePath: string | undefined = item.filePath ?? item.path;
+          if (!rawFilePath) continue;
+
+          let absPath = path.isAbsolute(rawFilePath)
+            ? rawFilePath
+            : path.resolve(cwd, rawFilePath);
+
+          if (!fs.existsSync(absPath)) {
+            const relClean = rawFilePath.replace(/\\/g, '/').replace(/^\/?(?:_next\/|\.next\/)/, '');
+            const fromDist = path.resolve(distDir, relClean);
+            if (fs.existsSync(fromDist)) {
+              absPath = fromDist;
+            } else {
+              const staticClean = relClean.replace(/^static\//, '');
+              const fromStatic = path.resolve(distDir, 'static', staticClean);
+              if (fs.existsSync(fromStatic)) {
+                absPath = fromStatic;
+              }
+            }
+          }
+
+          if (fs.existsSync(absPath)) {
+            const ext = path.extname(absPath).toLowerCase();
+            if (ext === '.js' || ext === '.mjs' || ext === '.cjs') {
+              try {
+                const buf = fs.readFileSync(absPath);
+                if (item.immutableHash) {
+                  item.immutableHash = recomputeHash(buf, item.immutableHash);
+                }
+                if (typeof item.size === 'number') {
+                  item.size = buf.byteLength;
+                }
+              } catch {
+                // Ignore read errors
+              }
+            }
+          }
+        }
+      }
+
+      // Delegate to upstream platform adapter (e.g. Vercel's NEXT_ADAPTER_PATH or user adapterPath)
+      if (upstreamPath) {
+        try {
+          const upstream = await loadUpstreamAdapter(upstreamPath);
+          if (typeof upstream?.onBuildComplete === 'function') {
+            await upstream.onBuildComplete(context);
+          } else if (typeof upstream === 'function') {
+            await upstream(context);
+          }
+        } catch (err) {
+          console.warn('[unpeek:next] Failed to delegate to upstream adapter onBuildComplete:', err);
+        }
+      }
+
+      return summary;
+    },
+  };
+}
+
+export function getUnpeekAdapterPath(): string {
+  try {
+    const isCjs = typeof __dirname !== 'undefined';
+    const currentDir = isCjs ? __dirname : path.dirname(fileURLToPath(import.meta.url));
+    const primary = path.resolve(currentDir, isCjs ? 'adapter.cjs' : 'adapter.js');
+    if (fs.existsSync(primary)) {
+      return primary;
+    }
+    const secondary = path.resolve(currentDir, isCjs ? 'adapter.js' : 'adapter.cjs');
+    if (fs.existsSync(secondary)) {
+      return secondary;
+    }
+    return primary;
+  } catch {
+    return path.resolve(process.cwd(), 'node_modules/unpeek/dist/next/adapter.js');
+  }
+}
+
+function applyWithUnpeek(config: any = {}, options?: UnpeekNextAdapterOptions): any {
+  const existingAdapter = config.adapterPath || process.env.NEXT_ADAPTER_PATH;
+  if (existingAdapter && !process.env.UNPEEK_UPSTREAM_ADAPTER_PATH) {
+    process.env.UNPEEK_UPSTREAM_ADAPTER_PATH = existingAdapter;
+  }
+  if (options?.upstreamAdapterPath) {
+    process.env.UNPEEK_UPSTREAM_ADAPTER_PATH = options.upstreamAdapterPath;
+  }
+
+  if (options) {
+    globalThis.__unpeekNextOptions = options;
+  }
+
+  const adapterPath = getUnpeekAdapterPath();
+
+  return {
+    ...config,
+    adapterPath,
+  };
+}
+
+export function withUnpeek(
+  nextConfig: any = {},
+  options?: UnpeekNextAdapterOptions
+): any {
+  if (typeof nextConfig === 'function') {
+    return async (...args: any[]) => {
+      const resolved = await nextConfig(...args);
+      return applyWithUnpeek(resolved, options);
+    };
+  }
+
+  return applyWithUnpeek(nextConfig, options);
+}

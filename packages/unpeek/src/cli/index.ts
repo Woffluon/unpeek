@@ -5,7 +5,7 @@ import type { DeterrentMode, ProtectOptions, ProtectSummary } from '../types.js'
 import { initProject } from './init.js';
 import { protectProject } from './protect.js';
 
-const VERSION = '1.14.0';
+const VERSION = '1.15.0';
 
 function getPackageVersion(): string {
   try {
@@ -144,36 +144,50 @@ function printInitResult(
     framework?: string;
     updatedPackageJson: boolean;
     updatedGitignore: boolean;
+    updatedNextConfig?: boolean;
+    isNext162Plus?: boolean;
     message: string;
   },
   dryRun: boolean
 ): void {
-  const postbuild = result.updatedPackageJson
-    ? dryRun
-      ? 'would be added'
-      : 'unpeek protect (added)'
-    : 'already configured';
+  const postbuild = result.isNext162Plus
+    ? 'n/a (Build Adapter)'
+    : result.updatedPackageJson
+      ? dryRun
+        ? 'would be added'
+        : 'unpeek protect (added)'
+      : 'already configured';
+  const adapterStatus = result.isNext162Plus
+    ? result.updatedNextConfig
+      ? dryRun
+        ? 'withUnpeek (would be configured)'
+        : 'withUnpeek (configured)'
+      : 'withUnpeek (already configured)'
+    : undefined;
   const vault = result.updatedGitignore
     ? dryRun
       ? 'would be ignored'
       : '.unpeek-maps/ (added)'
     : 'already ignored';
 
+  const rows: Array<[string, string]> = [
+    ['framework', result.framework ?? 'unknown'],
+  ];
+  if (adapterStatus) {
+    rows.push(['next.config', adapterStatus]);
+  }
+  rows.push(['postbuild', postbuild]);
+  rows.push(['vault', vault]);
+
   console.log('');
   console.log(brandBlock());
   console.log('');
-  console.log(
-    sectionBlock('PROJECT', [
-      ['framework', result.framework ?? 'unknown'],
-      ['postbuild', postbuild],
-      ['vault', vault],
-    ])
-  );
+  console.log(sectionBlock('PROJECT', rows));
   console.log('');
   if (dryRun) {
     console.log(`  ${dim(result.message)}`);
-  } else if (result.updatedPackageJson || result.updatedGitignore) {
-    console.log(`  ${dim('postbuild wired. maps stay private from the first build.')}`);
+  } else if (result.updatedPackageJson || result.updatedGitignore || result.updatedNextConfig) {
+    console.log(`  ${dim('unpeek wired. maps stay private from the first build.')}`);
   } else {
     console.log(`  ${dim(result.message)}`);
   }

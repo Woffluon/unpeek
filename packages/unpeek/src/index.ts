@@ -54,3 +54,4 @@ export {
 export { initProject } from './cli/init.js';
 export { protectProject } from './cli/protect.js';
 export { runCli } from './cli/index.js';
+export { withUnpeek, createUnpeekNextAdapter } from './next/index.js';
