@@ -186,7 +186,10 @@ function createSharedDecoyConsequent(decoyIdent: string, fnIndex: number): any {
   };
 }
 
-export function createSharedDecoyDeclaration(decoyIdent = '_d'): any {
+export function createSharedDecoyDeclaration(decoyIdent = '_d', maxModels = 3): any {
+  const count = Math.max(1, Math.min(3, maxModels));
+  const indices: number[] = [];
+  for (let i = 0; i < count; i++) indices.push(i);
   return {
     type: 'VariableDeclaration',
     kind: 'var',
@@ -196,7 +199,7 @@ export function createSharedDecoyDeclaration(decoyIdent = '_d'): any {
         id: { type: 'Identifier', name: decoyIdent },
         init: {
           type: 'ArrayExpression',
-          elements: [0, 1, 2].map((m) => ({
+          elements: indices.map((m) => ({
             type: 'ArrowFunctionExpression',
             id: null,
             params: [],
@@ -261,19 +264,16 @@ export function createSotaMbaPredicate(
   decoyIdent?: string,
   isArrowFn = false
 ): any {
-  // 32-bit non-linear Mixed Boolean-Arithmetic (MBA) opaque invariants:
-  // Using contextual runtime zero z:
-  // - If function has parameter: z = (param !== void 0 ? 0 : 0)
-  // - If arrow function with no params: z = (+!String)
-  // - If standard function with no params: z = (arguments.length & 0)
-  // In V8 runtime, z === 0, but static SMT/constant-folding analyzers cannot resolve it.
-  // v = (z | c1) === c1, k = (c2 | (!String)) === c2.
-  // Target is non-zero, deterministic, seed- and index-derived integer (0x7fffffff signature is eliminated).
+  // 32-bit non-linear Mixed Boolean-Arithmetic (MBA) opaque invariants bound to
+  // a live runtime integer (never a static constant like +!String):
+  // - If function has a parameter: (paramName | 0)
+  // - If standard function with no params: arguments.length
+  // - If arrow function with no params: (typeof globalThis).length
   const family = Math.abs((seed + fnIndex) % 5);
-  const c1 = ((seed >>> 1) + Math.imul(family + 1, 0x15d9f3b)) & 0x7ffff;
-  const c2 = (c1 ^ 0x2a5a5) & 0x7ffff;
+  const c1 = ((seed >>> 1) + Math.imul(family + 1, 0x15d9f3b)) & 0x7fff;
+  const c2 = (c1 ^ 0x2a5a5) & 0x7fff;
   const target =
-    ((seed ^ Math.imul(family + 1, 0x9e3779b1)) & 0x7ffff) | 1;
+    ((seed ^ Math.imul(family + 1, 0x9e3779b1)) & 0xffff) | 1;
 
   let paramName: string | null = null;
   if (typeof paramNode === 'string') {
@@ -285,113 +285,115 @@ export function createSotaMbaPredicate(
     paramNode.left?.type === 'Identifier'
   ) {
     paramName = paramNode.left.name;
+  } else if (
+    paramNode?.type === 'RestElement' &&
+    paramNode.argument?.type === 'Identifier'
+  ) {
+    paramName = paramNode.argument.name;
   }
 
-  const zNode: any = {
-    type: 'UnaryExpression',
-    operator: '+',
-    prefix: true,
-    argument: {
-      type: 'UnaryExpression',
-      operator: '!',
-      prefix: true,
-      argument: { type: 'Identifier', name: 'String' },
-    },
-  };
+  let vBitNode: any;
+  let vIntNode: any;
+  if (paramName && paramName !== 'arguments' && paramName !== 'eval') {
+    vBitNode = { type: 'Identifier', name: paramName };
+    vIntNode = makeBinary('|', { type: 'Identifier', name: paramName }, makeLiteral(0));
+  } else if (!isArrowFn) {
+    vBitNode = {
+      type: 'MemberExpression',
+      computed: false,
+      object: { type: 'Identifier', name: 'arguments' },
+      property: { type: 'Identifier', name: 'length' },
+    };
+    vIntNode = cloneNode(vBitNode);
+  } else {
+    vBitNode = {
+      type: 'MemberExpression',
+      computed: false,
+      object: makeUnary('typeof', { type: 'Identifier', name: 'globalThis' }),
+      property: { type: 'Identifier', name: 'length' },
+    };
+    vIntNode = cloneNode(vBitNode);
+  }
 
-  const vNode: any = {
-    type: 'BinaryExpression',
-    operator: '|',
-    left: zNode,
-    right: { type: 'Literal', value: c1, raw: String(c1) },
-  };
-
-  const kNode: any = makeLiteral(c2);
-
-  const vLit = makeLiteral(c1);
   const kLit = makeLiteral(c2);
 
   let mbaExpr: any;
   if (family === 0) {
-    // Aile 0: (Math.imul(v, k) - (Math.imul(v & k, v | k) + Math.imul(v & ~k, ~v & k))) ≡ 0
-    const term1 = makeImul(cloneNode(vNode), cloneNode(kNode));
-    const vAndK = makeBinary('&', cloneNode(vLit), cloneNode(kLit));
-    const vOrK = makeBinary('|', cloneNode(vLit), cloneNode(kLit));
+    // Family 0: (Math.imul(v, k) - (Math.imul(v & k, v | k) + Math.imul(v & ~k, ~v & k))) | 0 === 0
+    const term1 = makeImul(cloneNode(vIntNode), cloneNode(kLit));
+    const vAndK = makeBinary('&', cloneNode(vBitNode), cloneNode(kLit));
+    const vOrK = makeBinary('|', cloneNode(vBitNode), cloneNode(kLit));
     const notK = makeUnary('~', cloneNode(kLit));
-    const notV = makeUnary('~', cloneNode(vLit));
-    const vAndNotK = makeBinary('&', cloneNode(vLit), notK);
+    const notV = makeUnary('~', cloneNode(vBitNode));
+    const vAndNotK = makeBinary('&', cloneNode(vBitNode), notK);
     const notVAndK = makeBinary('&', notV, cloneNode(kLit));
 
     const term2 = makeImul(vAndK, vOrK);
     const term3 = makeImul(vAndNotK, notVAndK);
     const sumTerms = makeBinary('+', term2, term3);
-    mbaExpr = makeBinary('-', term1, sumTerms);
+    mbaExpr = makeBinary('|', makeBinary('-', term1, sumTerms), makeLiteral(0));
   } else if (family === 1) {
-    // Aile 1: (Math.imul(v ^ k, v ^ k) - (Math.imul(v - k, v - k) + (Math.imul(v & ~k, ~v & k) << 2))) ≡ 0
-    const vXorK1 = makeBinary('^', cloneNode(vNode), cloneNode(kNode));
-    const vXorK2 = makeBinary('^', cloneNode(vLit), cloneNode(kLit));
+    // Family 1: (Math.imul(v ^ k, v ^ k) - (Math.imul(v - k, v - k) + (Math.imul(v & ~k, ~v & k) << 2))) | 0 === 0
+    const vXorK1 = makeBinary('^', cloneNode(vBitNode), cloneNode(kLit));
+    const vXorK2 = makeBinary('^', cloneNode(vBitNode), cloneNode(kLit));
     const term1 = makeImul(vXorK1, vXorK2);
 
-    const vSubK1 = makeBinary('-', cloneNode(vLit), cloneNode(kLit));
-    const vSubK2 = cloneNode(vSubK1);
+    const vSubK1 = makeBinary('-', cloneNode(vIntNode), cloneNode(kLit));
+    const vSubK2 = makeBinary('-', cloneNode(vIntNode), cloneNode(kLit));
     const term2 = makeImul(vSubK1, vSubK2);
 
     const notK = makeUnary('~', cloneNode(kLit));
-    const notV = makeUnary('~', cloneNode(vLit));
-    const vAndNotK = makeBinary('&', cloneNode(vLit), notK);
+    const notV = makeUnary('~', cloneNode(vBitNode));
+    const vAndNotK = makeBinary('&', cloneNode(vBitNode), notK);
     const notVAndK = makeBinary('&', notV, cloneNode(kLit));
     const term3 = makeImul(vAndNotK, notVAndK);
     const shiftTerm = makeBinary('<<', term3, makeLiteral(2));
 
     const sumTerms = makeBinary('+', term2, shiftTerm);
-    mbaExpr = makeBinary('-', term1, sumTerms);
+    mbaExpr = makeBinary('|', makeBinary('-', term1, sumTerms), makeLiteral(0));
   } else if (family === 2) {
-    // Aile 2: (Math.imul(v + k, v + k) - ((Math.imul(v & k, v | k) << 2) + Math.imul(v ^ k, v ^ k))) ≡ 0
-    const vAddK1 = makeBinary('+', cloneNode(vNode), cloneNode(kNode));
-    const vAddK2 = makeBinary('+', cloneNode(vLit), cloneNode(kLit));
+    // Family 2: (Math.imul(v + k, v + k) - ((Math.imul(v & k, v | k) << 2) + Math.imul(v ^ k, v ^ k))) | 0 === 0
+    const vAddK1 = makeBinary('+', cloneNode(vIntNode), cloneNode(kLit));
+    const vAddK2 = makeBinary('+', cloneNode(vIntNode), cloneNode(kLit));
     const term1 = makeImul(vAddK1, vAddK2);
 
-    const vAndK = makeBinary('&', cloneNode(vLit), cloneNode(kLit));
-    const vOrK = makeBinary('|', cloneNode(vLit), cloneNode(kLit));
+    const vAndK = makeBinary('&', cloneNode(vBitNode), cloneNode(kLit));
+    const vOrK = makeBinary('|', cloneNode(vBitNode), cloneNode(kLit));
     const term2 = makeImul(vAndK, vOrK);
     const shiftTerm = makeBinary('<<', term2, makeLiteral(2));
 
-    const vXorK1 = makeBinary('^', cloneNode(vLit), cloneNode(kLit));
-    const vXorK2 = cloneNode(vXorK1);
+    const vXorK1 = makeBinary('^', cloneNode(vBitNode), cloneNode(kLit));
+    const vXorK2 = makeBinary('^', cloneNode(vBitNode), cloneNode(kLit));
     const term3 = makeImul(vXorK1, vXorK2);
 
     const sumTerms = makeBinary('+', shiftTerm, term3);
-    mbaExpr = makeBinary('-', term1, sumTerms);
+    mbaExpr = makeBinary('|', makeBinary('-', term1, sumTerms), makeLiteral(0));
   } else if (family === 3) {
-    // Aile 3: (Math.imul(v | k, v | k) - (Math.imul(v & k, v & k) + Math.imul(v ^ k, v + k))) ≡ 0
-    const vOrK1 = makeBinary('|', cloneNode(vNode), cloneNode(kNode));
-    const vOrK2 = makeBinary('|', cloneNode(vLit), cloneNode(kLit));
+    // Family 3: (Math.imul(v | k, v | k) - (Math.imul(v & k, v & k) + Math.imul(v ^ k, v + k))) | 0 === 0
+    const vOrK1 = makeBinary('|', cloneNode(vBitNode), cloneNode(kLit));
+    const vOrK2 = makeBinary('|', cloneNode(vBitNode), cloneNode(kLit));
     const term1 = makeImul(vOrK1, vOrK2);
 
-    const vAndK1 = makeBinary('&', cloneNode(vLit), cloneNode(kLit));
-    const vAndK2 = cloneNode(vAndK1);
+    const vAndK1 = makeBinary('&', cloneNode(vBitNode), cloneNode(kLit));
+    const vAndK2 = makeBinary('&', cloneNode(vBitNode), cloneNode(kLit));
     const term2 = makeImul(vAndK1, vAndK2);
 
-    const vXorK = makeBinary('^', cloneNode(vLit), cloneNode(kLit));
-    const vAddK = makeBinary('+', cloneNode(vLit), cloneNode(kLit));
+    const vXorK = makeBinary('^', cloneNode(vBitNode), cloneNode(kLit));
+    const vAddK = makeBinary('+', cloneNode(vIntNode), cloneNode(kLit));
     const term3 = makeImul(vXorK, vAddK);
 
     const sumTerms = makeBinary('+', term2, term3);
-    mbaExpr = makeBinary('-', term1, sumTerms);
+    mbaExpr = makeBinary('|', makeBinary('-', term1, sumTerms), makeLiteral(0));
   } else {
-    // Aile 4: Euler Karesel Kalanlar Diophantine Invariant ((7k^2 - 1 mod 4) != (v^2 mod 4))
-    // In Z: (7k^2 - 1) & 3 in {2, 3}, while (v^2) & 3 in {0, 1}.
-    // Their equality is undecidable in general Diophantine systems and mathematically impossible (always false & 1 === 0).
-    const kSq = makeImul(cloneNode(kLit), cloneNode(kLit));
-    const sevenKSq = makeImul(makeLiteral(7), kSq);
-    const sevenKSqSub1 = makeBinary('-', sevenKSq, makeLiteral(1));
-    const term1 = makeBinary('&', sevenKSqSub1, makeLiteral(3));
-
-    const vSq = makeImul(cloneNode(vNode), cloneNode(vLit));
-    const term2 = makeBinary('&', vSq, makeLiteral(3));
-
-    const isEq = makeBinary('===', term1, term2);
-    mbaExpr = makeBinary('&', isEq, makeLiteral(1));
+    // Family 4: Euler Quadratic Residue + Parity over live v:
+    // ((7 * (v ^ k)^2 - 1) mod 4) in {2,3} vs (v^2 mod 4) in {0,1}, and (v^2 + v) & 1 === 0
+    const vk = makeBinary('^', cloneNode(vBitNode), cloneNode(kLit));
+    const vkSq = makeImul(vk, cloneNode(vk));
+    const sevenVkSqSub1 = makeBinary('-', makeImul(makeLiteral(7), vkSq), makeLiteral(1));
+    const vSq = makeImul(cloneNode(vBitNode), cloneNode(vBitNode));
+    const quadDiff = makeBinary('^', makeBinary('&', makeBinary('^', sevenVkSqSub1, vSq), makeLiteral(2)), makeLiteral(2));
+    const parityTerm = makeBinary('&', makeBinary('+', makeImul(cloneNode(vBitNode), cloneNode(vBitNode)), cloneNode(vIntNode)), makeLiteral(1));
+    mbaExpr = makeBinary('|', quadDiff, parityTerm);
   }
 
   const decoyIdx = Math.abs(fnIndex) % 3;
@@ -479,7 +481,7 @@ export function applyColdFlowGuard(
   });
 
   if (guardedCount > 0 && Array.isArray(ast.body)) {
-    const sharedDecoyDecl = createSharedDecoyDeclaration(decoyIdent);
+    const sharedDecoyDecl = createSharedDecoyDeclaration(decoyIdent, guardedCount);
     if (hotExemptNodes) {
       hotExemptNodes.add(sharedDecoyDecl);
       for (const decl of sharedDecoyDecl.declarations || []) {

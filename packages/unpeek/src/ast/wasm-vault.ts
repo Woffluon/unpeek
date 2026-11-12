@@ -44,19 +44,27 @@ function writeI32LE(value: number): number[] {
   return [v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff];
 }
 
+function deriveKdfParams(seed: number) {
+  const sVal = seed | 0;
+  const c1 = (computeFnv1aHash('wasm-c1', seed) ^ 0x85ebca6b) | 1;
+  const c2 = (computeFnv1aHash('wasm-c2', seed) ^ 0xc2b2ae35) | 1;
+  const k0 = computeFnv1aHash('wasm-k0', seed) | 0;
+  const r1 = ((seed >>> 0) % 19) + 7;
+  const r2 = ((seed >>> 5) % 17) + 5;
+  return { sVal, c1, c2, k0, r1, r2 };
+}
+
 /**
  * Builds a compact, valid, standalone WebAssembly binary (<512 bytes) that exports:
  * kdf(fnId: i32, callSiteSalt: i32, shieldHash: i32) -> i32
  *
- * Constant-blinded synthesis: seed, 0x01000193, and 0x45d9f3b never appear as
- * plaintext i32.const literals or raw .data words. Values are reconstructed at
- * runtime from blinded shares in linear memory using bit rotations and multiplications.
- *
- * Evaluation formula:
- * ((fnId ^ seed) * 0x01000193) ^ ((callSiteSalt + shieldHash) * 0x45d9f3b)
+ * Non-linear multi-round Feistel/Murmur mixer with constant-blinded synthesis:
+ * seed, c1, c2, and k0 never appear as plaintext i32.const literals or raw .data words.
+ * Values are reconstructed at runtime from blinded shares in linear memory using bit
+ * rotations and multiplications, preventing single-call kdf(0,0,0) algebraic inversion.
  */
 export function generateWasmKdfBinary(seed: number): Uint8Array {
-  const sVal = seed | 0;
+  const { sVal, c1, c2, k0, r1, r2 } = deriveKdfParams(seed);
   const memBase = ((seed >>> 0) & 0x7f) * 4;
   const r0 = computeFnv1aHash('wasm-r0', seed) | 0;
   const rotAmt = ((seed >>> 0) % 27) + 3;
@@ -68,8 +76,9 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
 
   const w0 = r0;
   const w1 = (sVal ^ rotl32(r0, rotAmt) ^ Math.imul(r0 | 1, kMul)) | 0;
-  const w2 = (0x01000193 ^ ((w0 + w1) | 0)) | 0;
-  const w3 = (0x45d9f3b - Math.imul(w1 | 1, w2 | 1)) | 0;
+  const w2 = (c1 ^ ((w0 + w1) | 0)) | 0;
+  const w3 = (c2 - Math.imul(w1 | 1, w2 | 1)) | 0;
+  const w4 = (k0 ^ rotl32(w2, 11) ^ w3) | 0;
 
   const instructions = [
     0x41, ...encodeSignedLeb128(memA), // i32.const memA
@@ -84,9 +93,11 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     0x20, 0x03, // local.get 3
     0x28, 0x02, 0x08, // i32.load align=2 offset=8
     0x21, 0x06, // local.set 6 (w2)
+    0x20, 0x03, // local.get 3
+    0x28, 0x02, 0x0c, // i32.load align=2 offset=12
+    0x21, 0x07, // local.set 7 (w3)
 
-    // (fnId ^ seed) * m1
-    0x20, 0x00, // local.get 0 (fnId)
+    // Reconstruct sVal -> local 8
     0x20, 0x05, // local.get 5 (w1)
     0x20, 0x04, // local.get 4 (w0)
     0x41, ...encodeSignedLeb128(rotAmt), // i32.const rotAmt
@@ -101,22 +112,58 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     0x41, ...encodeSignedLeb128(kB), // i32.const kB
     0x72, // i32.or
     0x6c, // i32.mul
-    0x73, // i32.xor (seed)
-    0x73, // i32.xor (fnId ^ seed)
+    0x73, // i32.xor
+    0x21, 0x08, // local.set 8 (sVal)
 
+    // Reconstruct c1 -> local 9
     0x20, 0x06, // local.get 6 (w2)
     0x20, 0x04, // local.get 4 (w0)
     0x20, 0x05, // local.get 5 (w1)
     0x6a, // i32.add
-    0x73, // i32.xor (m1)
+    0x73, // i32.xor
+    0x21, 0x09, // local.set 9 (c1)
+
+    // Reconstruct k0 -> local 10
+    0x20, 0x03, // local.get 3 (ptr)
+    0x28, 0x02, 0x10, // i32.load align=2 offset=16 (w4)
+    0x20, 0x06, // local.get 6 (w2)
+    0x41, 0x0b, // i32.const 11
+    0x77, // i32.rotl
+    0x73, // i32.xor
+    0x20, 0x07, // local.get 7 (w3)
+    0x73, // i32.xor
+    0x21, 0x0a, // local.set 10 (k0)
+
+    // x = f ^ sVal ^ k0
+    0x20, 0x00, // local.get 0 (fnId)
+    0x20, 0x08, // local.get 8 (sVal)
+    0x73, // i32.xor
+    0x20, 0x0a, // local.get 10 (k0)
+    0x73, // i32.xor
+    0x22, 0x0b, // local.tee 11 (x)
+
+    // x ^= x >>> 16
+    0x20, 0x0b, // local.get 11
+    0x41, 0x10, // i32.const 16
+    0x76, // i32.shr_u
+    0x73, // i32.xor
+
+    // x = imul(x, c1)
+    0x20, 0x09, // local.get 9 (c1)
     0x6c, // i32.mul
 
-    // (callSiteSalt + shieldHash) * m2
+    // x = rotl(x ^ s, r1)
     0x20, 0x01, // local.get 1 (callSiteSalt)
+    0x73, // i32.xor
+    0x41, ...encodeSignedLeb128(r1), // i32.const r1
+    0x77, // i32.rotl
+
+    // x = imul(x ^ h ^ sVal, c2)
     0x20, 0x02, // local.get 2 (shieldHash)
-    0x6a, // i32.add
-    0x20, 0x03, // local.get 3 (ptr)
-    0x28, 0x02, 0x0c, // i32.load align=2 offset=12
+    0x73, // i32.xor
+    0x20, 0x08, // local.get 8 (sVal)
+    0x73, // i32.xor
+    0x20, 0x07, // local.get 7 (w3)
     0x20, 0x05, // local.get 5 (w1)
     0x41, 0x01, // i32.const 1
     0x72, // i32.or
@@ -124,15 +171,39 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     0x41, 0x01, // i32.const 1
     0x72, // i32.or
     0x6c, // i32.mul
-    0x6a, // i32.add (m2)
+    0x6a, // i32.add (c2)
     0x6c, // i32.mul
+    0x22, 0x0b, // local.tee 11 (x)
 
+    // x ^= x >>> 15
+    0x20, 0x0b, // local.get 11
+    0x41, 0x0f, // i32.const 15
+    0x76, // i32.shr_u
+    0x73, // i32.xor
+
+    // x = (x + rotl(s ^ k0, r2))
+    0x20, 0x01, // local.get 1 (callSiteSalt)
+    0x20, 0x0a, // local.get 10 (k0)
+    0x73, // i32.xor
+    0x41, ...encodeSignedLeb128(r2), // i32.const r2
+    0x77, // i32.rotl
+    0x6a, // i32.add
+
+    // x = imul(x, c1)
+    0x20, 0x09, // local.get 9 (c1)
+    0x6c, // i32.mul
+    0x22, 0x0b, // local.tee 11 (x)
+
+    // x ^= x >>> 16
+    0x20, 0x0b, // local.get 11
+    0x41, 0x10, // i32.const 16
+    0x76, // i32.shr_u
     0x73, // i32.xor
     0x0b, // end
   ];
 
-  // Function body with 4 i32 locals (ptr, w0, w1, w2)
-  const funcBody = [0x01, 0x04, 0x7f, ...instructions];
+  // Function body with 9 i32 locals (ptr, w0, w1, w2, w3, sVal, c1, k0, x)
+  const funcBody = [0x01, 0x09, 0x7f, ...instructions];
   const funcBodyWithLen = [...encodeUnsignedLeb128(funcBody.length), ...funcBody];
 
   // Section 10: Code section (1 function)
@@ -184,12 +255,13 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     ...exportPayload,
   ];
 
-  // Section 11: Data section (4 blinded 32-bit words at memBase)
+  // Section 11: Data section (5 blinded 32-bit words at memBase)
   const dataWords = [
     ...writeI32LE(w0),
     ...writeI32LE(w1),
     ...writeI32LE(w2),
     ...writeI32LE(w3),
+    ...writeI32LE(w4),
   ];
   const dataPayload = [
     0x01, // 1 active segment
@@ -219,7 +291,7 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
 }
 
 /**
- * Synchronous JavaScript fallback implementing the exact same 32-bit KDF logic
+ * Synchronous JavaScript fallback implementing the exact same 32-bit non-linear KDF logic
  * for strict CSP environments where WebAssembly instantiation is prohibited.
  */
 export function fallbackKdf(
@@ -228,11 +300,17 @@ export function fallbackKdf(
   shieldHash: number,
   seed: number
 ): number {
-  return (
-    (Math.imul((fnId ^ seed) | 0, 0x01000193) ^
-      Math.imul(((callSiteSalt + shieldHash) | 0), 0x45d9f3b)) |
-    0
-  );
+  const { sVal, c1, c2, k0, r1, r2 } = deriveKdfParams(seed);
+  let x = (fnId ^ sVal ^ k0) | 0;
+  x = (x ^ (x >>> 16)) | 0;
+  x = Math.imul(x, c1);
+  x = rotl32((x ^ callSiteSalt) | 0, r1);
+  x = Math.imul((x ^ shieldHash ^ sVal) | 0, c2);
+  x = (x ^ (x >>> 15)) | 0;
+  x = (x + rotl32((callSiteSalt ^ k0) | 0, r2)) | 0;
+  x = Math.imul(x, c1);
+  x = (x ^ (x >>> 16)) | 0;
+  return x | 0;
 }
 
 export interface WasmVaultInjectionResult {
@@ -294,7 +372,8 @@ export function injectWasmVault(
   const wasmBytes = generateWasmKdfBinary(seed);
   const byteArrayLiteral = Array.from(wasmBytes).join(',');
 
-  const targets = [0x01000193, 0x45d9f3b, seed | 0];
+  const { sVal, c1, c2, k0, r1, r2 } = deriveKdfParams(seed);
+  const targets = [c1, c2, sVal, k0, r1, r2];
   const aArr: number[] = [];
   const bArr: number[] = [];
   const mArr: number[] = [];
@@ -322,7 +401,7 @@ try {
     var _b = [${bArr.join(',')}];
     var _m0 = [${mArr.join(',')}];
     var _k = [];
-    for (var _j = 0; _j < 3; _j++) {
+    for (var _j = 0; _j < ${targets.length}; _j++) {
       var _u = _a[_j] | _z, _v = _b[_j];
       var _t = ((_u | _v) + (_u & _v)) | 0;
       _k[_j] = ((_t + _m0[_j]) - ((_t & _m0[_j]) << 1)) | 0;
@@ -334,12 +413,17 @@ try {
     }
     var _m = Math[_p];
     return function(f, s, h) {
-      var _f0 = f | 0, _c2 = _k[2];
-      var _fs = ((_f0 + _c2) - ((_f0 & _c2) << 1)) | 0;
-      var _s0 = s | 0, _h0 = h | 0;
-      var _sh = ((_s0 ^ _h0) + ((_s0 & _h0) << 1)) | 0;
-      var _l = _m(_fs, _k[0]), _r = _m(_sh, _k[1]);
-      return ((_l + _r) - ((_l & _r) << 1)) | 0;
+      var _x = (f ^ _k[2] ^ _k[3]) | 0;
+      _x = (_x ^ (_x >>> 16)) | 0;
+      _x = _m(_x, _k[0]);
+      var _t0 = _x ^ s, _r1 = _k[4];
+      _x = (_t0 << _r1) | (_t0 >>> (32 - _r1));
+      _x = _m(_x ^ h ^ _k[2], _k[1]);
+      _x = (_x ^ (_x >>> 15)) | 0;
+      var _u0 = s ^ _k[3], _r2 = _k[5];
+      _x = (_x + ((_u0 << _r2) | (_u0 >>> (32 - _r2)))) | 0;
+      _x = _m(_x, _k[0]);
+      return (_x ^ (_x >>> 16)) | 0;
     };
   })();
 }`;

@@ -41,9 +41,14 @@ export const DEFAULT_CONFIG: UnpeekConfig = {
     polymorphicDecoys: true,
   },
   mangler: {
+    minLength: 3,
     reservedIdentifiers: [],
     excludePrefixes: [],
     excludePatterns: [],
+  },
+  shield: {
+    detectHeadless: false,
+    deterrentMode: 'passive',
   },
   sourcemaps: {
     keepPrivate: true,
@@ -179,6 +184,7 @@ export function mergeUnpeekConfig(base: UnpeekConfig, override?: UnpeekConfig): 
       polymorphicDecoys: override.vault?.polymorphicDecoys ?? base.vault?.polymorphicDecoys ?? true,
     },
     mangler: {
+      minLength: override.mangler?.minLength ?? base.mangler?.minLength ?? 3,
       reservedIdentifiers: mergeStringArrays(
         base.mangler?.reservedIdentifiers,
         override.mangler?.reservedIdentifiers,
@@ -190,6 +196,10 @@ export function mergeUnpeekConfig(base: UnpeekConfig, override?: UnpeekConfig): 
       excludePatterns: override.mangler?.excludePatterns
         ? [...override.mangler.excludePatterns]
         : base.mangler?.excludePatterns,
+    },
+    shield: {
+      detectHeadless: override.shield?.detectHeadless ?? base.shield?.detectHeadless ?? false,
+      deterrentMode: override.shield?.deterrentMode ?? base.shield?.deterrentMode ?? 'passive',
     },
     sourcemaps: {
       keepPrivate: override.sourcemaps?.keepPrivate ?? base.sourcemaps?.keepPrivate ?? true,
@@ -238,7 +248,7 @@ export async function loadUnpeekConfig(
         if (typeof raw === 'function') {
           raw = await raw();
         }
-        if (raw && typeof raw === 'object' && 'default' in raw && !raw.framework && !raw.vault && !raw.hotPath) {
+        if (raw && typeof raw === 'object' && 'default' in raw && !raw.framework && !raw.vault && !raw.hotPath && !raw.shield) {
           raw = raw.default;
         }
         parsedConfig = normalizeConfig(raw ?? {});
@@ -246,7 +256,7 @@ export async function loadUnpeekConfig(
         try {
           const req = createRequire(configPath);
           let raw = req(configPath);
-          if (raw && typeof raw === 'object' && 'default' in raw && !raw.framework && !raw.vault && !raw.hotPath) {
+          if (raw && typeof raw === 'object' && 'default' in raw && !raw.framework && !raw.vault && !raw.hotPath && !raw.shield) {
             raw = raw.default;
           }
           if (typeof raw === 'function') {
@@ -285,7 +295,7 @@ export function resolveUnpeekConfigSync(
       try {
         const req = createRequire(configPath);
         let raw = req(configPath);
-        if (raw && typeof raw === 'object' && 'default' in raw && !raw.framework && !raw.vault && !raw.hotPath) {
+        if (raw && typeof raw === 'object' && 'default' in raw && !raw.framework && !raw.vault && !raw.hotPath && !raw.shield) {
           raw = raw.default;
         }
         if (typeof raw === 'function') {

@@ -55,6 +55,57 @@ export const RESERVED_IDENTIFIERS = new Set([
   'performance',
 ]);
 
+const JS_KEYWORDS = new Set([
+  'as',
+  'await',
+  'break',
+  'case',
+  'catch',
+  'class',
+  'const',
+  'continue',
+  'debugger',
+  'default',
+  'delete',
+  'do',
+  'else',
+  'enum',
+  'export',
+  'extends',
+  'false',
+  'finally',
+  'for',
+  'function',
+  'if',
+  'implements',
+  'import',
+  'in',
+  'instanceof',
+  'interface',
+  'let',
+  'new',
+  'null',
+  'of',
+  'package',
+  'private',
+  'protected',
+  'public',
+  'return',
+  'static',
+  'super',
+  'switch',
+  'this',
+  'throw',
+  'true',
+  'try',
+  'typeof',
+  'var',
+  'void',
+  'while',
+  'with',
+  'yield',
+]);
+
 const FUNCTION_TYPES = new Set([
   'FunctionDeclaration',
   'FunctionExpression',
@@ -139,9 +190,11 @@ export function isMangleableName(
   reservedSet: Set<string> = RESERVED_IDENTIFIERS,
   manglerConfig?: ManglerConfig
 ): boolean {
+  const minLength = manglerConfig?.minLength ?? 3;
   return (
-    origName.length > 2 &&
+    origName.length >= minLength &&
     !reservedSet.has(origName) &&
+    !JS_KEYWORDS.has(origName) &&
     !origName.startsWith('$') &&
     !origName.startsWith('__') &&
     !origName.startsWith('_u') &&
@@ -151,6 +204,21 @@ export function isMangleableName(
     (!manglerConfig?.excludePatterns ||
       !manglerConfig.excludePatterns.some((re) => re.test(origName)))
   );
+}
+
+function shuffleAlphabet(chars: string, seed: number): string[] {
+  const arr = chars.split('');
+  let s = (seed || 0x13572468) >>> 0;
+  for (let i = arr.length - 1; i > 0; i--) {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    const j = (s >>> 0) % (i + 1);
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
 }
 
 export function applyPolymorphicMangler(
@@ -167,7 +235,8 @@ export function applyPolymorphicMangler(
   }
   const manglerConfig = config?.mangler;
   const scopeRecords = new Map<acorn.Node, ScopeRecord>();
-  const existingIdentifiers = new Set<string>();
+  const barrierOrFreeIds = new Set<string>();
+  const renamedTargetNodes = new WeakSet<any>();
   let counter = 0;
 
   function ensureScopeChain(ancestors: acorn.Node[]): ScopeRecord {
@@ -233,6 +302,7 @@ export function applyPolymorphicMangler(
         canMangle = false;
       }
     }
+    renamedTargetNodes.add(target.idNode);
     let entry = scope.bindings.get(origName);
     if (!entry) {
       entry = {
@@ -248,9 +318,13 @@ export function applyPolymorphicMangler(
       }
       entry.targets.push(target);
     }
+    if (!entry.shouldMangle) {
+      barrierOrFreeIds.add(origName);
+    }
   }
 
   function registerBarrierName(scopeNode: acorn.Node, origName: string): void {
+    barrierOrFreeIds.add(origName);
     const scope = scopeRecords.get(scopeNode);
     if (!scope) return;
     let entry = scope.bindings.get(origName);
@@ -278,14 +352,9 @@ export function applyPolymorphicMangler(
     }
   }
 
-  // Pass 1A: Build lexical scope tree, record all existing identifiers, and collect all declarations
+  // Pass 1A: Build lexical scope tree and collect all declarations
   ensureScopeChain([ast]);
   walk.ancestor(ast, {
-    Identifier(node: any) {
-      if (typeof node.name === 'string') {
-        existingIdentifiers.add(node.name);
-      }
-    },
     BlockStatement(_node: any, _state, ancestors) {
       ensureScopeChain(ancestors);
     },
@@ -300,6 +369,15 @@ export function applyPolymorphicMangler(
     },
     SwitchStatement(_node: any, _state, ancestors) {
       ensureScopeChain(ancestors);
+    },
+    ImportSpecifier(node: any) {
+      if (node.local?.name) barrierOrFreeIds.add(node.local.name);
+    },
+    ImportDefaultSpecifier(node: any) {
+      if (node.local?.name) barrierOrFreeIds.add(node.local.name);
+    },
+    ImportNamespaceSpecifier(node: any) {
+      if (node.local?.name) barrierOrFreeIds.add(node.local.name);
     },
     FunctionDeclaration(node: any, _state, ancestors) {
       registerFunctionParams(node, ancestors);
@@ -394,14 +472,89 @@ export function applyPolymorphicMangler(
     },
   });
 
+  function resolveBinding(
+    name: string,
+    ancestors: acorn.Node[]
+  ): BindingEntry | null {
+    for (let i = ancestors.length - 1; i >= 0; i--) {
+      const scope = scopeRecords.get(ancestors[i]);
+      if (scope && scope.bindings.has(name)) {
+        return scope.bindings.get(name)!;
+      }
+    }
+    return null;
+  }
+
+  function isNonVarIdentifierPosition(node: any, parent: any): boolean {
+    if (!parent) return true;
+    if (
+      (parent.type === 'FunctionDeclaration' ||
+        parent.type === 'FunctionExpression' ||
+        parent.type === 'ClassDeclaration' ||
+        parent.type === 'ClassExpression') &&
+      parent.id === node
+    ) {
+      return true;
+    }
+    if (
+      parent.type === 'MemberExpression' &&
+      parent.property === node &&
+      !parent.computed
+    ) {
+      return true;
+    }
+    if (
+      (parent.type === 'Property' ||
+        parent.type === 'MethodDefinition' ||
+        parent.type === 'PropertyDefinition') &&
+      parent.key === node &&
+      !parent.computed
+    ) {
+      return true;
+    }
+    if (
+      parent.type === 'LabeledStatement' ||
+      parent.type === 'BreakStatement' ||
+      parent.type === 'ContinueStatement' ||
+      parent.type === 'ImportSpecifier' ||
+      parent.type === 'ImportDefaultSpecifier' ||
+      parent.type === 'ImportNamespaceSpecifier' ||
+      parent.type === 'ExportSpecifier' ||
+      parent.type === 'MetaProperty'
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  // Pass 1.5: Collect all unbound (global) or unmangleable variable-position identifiers
+  // so that 1-2 char mangled names never shadow globals, imports, or barrier declarations.
+  walk.ancestor(ast, {
+    Identifier(node: any, _state, ancestors) {
+      if (renamedTargetNodes.has(node)) return;
+      const parent = ancestors[ancestors.length - 2] as any;
+      if (isNonVarIdentifierPosition(node, parent)) return;
+      const entry = resolveBinding(node.name, ancestors);
+      if (!entry || !entry.shouldMangle) {
+        barrierOrFreeIds.add(node.name);
+      }
+    },
+  });
+
   function isNameUsedInScopeOrAncestors(
     candidate: string,
     scope: ScopeRecord
   ): boolean {
-    if (existingIdentifiers.has(candidate)) return true;
+    if (
+      JS_KEYWORDS.has(candidate) ||
+      activeReserved.has(candidate) ||
+      barrierOrFreeIds.has(candidate)
+    ) {
+      return true;
+    }
     let curr: ScopeRecord | null = scope;
     while (curr) {
-      if (curr.usedNames.has(candidate) || curr.bindings.has(candidate)) {
+      if (curr.usedNames.has(candidate)) {
         return true;
       }
       curr = curr.parent;
@@ -409,38 +562,54 @@ export function applyPolymorphicMangler(
     return false;
   }
 
-  const ALPHABET = 'abcdefghijklmnopqrstuvwxyz';
+  const p1 = shuffleAlphabet('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', seed);
+  const p2a = shuffleAlphabet(
+    'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    (seed ^ 0x517cc1b7) >>> 0
+  );
+  const p2b = shuffleAlphabet(
+    'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_',
+    (seed ^ 0x9e3779b9) >>> 0
+  );
+
+  function candidateAtSlot(slot: number): string {
+    if (slot < p1.length) {
+      return p1[slot];
+    }
+    const rem = slot - p1.length;
+    const twoCharSpace = p2a.length * p2b.length;
+    if (rem < twoCharSpace) {
+      return `${p2a[rem % p2a.length]}${p2b[Math.floor(rem / p2a.length)]}`;
+    }
+    const rem3 = rem - twoCharSpace;
+    return `${p2a[rem3 % p2a.length]}${p2b[Math.floor(rem3 / p2a.length) % p2b.length]}${p2b[Math.floor(rem3 / twoCharSpace) % p2b.length]}`;
+  }
 
   function makeScopedMangledName(
     scope: ScopeRecord,
-    localIndex: number
+    origName: string
   ): string {
-    counter++;
-    let salt = 0;
+    let slot = 0;
     while (true) {
-      const h = computeFnv1aHash(`s${scope.depth}:i${localIndex}:${salt}`, seed);
-      const prefix = (h & 1) === 0 ? '_' : '$';
-      const ch = ALPHABET[((h >>> 1) + localIndex) % ALPHABET.length];
-      const num = (localIndex + salt).toString(36);
-      const candidate = `${prefix}${ch}${num}`;
+      const candidate = candidateAtSlot(slot);
+      slot++;
+      if (candidate === origName) continue;
       if (!isNameUsedInScopeOrAncestors(candidate, scope)) {
         return candidate;
       }
-      salt++;
     }
   }
 
   // Pass 1B: Traverse scope tree top-down (outermost to innermost) to assign collision-free mangled names
   function assignScopeNamesTopDown(scope: ScopeRecord): void {
-    let localIndex = 0;
     for (const entry of scope.bindings.values()) {
       if (!entry.shouldMangle) {
         entry.mangledName = entry.origName;
         scope.usedNames.add(entry.origName);
         continue;
       }
-      const mangled = makeScopedMangledName(scope, localIndex);
-      localIndex++;
+      const mangled = makeScopedMangledName(scope, entry.origName);
+      counter++;
       entry.mangledName = mangled;
       scope.usedNames.add(mangled);
       for (const target of entry.targets) {
@@ -466,19 +635,6 @@ export function applyPolymorphicMangler(
 
   if (counter === 0) return 0;
 
-  function resolveBinding(
-    name: string,
-    ancestors: acorn.Node[]
-  ): BindingEntry | null {
-    for (let i = ancestors.length - 1; i >= 0; i--) {
-      const scope = scopeRecords.get(ancestors[i]);
-      if (scope && scope.bindings.has(name)) {
-        return scope.bindings.get(name)!;
-      }
-    }
-    return null;
-  }
-
   function renamePatternTargetsInScope(
     pattern: any,
     ancestors: acorn.Node[]
@@ -486,6 +642,7 @@ export function applyPolymorphicMangler(
     const targets: PatternTarget[] = [];
     collectPatternTargets(pattern, targets);
     for (const target of targets) {
+      if (renamedTargetNodes.has(target.idNode)) continue;
       const origName = target.idNode.name;
       const entry = resolveBinding(origName, ancestors);
       if (entry && entry.shouldMangle && entry.mangledName !== origName) {
@@ -497,6 +654,7 @@ export function applyPolymorphicMangler(
           };
         }
         target.idNode.name = entry.mangledName;
+        renamedTargetNodes.add(target.idNode);
       }
     }
   }
@@ -517,48 +675,9 @@ export function applyPolymorphicMangler(
       }
     },
     Identifier(node: any, _state, ancestors) {
+      if (renamedTargetNodes.has(node)) return;
       const parent = ancestors[ancestors.length - 2] as any;
-      if (!parent) return;
-
-      if (
-        (parent.type === 'FunctionDeclaration' ||
-          parent.type === 'FunctionExpression' ||
-          parent.type === 'ClassDeclaration' ||
-          parent.type === 'ClassExpression') &&
-        parent.id === node
-      ) {
-        return;
-      }
-
-      if (
-        parent.type === 'MemberExpression' &&
-        parent.property === node &&
-        !parent.computed
-      ) {
-        return;
-      }
-
-      if (
-        (parent.type === 'Property' ||
-          parent.type === 'MethodDefinition' ||
-          parent.type === 'PropertyDefinition') &&
-        parent.key === node &&
-        !parent.computed
-      ) {
-        return;
-      }
-
-      if (
-        parent.type === 'LabeledStatement' ||
-        parent.type === 'BreakStatement' ||
-        parent.type === 'ContinueStatement' ||
-        parent.type === 'ImportSpecifier' ||
-        parent.type === 'ImportDefaultSpecifier' ||
-        parent.type === 'ImportNamespaceSpecifier' ||
-        parent.type === 'ExportSpecifier'
-      ) {
-        return;
-      }
+      if (isNonVarIdentifierPosition(node, parent)) return;
 
       const entry = resolveBinding(node.name, ancestors);
       if (entry && entry.shouldMangle && entry.mangledName !== node.name) {

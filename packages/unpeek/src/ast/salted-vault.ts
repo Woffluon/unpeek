@@ -1,6 +1,6 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
-import type { UnpeekConfig } from '../types.js';
+import type { DeterrentMode, UnpeekConfig } from '../types.js';
 import {
   computeFnv1aHash,
   SAFE_ALPHA,
@@ -9,8 +9,9 @@ import {
   isTailwindNoise,
   isSvgPathString,
 } from './string-vault.js';
+import { generateCompactJs } from './codegen.js';
 import { fallbackKdf, injectWasmVault } from './wasm-vault.js';
-import { deriveWindowKeySymbol } from '../runtime/index.js';
+import { deriveWindowKeySymbol, generateRuntimeShield } from '../runtime/index.js';
 
 export interface SaltedVaultResult {
   encryptedStringsCount: number;
@@ -39,14 +40,55 @@ export function createSaltedDecryptorFnAst(
   pChars: string,
   expectedDelta: number,
   windowKeySymbol: string,
-  safeAlpha = SAFE_ALPHA
+  safeAlpha = SAFE_ALPHA,
+  shieldCoupled = true,
+  browserOnly = false
 ): any {
-  const maskA = (computeFnv1aHash('delta-a', seed) & 0xffff) | 1;
-  const maskB = ((expectedDelta & 0xffff) ^ maskA) & 0xffff;
   const propAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(windowKeySymbol)
     ? `.${windowKeySymbol}`
     : `[${JSON.stringify(windowKeySymbol)}]`;
-  const fBody = `var m=[],w=typeof window!=='undefined'?window:typeof self!=='undefined'?self:0,G=typeof globalThis!=='undefined'?globalThis:w||this,c=Function.prototype.toString.call(f),z=+!String;for(var h=0x811c9dc5,j=0;j<c.length;j++)h=Math.imul(h^c.charCodeAt(j),0x01000193)>>>0;var d=G${propAccess}!=null?G${propAccess}:w?0:(z|${maskA})^${maskB},q=(h^(""._u||a._u||0)^d)>>>0,A="${safeAlpha}",P="${pChars}";return function(i,s){if(i in m)return m[i];var p=a[i],o="";if(p)for(var t=q^s^Math.imul(i+1,0x01000193),j=0;j<p.length;j++){t=Math.imul(t^j+1,0x01000193)^0x811c9dc5;var c=p[j],k=A.indexOf(c);o+=k<0?c:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92];}return m[i]=o;};`;
+
+  let fBody: string;
+  if (!shieldCoupled) {
+    fBody =
+      `var m=[],c=Function.prototype.toString.call(f);` +
+      `for(var h=0x811c9dc5,j=0;j<c.length;j++)h=Math.imul(h^c.charCodeAt(j),0x01000193)>>>0;` +
+      `var q=(h^(""._u||a._u||0))>>>0,A="${safeAlpha}",P="${pChars}";` +
+      `return function(i,s){if(i in m)return m[i];var p=a[i],o="";` +
+      `if(p)for(var t=q^s^Math.imul(i+1,0x01000193),j=0;j<p.length;j++){` +
+      `t=Math.imul(t^j+1,0x01000193)^0x811c9dc5;` +
+      `var c=p[j],k=A.indexOf(c);` +
+      `o+=k<0?c:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92];` +
+      `}return m[i]=o;};`;
+  } else if (browserOnly) {
+    fBody =
+      `var m=[],c=Function.prototype.toString.call(f);` +
+      `for(var h=0x811c9dc5,j=0;j<c.length;j++)h=Math.imul(h^c.charCodeAt(j),0x01000193)>>>0;` +
+      `var q,A="${safeAlpha}",P="${pChars}";` +
+      `return function(i,s){` +
+      `if(q===void 0){var w=typeof window<"u"?window:typeof self<"u"?self:0,G=typeof globalThis<"u"?globalThis:w||this,d=G&&G${propAccess}!=null?G${propAccess}:w&&w${propAccess}!=null?w${propAccess}:w?-1:0;q=(h^(""._u||a._u||0)^d)>>>0;}` +
+      `if(i in m)return m[i];var p=a[i],o="";` +
+      `if(p)for(var t=q^s^Math.imul(i+1,0x01000193),j=0;j<p.length;j++){` +
+      `t=Math.imul(t^j+1,0x01000193)^0x811c9dc5;` +
+      `var c=p[j],k=A.indexOf(c);` +
+      `o+=k<0?c:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92];` +
+      `}return m[i]=o;};`;
+  } else {
+    const maskA = (computeFnv1aHash('delta-a', seed) & 0xffff) | 1;
+    const maskB = ((expectedDelta & 0xffff) ^ maskA) & 0xffff;
+    fBody =
+      `var m=[],c=Function.prototype.toString.call(f);` +
+      `for(var h=0x811c9dc5,j=0;j<c.length;j++)h=Math.imul(h^c.charCodeAt(j),0x01000193)>>>0;` +
+      `var q,A="${safeAlpha}",P="${pChars}";` +
+      `return function(i,s){` +
+      `if(q===void 0){var w=typeof window<"u"?window:typeof self<"u"?self:0,G=typeof globalThis<"u"?globalThis:w||this,d=G&&G${propAccess}!=null?G${propAccess}:w&&w${propAccess}!=null?w${propAccess}:w?-1:(${maskA}^${maskB});q=(h^(""._u||a._u||0)^d)>>>0;}` +
+      `if(i in m)return m[i];var p=a[i],o="";` +
+      `if(p)for(var t=q^s^Math.imul(i+1,0x01000193),j=0;j<p.length;j++){` +
+      `t=Math.imul(t^j+1,0x01000193)^0x811c9dc5;` +
+      `var c=p[j],k=A.indexOf(c);` +
+      `o+=k<0?c:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92];` +
+      `}return m[i]=o;};`;
+  }
 
   return (
     acorn.parse(`(function f(a){${fBody}})`, {
@@ -162,7 +204,12 @@ export function applySaltedStringVault(
   seed = 0x9e3779b9,
   minStringLength = 4,
   hotExemptNodes?: WeakSet<acorn.Node>,
-  config?: UnpeekConfig
+  config?: UnpeekConfig,
+  windowKeySymbol?: string,
+  expectedDelta?: number,
+  deterrentMode?: DeterrentMode,
+  shieldCoupled = true,
+  detectHeadless = false
 ): SaltedVaultResult {
   if (isAstAlreadySalted(ast)) {
     return {
@@ -288,11 +335,70 @@ export function applySaltedStringVault(
   const suffix = computeFnv1aHash(`salted:${seed}`, seed).toString(36);
   const vaultVarName = `_uP${suffix}`;
   const cacheVarName = `_uCache${suffix}`;
+  const dCacheVarName = `_uDc${suffix}`;
   const decryptFnName = `_uD${suffix}`;
 
-  // Encrypt each call site with its individual static callSiteSalt
+  const sym = windowKeySymbol ?? deriveWindowKeySymbol(seed);
+  const browserOnly = config?.target === 'browser';
+  let expDelta = expectedDelta;
+  if (shieldCoupled && expDelta === undefined) {
+    const shield = generateRuntimeShield({
+      seed,
+      windowKeySymbol: sym,
+      deterrentMode: deterrentMode ?? 'passive',
+      detectHeadless,
+    });
+    expDelta = shield.expectedDelta ?? 0;
+  }
+
+  const propAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(sym)
+    ? `.${sym}`
+    : `[${JSON.stringify(sym)}]`;
+
+  let shieldDeltaExpr: string;
+  if (!shieldCoupled) {
+    shieldDeltaExpr =
+      `var dv=(G&&G.__unpeek_delta!=null?G.__unpeek_delta:0)|0;` +
+      `${dCacheVarName}=((h|0)^dv)|0;`;
+  } else {
+    const fallbackExpr = browserOnly
+      ? '0'
+      : `(${((computeFnv1aHash('salted-a', seed) & 0xffff) | 1)}^${((((expDelta ?? 0) & 0xffff) ^ ((computeFnv1aHash('salted-a', seed) & 0xffff) | 1)) & 0xffff)})`;
+    shieldDeltaExpr =
+      `var w=typeof window<"u"?window:typeof self<"u"?self:0;` +
+      `var sv=G&&G${propAccess}!=null?G${propAccess}:w&&w${propAccess}!=null?w${propAccess}:w?-1:${fallbackExpr};` +
+      `var dv=(G&&G.__unpeek_delta!=null?G.__unpeek_delta:w&&w.__unpeek_delta!=null?w.__unpeek_delta:0)|0;` +
+      `${dCacheVarName}=((h|0)^(sv|0)^dv)|0;`;
+  }
+
+  const helperFnSnippet = `function ${decryptFnName}(i,s){` +
+    `if(${cacheVarName}[i]!==void 0)return ${cacheVarName}[i];` +
+    `if(${dCacheVarName}===void 0){` +
+    `var G=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof self<"u"?self:this;` +
+    `var c=Function.prototype.toString.call(${decryptFnName}),h=0x811c9dc5;` +
+    `for(var l=0;l<c.length;l++)h=Math.imul(h^c.charCodeAt(l),0x01000193)>>>0;` +
+    `${shieldDeltaExpr}` +
+    `}` +
+    `var k=${kdfFnName}(i,s,${dCacheVarName});` +
+    `var p=${vaultVarName}[i],o="",rk=k|0;` +
+    `for(var j=0;j<p.length;j++){` +
+    `rk=(Math.imul(rk^(j+1),0x45d9f3b)+0x9e3779b9)|0;` +
+    `o+=String.fromCharCode(p.charCodeAt(j)^(((rk>>>16)&127)|1));` +
+    `}` +
+    `return (${cacheVarName}[i]=o);` +
+    `}`;
+
+  const parsedFn = acorn.parse(helperFnSnippet, {
+    ecmaVersion: 'latest',
+    sourceType: 'script',
+  }) as acorn.Program;
+  const fnDeclAst = parsedFn.body[0];
+  const selfHash = computeFnv1aHash(generateCompactJs(fnDeclAst)) | 0;
+  const buildD = shieldCoupled ? (selfHash ^ ((expDelta ?? 0) & 0xffff)) | 0 : selfHash | 0;
+
+  // Encrypt each call site with its individual static callSiteSalt bound to shield & decryptor self-hash
   for (const target of targetsToReplace) {
-    const k = fallbackKdf(target.callSiteIdx, target.localSalt, 0, seed);
+    const k = fallbackKdf(target.callSiteIdx, target.localSalt, buildD, seed);
     encryptedPayloads.push(encodeSaltedString(target.rawString, k));
 
     const callExpr: any = {
@@ -322,25 +428,8 @@ export function applySaltedStringVault(
   const serializedTable = JSON.stringify(encryptedPayloads);
   const integrityToken = computeFnv1aHash(serializedTable, seed);
 
-  const sym = deriveWindowKeySymbol(seed);
-
-  // Injected lazy idempotent decryptor helper
-  const helperSnippet = `var ${vaultVarName} = ${serializedTable};
-var ${cacheVarName} = [];
-function ${decryptFnName}(i, s) {
-  if (${cacheVarName}[i] !== void 0) return ${cacheVarName}[i];
-  var G = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : (typeof self !== 'undefined' ? self : this));
-  var d = G && G.__unpeek_delta != null ? G.__unpeek_delta : 0;
-  var k = ${kdfFnName}(i, s, d);
-  var p = ${vaultVarName}[i], o = '', rk = k | 0;
-  for (var j = 0; j < p.length; j++) {
-    rk = (Math.imul(rk ^ (j + 1), 0x45d9f3b) + 0x9e3779b9) | 0;
-    o += String.fromCharCode(p.charCodeAt(j) ^ (((rk >>> 16) & 127) | 1));
-  }
-  return (${cacheVarName}[i] = o);
-}`;
-
-  const parsedHelper = acorn.parse(helperSnippet, {
+  const varsSnippet = `var ${vaultVarName}=${serializedTable};var ${cacheVarName}=[];var ${dCacheVarName};`;
+  const parsedVars = acorn.parse(varsSnippet, {
     ecmaVersion: 'latest',
     sourceType: 'script',
   }) as acorn.Program;
@@ -362,7 +451,7 @@ function ${decryptFnName}(i, s) {
     }
   }
 
-  ast.body.splice(insertIdx, 0, ...(parsedHelper.body as any[]));
+  ast.body.splice(insertIdx, 0, ...(parsedVars.body as any[]), fnDeclAst as any);
 
   return {
     encryptedStringsCount: targetsToReplace.length,

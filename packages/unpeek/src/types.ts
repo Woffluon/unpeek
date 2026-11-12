@@ -38,9 +38,15 @@ export interface VaultConfig {
 }
 
 export interface ManglerConfig {
+  minLength?: number;
   reservedIdentifiers?: string[];
   excludePrefixes?: string[];
   excludePatterns?: RegExp[];
+}
+
+export interface ShieldOptionsConfig {
+  detectHeadless?: boolean;
+  deterrentMode?: DeterrentMode;
 }
 
 export interface SourcemapsConfig {
@@ -68,6 +74,7 @@ export interface UnpeekConfig {
   hotPath?: HotPathConfig;
   vault?: VaultConfig;
   mangler?: ManglerConfig;
+  shield?: ShieldOptionsConfig;
   sourcemaps?: SourcemapsConfig;
   next?: NextConfigOptions;
   vite?: ViteConfigOptions;
@@ -86,6 +93,8 @@ export interface ProtectOptions {
   privateMapsDir?: string;
   /** Runtime anti-tamper deterrent mode (default: 'passive') */
   deterrentMode?: DeterrentMode;
+  /** Treat navigator.webdriver / HeadlessChrome as tamper (default: false) */
+  detectHeadless?: boolean;
   /** Inject runtime integrity and DevTools shield into entry chunks (default: true) */
   injectRuntimeShield?: boolean;
   /** Minimum string length to encrypt in the O(1) kConst string vault (default: 4) */
@@ -107,7 +116,12 @@ export interface TransformOptions {
   minStringLength?: number;
   filename?: string;
   injectRuntimeShield?: boolean;
+  skipShieldPreamble?: boolean;
+  shieldCoupled?: boolean;
+  windowKeySymbol?: string;
+  expectedDelta?: number;
   deterrentMode?: DeterrentMode;
+  detectHeadless?: boolean;
   /** Enable Layer 2 aggressive protection */
   aggressive?: boolean;
   /** Optional Unpeek configuration */
@@ -127,6 +141,7 @@ export interface TransformResult {
 export interface ShieldConfig {
   seed: number;
   deterrentMode?: DeterrentMode;
+  detectHeadless?: boolean;
   expectedIntegrityHash?: number;
   windowKeySymbol?: string;
   expectedDelta?: number;
