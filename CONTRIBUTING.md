@@ -13,7 +13,7 @@ Be considerate, constructive, and respectful to all contributors and maintainers
 ## Development Prerequisites
 
 - Node.js >= 18.0.0
-- pnpm >= 9.0.0 (workspace package manager)
+- pnpm >= 11.0.0 (workspace package manager: pnpm@11.10.0)
 - Git
 
 Install workspace dependencies:
@@ -57,7 +57,13 @@ pnpm run build
 Run Vitest unit tests and ensure code coverage remains at or above 80%:
 
 ```bash
+# Run all unit and reverse-engineering resistance tests
 pnpm --filter unpeek run test
+
+# Run configuration subsystem tests (validates unpeek.config discovery, merging, and schema options)
+pnpm --filter unpeek test tests/config.test.ts
+
+# Run unit tests with V8 code coverage report
 pnpm --filter unpeek run test:coverage
 ```
 
@@ -73,6 +79,25 @@ Run the benchmark suite:
 pnpm --filter unpeek run bench
 ```
 
+### 4. Release Verification Scripts
+
+Before creating release commits or validating release readiness, run the PowerShell verification scripts in `scripts/`:
+
+```powershell
+# 1. Test Conventional Commit version bump calculations
+powershell -File scripts/test-versioning.ps1
+
+# 2. Validate version consistency against planned commit message
+powershell -File scripts/validate-version.ps1 -Message "<planned commit message>"
+
+# 3. Stage release tarballs and generate SHA-256 checksum manifests
+powershell -File scripts/stage-release.ps1
+```
+
+- `scripts/test-versioning.ps1`: Unit tests for version calculation across major, minor, patch, and no-bump Conventional Commit types.
+- `scripts/validate-version.ps1`: Pre-commit validator checking version consistency across `package.json`, `packages/unpeek/package.json`, `apps/web/package.json`, `cli/index.ts`, and `apps/web/src/content/i18n.ts`.
+- `scripts/stage-release.ps1`: Builds, packs `unpeek-v<version>.tgz`, and generates `unpeek-v<version>-SHA256SUMS.txt` for immutable release deployment.
+
 ---
 
 ## Commit Guidelines and Versioning
@@ -84,9 +109,13 @@ Commit types:
 - `fix`: Bug fix (increments patch version)
 - `perf`: Performance improvement (increments patch version)
 - `refactor`: Code change without behavior modification (increments patch version)
-- `docs`: Documentation update (no version bump)
-- `test`: Test suite modifications (no version bump)
-- `chore`: Tooling or maintenance changes (no version bump)
+- `docs`: Documentation update (**no version bump**)
+- `test`: Test suite modifications (**no version bump**)
+- `chore`: Tooling or maintenance changes (**no version bump**)
+
+> [!IMPORTANT]
+> **Documentation Commits Do Not Bump Versions:**
+> Under Conventional Commits rules, `docs` commits (e.g., `docs: update configuration guide`) do not increment semantic version numbers in `prepare-version.ps1` or trigger package release builds. The root `package.json` version remains unchanged for documentation-only changes.
 
 Breaking changes:
 - Header containing `!` or body containing `BREAKING CHANGE:` triggers a major version bump.

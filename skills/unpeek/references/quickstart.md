@@ -2,6 +2,8 @@
 
 unpeek provides zero-config, post-build client bundle hardening and source map extraction for modern JavaScript applications.
 
+---
+
 ## 1. Zero-Configuration Initialization
 
 Run the initializer in your project root:
@@ -29,57 +31,123 @@ npx unpeek init
 
 ---
 
-## 2. Running Protection
+## 2. Configuration File Setup (`unpeek.config.js`)
 
-After running your standard production build (e.g., `npm run build`), trigger protection:
+While unpeek works zero-config out of the box, you can define persistent settings via a configuration file in your project root. unpeek automatically looks for:
+1. `unpeek.config.js` (ESM or CommonJS)
+2. `unpeek.config.mjs`
+3. `unpeek.config.cjs`
+4. `unpeek.config.json`
+
+### Creating a Configuration File
+Use the `defineConfig` helper from `unpeek` for full TypeScript type hints:
+
+```js
+// unpeek.config.js
+import { defineConfig } from 'unpeek';
+
+export default defineConfig({
+  target: 'browser',
+  vault: {
+    minStringLength: 4,
+    cssFramework: 'tailwind',
+    polymorphicDecoys: true,
+  },
+  sourcemaps: {
+    keepPrivate: true,
+    vaultDir: '.unpeek-maps',
+  },
+  hotPath: {
+    customHooks: ['useAnimationLoop'],
+  },
+});
+```
+
+CLI flags take precedence over configuration file settings when both are specified.
+
+---
+
+## 3. Defense Tiers & Running Protection
+
+After running your standard production build (e.g. `npm run build`), trigger protection:
 
 ```bash
 npx unpeek protect
 ```
 
-If `postbuild` is set up, `npm run build` triggers `unpeek protect` automatically.
+If `postbuild` is configured, `npm run build` triggers `unpeek protect` automatically.
+
+### Defense Tiers
+
+unpeek provides two distinct defense tiers depending on security and performance requirements:
+
+- **Tier 1 (Default Profile)**:
+  - Command: `npx unpeek protect`
+  - Targets everyday production deployments where strict performance and size budgets must be maintained (<2% runtime CPU overhead, <15% Gzip size delta).
+  - Employs 3-tier bidirectional call-graph exemption (`TRUE_HOT_60FPS`, `SHALLOW_RENDER_COMPONENT`, `SERIALIZED_WORKER`), 92-character zero-escape involutory string vaulting, non-linear quadratic MBA opaque predicates, in-place re-encrypting `Uint8Array` shader vault, and synchronous entry-chunk anti-tamper shield.
+- **Tier 2 (`--aggressive` Profile)**:
+  - Command: `npx unpeek protect --aggressive`
+  - Eliminates plaintext exposure for high-value intellectual property, proprietary algorithms, financial calculations, and sensitive handlers.
+  - Compiles selected cold functions into a compact (<1.2 KB, 24 opcodes) Bytecode Micro-VM supporting `async/await`, `try/catch`, and lexical closures without `eval` or `new Function`.
+  - Backed by an inline WebAssembly Key Derivation Function (WASM KDF, <512 B, with hardened CSP JS fallback) and React 19 Concurrent-safe call-site salted decoders.
 
 ---
 
-## 3. CLI Command Options & Flags
+## 4. CLI Command Options & Flags
 
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--out-dir <dir>` | `string` | Auto-detected | Explicit client output directory override. |
 | `--seed <number>` | `number` | Random per build | Deterministic polymorphic seed for reproducible CI builds. |
-| `--passive` | `boolean` | `false` | Enables passive deterrent mode (telemetry event only; does not mute console). |
+| `--passive` | `boolean` | `false` | Passive deterrent mode (telemetry event only; does not mute console). |
 | `--no-maps` | `boolean` | `false` | Permanently deletes `.map` files instead of moving them to vault. |
 | `--private-maps-dir <dir>` | `string` | `.unpeek-maps` | Target directory for extracted production source maps. |
-| `--min-string-length <num>` | `number` | `4` | Minimum string literal character length for O(1) string vault encryption. |
+| `--min-string-length <num>` | `number` | `4` | Minimum string literal character length for string vault encryption. |
 | `--no-shield` | `boolean` | `false` | Skips injecting the runtime anti-tamper deterrent shield into entry chunks. |
-| `--aggressive` | `boolean` | `false` | Enables Layer 2 aggressive defense: Bytecode Micro-VM (<1.2 KB), inline WASM KDF, and call-site salted vault. |
+| `--aggressive` | `boolean` | `false` | Enables Tier 2 aggressive defense: Bytecode Micro-VM and inline WASM KDF. |
 | `-v, --version` | `boolean` | — | Prints installed unpeek version. |
 | `-h, --help` | `boolean` | — | Displays command-line help. |
 
 ---
 
-## 4. CLI Execution Output & Metrics
+## 5. CLI Execution Output & Metrics
 
-Upon completing protection, unpeek prints an ASCII metrics summary:
+Upon completing protection, unpeek prints a structured metrics summary:
 
 ```text
-[unpeek] Protection Complete
-+--------------------------------+--------------------------------------------------------+
-| Framework                      | nextjs                                                 |
-| Client OutDir                  | /workspace/.next/static/chunks                         |
-| Processed Bundles              | 14                                                     |
-| Vaulted Source Maps            | 14                                                     |
-| Cold Functions Protected       | 128                                                    |
-| Hot Functions Skipped (0% Tax) | 42                                                     |
-| Encrypted Strings              | 256                                                    |
-| Mangled Symbols                | 312                                                    |
-| Gzip Bundle Size               | 412.30 KB -> 438.10 KB (+6.26%)                        |
-| Elapsed Time                   | 48 ms                                                  |
-+--------------------------------+--------------------------------------------------------+
+  ▛▀▀▜  unpeek 1.12.0
+  ▙▄▄▟  client bundle protection
+
+  PROJECT ──────────────────────────────────────
+  framework            nextjs
+  tier                 Tier 1 (default: <2% CPU, <15% Gzip)
+  output               /workspace/.next/static/chunks
+  bundles              14
+
+  CALL GRAPH ───────────────────────────────────
+  hot path exempt      42  0% tax
+  cold path protected  128
+
+  TRANSFORM ────────────────────────────────────
+  string vault         256 literals  O(1) memo
+  symbol mangling      312 bindings
+
+  OUTPUT ───────────────────────────────────────
+  source maps          14 moved -> .unpeek-maps/
+  gzip                 412.30 KB -> 438.10 KB  +6.26%
+  elapsed              48 ms
+
+  done. maps are private. hot path untouched.
+```
+
+If `.dockerignore` is missing or omits `.unpeek-maps/`, unpeek prints an advisory:
+```text
+[unpeek:advisory] .dockerignore is missing .unpeek-maps/. Private maps may leak into Docker image during 'COPY . .'.
 ```
 
 ### Verification Checklist
-- [ ] `Processed Bundles` > 0.
-- [ ] `Vaulted Source Maps` matches expected client `.map` count.
-- [ ] `Gzip Bundle Size` delta remains within the <15% budget.
+- [ ] `bundles` > 0.
+- [ ] `source maps` matches expected client `.map` file count.
+- [ ] `gzip` delta remains within the <15% size budget.
 - [ ] `.unpeek-maps/` contains the extracted `.map` files.
+- [ ] `.dockerignore` contains `.unpeek-maps/`.

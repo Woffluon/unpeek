@@ -64,8 +64,10 @@ flowchart TD
    [`detectHotPaths`](packages/unpeek/src/ast/index.ts), tek bir AST düğümünü değiştirmeden önce dosyanın çağrı grafiğini çift yönlü tarar. Döngü içeren fonksiyonlar (`for`, `while`, `do-while`, `for-of`), dizi yüksek mertebe geri çağrıları (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` zamanlayıcıları, React/UI bileşenleri (`useState`, `useEffect`, `createElement`) ve sıcak döngülerden çağrılan tüm yardımcı fonksiyonlar sıcak yol (hot path) olarak işaretlenir. `unpeek` sıcak döngüleri ve yardımcılarını hem opak kontrol akışı korumalarından hem de metin kasası dönüşümünden muaf tutar; korumayı yalnızca soğuk fonksiyonlara (lisans doğrulama, istek imzalama, yetki kontrolü gibi) uygular. Sıcak döngülerdeki V8 JIT optimizasyonu doğal hızında çalışmayı sürdürür.
 2. **O(1) Sabit-Dizi Metin Kasası ve Kalkan Dolanıklığı (`<%15` Gzip Bütçesi)**
    Soğuk metin sabitleri (`minStringLength >= 4`), derleme zamanında LZ77/Gzip sıkıştırılabilirliğini koruyan periyot-2 polimorfik bir XOR akış şifresiyle kodlanır. Modül başlangıcında enjekte edilen `const _uC` kasası metinleri tek seferde V8 `kConst` sabit dizi hücrelerine çözer ve XOR anahtarını hem çalışma zamanı bütünlük kalkanına (`String.prototype._u`) hem de çözücü fonksiyonun kendi biçimlendirme kontrolüne (`/\n/.test(f)`) ikili olarak bağlar. Sonraki tüm okumalar doğrudan dizi indeksleme ile O(1) sürede tamamlanır.
-3. **Öz-Savunmalı `Function.prototype.toString()` Bütünlük Kontrolü ve Pasif Caydırıcı**
-   Bir analist korumalı bir dosyayı DevTools Pretty-Print (`{}`) ile biçimlendirdiğinde veya Sources panelinde bir koşulu değiştirdiğinde, biçimlendirilen kod `Function.prototype.toString()` çıktısını değiştirir. [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts), dokunulmamış küçültülmüş kodda sıfır yanlış pozitif oranıyla 32-bit FNV-1a özetini doğrular ve saldırganların doğrudan yamayabileceği ani bir çökme yerine kademeli durum bozulması (`deterrentMode: 'gradual'`) başlatır.
+3. **Öz-Savunmalı `Function.prototype.toString()` Bütünlük Kontrolü ve Caydırıcı Modlar (Deterrent Modes)**
+   Bir analist korumalı bir dosyayı DevTools Pretty-Print (`{}`) ile biçimlendirdiğinde veya Sources panelinde bir koşulu değiştirdiğinde, biçimlendirilen kod `Function.prototype.toString()` çıktısını değiştirir. [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts), dokunulmamış küçültülmüş kodda sıfır yanlış pozitif oranıyla 32-bit FNV-1a özetini (checksum) doğrular. Verilen tepki `deterrentMode` seçeneğiyle yönetilir:
+   - `passive` (CLI `protect` varsayılanı): Konsol çıktısını susturmadan veya uygulamayı çökertmeden `window` nesnesine bir telemetri olayı (`unpeek:tamper` event) iletir; tersine mühendislik girişimlerinin sessizce izlenmesini sağlar.
+   - `gradual` (`unplugin` varsayılanı): İç çalışma zamanı çözümlemelerini kademeli olarak bozar ve `console` çıktılarını susturur; saldırganların doğrudan yamayabileceği ani bir hata yığın izi (stack trace) üretmeden kodu işlevsizleştirir.
 4. **Otomatik Source Map Kasası (`.unpeek-maps/`)**
    Üretim çıktısında `.js.map` dosyalarını bırakmak, orijinal TypeScript proje ağacınızın DevTools içinde birebir yeniden oluşturulmasına yol açar. [`protectProject`](packages/unpeek/src/cli/protect.ts), `.map` dosyalarını genel çıktı dizininden özel `.unpeek-maps/` klasörüne taşır ve tüm istemci paketlerinden `//# sourceMappingURL=` yorumlarını temizler. Böylece haritaları son kullanıcılara sunmadan Sentry veya Datadog gibi platformlara yükleyebilirsiniz.
 
@@ -103,7 +105,8 @@ npx unpeek protect
 | `protect` | Üretim istemci paketlerini yerinde korur (varsayılan komut) | |
 | `--out-dir <yol>` | İstemci çıktı klasörünü açıkça belirtir (ör. `dist/assets`, `.next/static/chunks`) | Proje framework'ünden otomatik tespit |
 | `--seed <sayı>` | Deterministik 32-bit polimorfik derleme tohumu (seed) | Derleme başına rastgele |
-| `--passive` | Kademeli bozulma yerine pasif telemetri caydırıcı modunu kullan | Varsayılan: kademeli bozulma (`gradual`) |
+| `--aggressive` | Katman 2 (Tier 2) agresif korumayı etkinleştirir (Micro-VM ve WASM KDF) | Varsayılan: kapalı (Tier 1 varsayılanı: <%2 CPU, <%15 Gzip) |
+| `--passive` | Pasif caydırıcı modunu kullanır (konsol sessize alma olmadan yalnızca telemetri olayı) | CLI varsayılanı: `passive` (`unplugin` varsayılanı: `gradual`) |
 | `--no-maps` | `.map` dosyalarını `.unpeek-maps/` klasörüne taşımak yerine kalıcı olarak sil | `.unpeek-maps/` içine taşır |
 | `--min-string-length <sayı>` | O(1) `kConst` şifreleme kasasına alınacak minimum metin uzunluğu | `4` |
 | `--private-maps-dir <dizin>` | Kaynak haritalarının taşınacağı özel kasa klasörü | `.unpeek-maps` |
@@ -112,7 +115,11 @@ npx unpeek protect
 | `-v, --version` | Sürüm numarasını göster | |
 
 > [!NOTE]
-> `protectProject(options)` üzerinden programatik kullanım; `minStringLength`, `privateMapsDir`, `injectRuntimeShield` ve `cwd` gibi ek yapılandırma seçeneklerini destekler.
+> **Koruma Katmanları (Protection Tiers):**
+> - **Tier 1 (Varsayılan):** Çağrı grafiği (call-graph) sıcak yol (hot path) muafiyeti (<%2 CPU ek yükü, <%15 Gzip bütçesi), polimorfik O(1) `kConst` sabit metin kasası, sembol maskeleme ve 32-bit FNV-1a sağlama toplamı (checksum) çalışma zamanı kalkanı.
+> - **Tier 2 (`--aggressive`):** Güvenlik açısından kritik mantıklar için bayt kodu Micro-VM sanallaştırması ve satır içi WebAssembly Anahtar Türetme Fonksiyonu (WASM KDF - Key Derivation Function).
+>
+> `protectProject(options)` üzerinden programatik kullanım; `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, `aggressive` ve `cwd` gibi ek yapılandırma seçeneklerini destekler.
 
 > [!IMPORTANT]
 > **CommonJS Kullanıcıları İçin Dinamik `import()` Uyarısı:**
@@ -192,9 +199,137 @@ const summary = await protectProject({
 
 ---
 
+## Yapılandırma Dosyası (`unpeek.config.js` / `.mjs` / `.cjs` / `.json`)
+
+`unpeek`, proje kök dizinindeki özel bir yapılandırma dosyası (configuration file) aracılığıyla bildirimsel yapılandırmayı destekler. Hem CLI hem de paketleyici eklentileri (bundler plugins), yapılandırma dosyalarını şu öncelik sırasına göre otomatik olarak keşfeder:
+1. `unpeek.config.js`
+2. `unpeek.config.mjs`
+3. `unpeek.config.cjs`
+4. `unpeek.config.json`
+
+### Tip Güvenli Yapılandırma (`defineConfig`)
+
+IDE otomatik tamamlama ve TypeScript tip doğrulamasını etkinleştirmek için `'unpeek'` üzerinden `defineConfig` yardımcısını içe aktarın:
+
+```javascript
+// unpeek.config.mjs (veya unpeek.config.js)
+import { defineConfig } from 'unpeek';
+
+export default defineConfig({
+  // Hedef çatı geçersiz kılma ('nextjs' | 'vite' | 'webpack' | 'vanilla')
+  framework: 'nextjs',
+
+  // Hedef çalışma ortamı ('browser' | 'worker' | 'universal')
+  target: 'browser',
+
+  // İstemci çıktı dizini geçersiz kılma (belirtilmezse çatıdan otomatik algılanır)
+  outDir: '.next/static/chunks',
+
+  // Korumaya dahil edilecek dosya uzantıları
+  extensions: ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'],
+
+  // Genel statik varlık dizinleri
+  publicDirs: ['public', 'static'],
+
+  // Dosya dahil etme ve hariç tutma filtreleri
+  filter: {
+    include: [],
+    exclude: ['node_modules/**', '**/*.test.*', '**/*.spec.*'],
+  },
+
+  // Çağrı grafiği analizi ve sıcak yol (hot path) ince ayarları
+  hotPath: {
+    // Korumadan muaf tutulacak özel animasyon döngüsü ve zamanlayıcı fonksiyonları
+    customAnimationCalls: ['requestAnimationFrame', 'ticker', 'renderLoop'],
+    // UI render sınırı olarak ele alınacak özel React kancaları (hooks)
+    customHooks: ['useAnimation', 'useCanvas'],
+    // Sıcak döngü muamelesi görecek yüksek mertebe dizi fonksiyonları
+    arrayHofMethods: ['map', 'filter', 'reduce', 'forEach'],
+    // Sıcak yol muafiyeti için geçişken çağıran tarama derinliği (varsayılan: 2)
+    maxPipelineCallers: 2,
+    // AST dönüşümünden tamamen muaf tutulacak bileşen adları
+    excludeComponents: ['VirtualTable', 'DataGrid'],
+  },
+
+  // Polimorfik metin kasası (string vault) yapılandırması
+  vault: {
+    // O(1) kConst dizisine şifrelenecek minimum metin uzunluğu (varsayılan: 4)
+    minStringLength: 4,
+    // CSS çatısı sınıf ayrıştırması ('tailwind' | 'unocss' | 'none')
+    cssFramework: 'tailwind',
+    // UI sınıf dizgilerini ve anlamsal DOM bağlayıcılarını koru
+    semanticAnchors: {
+      excludeUiClasses: true,
+    },
+    // Otomatik entropi tarayıcılarını yanıltmak için sahte metinler üret
+    polymorphicDecoys: true,
+  },
+
+  // Tanımlayıcı ve sembol maskeleme (mangler) yapılandırması
+  mangler: {
+    // Maskelemeden muaf tutulacak üst düzey tanımlayıcılar
+    reservedIdentifiers: ['__NEXT_DATA__', '__PRELOADED_STATE__'],
+    // Korunacak özellik önekleri
+    excludePrefixes: ['data-', 'aria-'],
+    // Korunacak düzenli ifade (RegExp) desenleri
+    excludePatterns: [/^on[A-Z]/],
+  },
+
+  // Özel kaynak haritası (source map) kasası seçenekleri
+  sourcemaps: {
+    // .map dosyalarını özel kasa dizinine taşı (varsayılan: true)
+    keepPrivate: true,
+    // Taşınan kaynak haritaları için özel dizin adı (varsayılan: '.unpeek-maps')
+    vaultDir: '.unpeek-maps',
+    // İstemci paketlerinden //# sourceMappingURL= yönergelerini temizle (varsayılan: true)
+    stripComments: true,
+  },
+
+  // Next.js'e özgü geçersiz kılmalar
+  next: {
+    // Özel derleme çıktı dizini (varsayılan: '.next')
+    distDir: '.next',
+  },
+
+  // Vite'a özgü geçersiz kılmalar
+  vite: {
+    // Çıktı dizini (varsayılan: 'dist')
+    outDir: 'dist',
+    // outDir içerisindeki varlıklar dizini (varsayılan: 'assets')
+    assetsDir: 'assets',
+  },
+});
+```
+
+JSON formatındaki yapılandırmalar için (`unpeek.config.json`):
+
+```json
+{
+  "framework": "nextjs",
+  "target": "browser",
+  "vault": {
+    "minStringLength": 4,
+    "cssFramework": "tailwind"
+  },
+  "sourcemaps": {
+    "keepPrivate": true,
+    "vaultDir": ".unpeek-maps"
+  },
+  "next": {
+    "distDir": ".next"
+  }
+}
+```
+
+---
+
 ## `.unpeek-maps/` Source Map Kasası ve Sentry İş Akışı
 
 `keepPrivateMaps` etkinleştirildiğinde (varsayılan), `unpeek` genel çıktı dizininizdeki tüm `.js.map` dosyalarını göreli dosya adlarını koruyarak `.unpeek-maps/` dizinine taşır ve genel `.js` dosyalarından `//# sourceMappingURL=` yönergelerini temizler.
+
+> [!CAUTION]
+> **Konteyner Güvenliği Uyarısı (`.dockerignore`):**
+> Web uygulamalarınızı Docker ile paketlerken `.unpeek-maps/` dizininin `.dockerignore` dosyasına eklendiğinden emin olun. Eğer `.unpeek-maps/` atlanırsa, standart `COPY . .` komutları özel kaynak haritalarını yayınlanan konteyner imaj katmanına kopyalar ve imaja erişimi olan herkesin orijinal kaynak kodlarınızı elde etmesine yol açar. `unpeek` CLI, derleme sırasında `.dockerignore` dosyasını otomatik olarak denetler ve bu kayıt eksikse uyarı mesajı görüntüler.
 
 Üretim hata izleme sistemlerinde tam yığın izi çözümlemesini (symbolication) korumak için:
 
@@ -212,7 +347,7 @@ npx @sentry/cli sourcemaps upload .unpeek-maps --release="$GIT_COMMIT_SHA"
 
 ## Yapay Zeka Kodlama Ajanı Entegrasyonu (AI Coding Agent Integration)
 
-`unpeek`, açık Vercel Agent Skills belirtimi ve Ajan Becerileri Keşif Optimizasyonu (SDO) standartlarıyla tam uyumlu resmi bir Yapay Zeka Ajan Becerisi ([`skills/unpeek/SKILL.md`](skills/unpeek/SKILL.md)) sunar. Bu beceriyi eklemek; kodlama ajanlarınıza (Claude Code, Cursor, OpenAI Codex, Gemini CLI, GitHub Copilot, OpenCode) istemci paketlerini koruma, hot-path performans bütçelerini (<%2 CPU, <%15 Gzip) koruma, SSR sınırlarını gözetme ve `.unpeek-maps/` kasasını CI/CD hatlarına bağlama konularında derin uzmanlık kazandırır.
+`unpeek`, açık Vercel Agent Skills belirtimi ve Ajan Becerileri Keşif Optimizasyonu (SDO) standartlarıyla tam uyumlu resmi bir Yapay Zeka Ajan Becerisi ([`skills/unpeek/SKILL.md`](skills/unpeek/SKILL.md)) sunar. Bu beceriyi eklemek; kodlama ajanlarınıza (Claude Code, Cursor, OpenAI Codex, Gemini CLI, GitHub Copilot, OpenCode) istemci paketlerini koruma, hot-path performans bütçelerini (<%2 CPU, <%15 Gzip) koruma, SSR sınırlarını gözetme ve `.unpeek-maps/` kasasını CI/CD hatlarına bağlama konularında doğrudan operasyonel iş akışları kazandırır.
 
 ### Beceri (Skill) Kurulumu
 

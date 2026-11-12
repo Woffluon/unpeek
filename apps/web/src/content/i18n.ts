@@ -208,7 +208,7 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
     },
     hero: {
       eyebrow: "CALL-GRAPH AWARE JS PROTECTION",
-      metaRight: "v1.8.2 / MIT / npm",
+      metaRight: "v1.12.0 / MIT / npm",
       headlineTop: "Nothing to peek at.",
       headlineBottom: "Nothing to slow down.",
       subtext:
@@ -375,10 +375,16 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
                 code: `# 1. Initialize in your project root
 npx unpeek init
 
-# Output:
-# [unpeek] Detected framework: nextjs (.next/static/chunks)
-# [unpeek] Added "postbuild": "unpeek protect" to package.json
-# [unpeek] Added ".unpeek-maps/" to .gitignore`,
+#   ▛▀▀▜  unpeek 1.12.0
+#   ▙▄▄▟  client bundle protection
+#
+#   PROJECT ──────────────────────────────────────
+#   framework            next
+#   postbuild            unpeek protect (added)
+#   vault                .unpeek-maps/ (added)
+#
+#   postbuild wired. maps stay private from the first build.
+#   run your build to protect the first bundle.`,
               },
             ],
           },
@@ -394,13 +400,67 @@ npx unpeek init
                 code: `# Run manually or via npm/pnpm postbuild
 npx unpeek protect --seed 482910
 
-# Output:
-# [unpeek] Framework: nextjs | Directory: .next/static/chunks
-# [unpeek] Processed 18 client chunks in 142ms
-# [unpeek] Hot functions exempted: 24 | Cold functions protected: 61
-# [unpeek] Encrypted strings: 312 | Mangled lexical symbols: 489
-# [unpeek] Source maps vaulted: 18 -> .unpeek-maps/
-# [unpeek] Gzip delta: +6.42% (within <15% budget)`,
+#   ▛▀▀▜  unpeek 1.12.0
+#   ▙▄▄▟  client bundle protection
+#
+#   PROJECT ──────────────────────────────────────
+#   framework            next
+#   tier                 Tier 1 (default: <2% CPU, <15% Gzip)
+#   output               .next/static/chunks
+#   bundles              18
+#
+#   CALL GRAPH ───────────────────────────────────
+#   hot path exempt      24  0% tax
+#   cold path protected  61
+#
+#   TRANSFORM ────────────────────────────────────
+#   string vault         312 literals  O(1) memo
+#   symbol mangling      489 bindings
+#
+#   OUTPUT ───────────────────────────────────────
+#   source maps          18 moved -> .unpeek-maps/
+#   gzip                 284.12 KB -> 302.36 KB  +6.42%
+#   elapsed              142 ms
+#
+#   done. maps are private. hot path untouched.`,
+              },
+            ],
+          },
+          {
+            title: "Project Configuration: unpeek.config.ts (defineConfig)",
+            body: [
+              "unpeek operates zero-config by default through automatic framework discovery. For custom hot-path heuristics, fine-grained string vault thresholds, mangler reservations, or private map paths, place an `unpeek.config.ts` (or `.js`, `.mjs`, `.cjs`, `.json`) at the project root.",
+              "Use `defineConfig` imported from `unpeek` for full TypeScript autocomplete, inline schema documentation, and strict type verification:",
+            ],
+            codeBlocks: [
+              {
+                label: "unpeek.config.ts: Configuration File & Options",
+                language: "typescript",
+                code: `import { defineConfig } from "unpeek";
+
+export default defineConfig({
+  // Hot-path heuristics & caller propagation exemptions
+  hotPath: {
+    customAnimationCalls: ["requestAnimationFrame", "useFrame"],
+    customHooks: ["useSpring", "useGesture"],
+    maxPipelineCallers: 2,
+  },
+  // O(1) string vault & syntax noise filters
+  vault: {
+    minStringLength: 4,
+    cssFramework: "tailwind",
+    polymorphicDecoys: true,
+  },
+  // Lexical binding & symbol mangler rules
+  mangler: {
+    reservedIdentifiers: ["__NEXT_DATA__", "process"],
+  },
+  // Private source map extraction vault
+  sourcemaps: {
+    keepPrivate: true,
+    vaultDir: ".unpeek-maps",
+  },
+});`,
               },
             ],
           },
@@ -430,7 +490,7 @@ npx unpeek protect --seed 482910
     "postbuild": "unpeek protect"
   },
   "devDependencies": {
-    "unpeek": "^1.8.2"
+    "unpeek": "^1.12.0"
   }
 }`,
               },
@@ -536,10 +596,53 @@ export default {
             ],
           },
           {
-            title: "Synchronous Shield, 4-Family MBA & Layer 2 (--aggressive)",
+            title: "Synchronous Self-Shield & Contextual MBA Guards",
             body: [
-              "Entry chunks execute a synchronous FNV-1a integrity IIFE immediately (no `queueMicrotask` race) that binds a 5-bit key delta into `window[sym]` and feeds both 4 algebraic Mixed Boolean-Arithmetic (MBA) opaque guard families with shared module decoys and the string vault decoder.",
-              "Enabling `--aggressive` activates Layer 2: selected cold functions compile to a <1.2 KB 24-opcode Bytecode Micro-VM (supporting `async/await`, `try/catch`, and closures without `eval`), backed by an inline <512 B WebAssembly KDF module (with synchronous JS fallback under strict CSP) and a React 19 Concurrent-safe call-site salted lazy vault.",
+              "Entry chunks execute an immediate synchronous FNV-1a integrity IIFE (no `queueMicrotask` race) that hashes the shield body via `Function.prototype.toString()`. It binds a 5-bit key delta into `window[sym]` to authenticate cold-path execution before any string vault decodes.",
+              "Cold functions receive contextual Mixed Boolean-Arithmetic (MBA) opaque predicates across 5 distinct algebraic families—including polynomial identities and Euler Diophantine quadratic residues. These bind into shared module decoys that deter automated symbolic solvers while adding 0% tax to hot loops.",
+            ],
+          },
+          {
+            title: "Tier 2 Deep-Dive: Bytecode Micro-VM, Inline WASM KDF & Salted Vault",
+            body: [
+              "Passing `--aggressive` activates Layer 2 defense for maximum reverse-engineering resistance without risking application runtime crashes or violating CSP restrictions:",
+            ],
+            bullets: [
+              "`Bytecode Micro-VM`: Virtualizes selected cold functions into a compact (<1.2 KB) 24-opcode stack interpreter. It runs purely on standard JavaScript control flow without `eval()` or `new Function()`, preserving compliance with strict `script-src` Content Security Policies while fully supporting `async/await` yields, `try/catch` unwinding, and lexical scope closures.",
+              "`Inline WebAssembly KDF (<512 B)`: Synthesizes a minimal (<512 B) WebAssembly binary to execute cryptographic key derivation via `((fnId ^ seed) * 0x01000193) ^ ((callSiteSalt + shieldHash) * 0x045d9f3b)`. It leaves zero persistent heap keys and falls back synchronously to hardened algebraic JavaScript when WebAssembly compilation is blocked.",
+              "`Idempotent Call-Site Salted Vault`: Replaces static plaintext strings with call-site salted decoders. Unlike legacy stateful decryptors that drift during interrupted renders, each call site resolves via `_uD(stringIndex, callSiteSalt)`. This guarantees complete idempotence and thread safety under React 19 Concurrent Mode interruptions and re-renders.",
+            ],
+            codeBlocks: [
+              {
+                label: "Terminal: Tier 2 Aggressive Protection Invocation",
+                language: "bash",
+                code: `# Activate Tier 2 Bytecode Micro-VM & inline WASM KDF
+npx unpeek protect --aggressive --seed 0x7f4a2c
+
+#   ▛▀▀▜  unpeek 1.12.0
+#   ▙▄▄▟  client bundle protection
+#
+#   PROJECT ──────────────────────────────────────
+#   framework            next
+#   tier                 Tier 2 (--aggressive: Micro-VM & WASM KDF)
+#   output               .next/static/chunks
+#   bundles              18
+#
+#   CALL GRAPH ───────────────────────────────────
+#   hot path exempt      24  0% tax
+#   cold path protected  61
+#
+#   TRANSFORM ────────────────────────────────────
+#   string vault         312 literals  O(1) memo
+#   symbol mangling      489 bindings
+#
+#   OUTPUT ───────────────────────────────────────
+#   source maps          18 moved -> .unpeek-maps/
+#   gzip                 284.12 KB -> 316.50 KB  +11.39%
+#   elapsed              186 ms
+#
+#   done. maps are private. hot path untouched.`,
+              },
             ],
           },
         ],
@@ -619,20 +722,28 @@ export default {
               {
                 label: "CLI Reference",
                 language: "bash",
-                code: `unpeek init [--dry-run]
-  Detects framework, configures package.json "postbuild", and updates .gitignore.
+                code: `  ▛▀▀▜  unpeek 1.12.0
+  ▙▄▄▟  client bundle protection
 
-unpeek protect [options]
-  --out-dir <dir>            Explicit client output directory override
-  --seed <number>            Deterministic 32-bit polymorphic seed
-  --passive                  Use passive telemetry deterrent mode instead of gradual
-  --no-maps                  Delete .map files instead of moving to .unpeek-maps/
-  --min-string-length <num>  Minimum string length for encryption vault (default: 4)
-  --private-maps-dir <dir>   Directory to store vaulted source maps (default: .unpeek-maps)
-  --no-shield                Do not inject runtime anti-tamper deterrent shield
-  --aggressive               Enable Tier 2 Bytecode Micro-VM, inline WASM KDF & salted vault
-  -h, --help                 Show help message
-  -v, --version              Show version number`,
+  Usage:
+    unpeek init [--dry-run]        wire postbuild and the .unpeek-maps/ vault
+    unpeek protect [options]       protect client bundles in place (Tier 1 default: <2% CPU, <15% Gzip)
+
+  Options:
+    --out-dir <dir>                explicit client output directory
+    --seed <number>                deterministic polymorphic seed
+    --passive                      passive deterrent mode instead of gradual
+    --no-maps                      delete .map files instead of vaulting them
+    --min-string-length <num>      minimum string length for the vault (default: 4)
+    --private-maps-dir <dir>       vault directory (default: .unpeek-maps)
+    --no-shield                    skip the runtime anti-tamper shield
+    --aggressive                   enable Tier 2 aggressive protection (Micro-VM & WASM KDF)
+    -h, --help                     show help
+    -v, --version                  show version
+
+  Tiers:
+    Tier 1 (default)               call-graph hot-path exemption (<2% CPU, <15% Gzip)
+    Tier 2 (--aggressive)          zero plaintext exposure via Micro-VM & WASM KDF`,
               },
             ],
           },
@@ -673,6 +784,60 @@ const summary: ProtectSummary = await protectProject({
   privateMapsDir: ".unpeek-maps",
   deterrentMode: "gradual",
   aggressive: false,
+});`,
+              },
+            ],
+          },
+          {
+            title: "Configuration Schema & Options (UnpeekConfig)",
+            body: [
+              "The `UnpeekConfig` interface governs build heuristics, string encryption boundaries, symbol mangling rules, and source map storage. Configurations are resolved in hierarchical precedence: CLI flags > programmatic options > discovered config file > default config.",
+              "Config files are automatically discovered across `unpeek.config.js`, `unpeek.config.mjs`, `unpeek.config.cjs`, and `unpeek.config.json` (or `unpeek.config.ts` with TypeScript loaders).",
+            ],
+            bullets: [
+              "`hotPath`: Configure `customAnimationCalls` (e.g. `['requestAnimationFrame', 'useFrame']`), `customHooks` (e.g. `['useSpring', 'useGesture']`), `arrayHofMethods`, `hocWrappers`, and `maxPipelineCallers` (default `2`) for transitive exemption.",
+              "`vault`: Configure `minStringLength` (default `4`), `cssFramework` (`'tailwind'` | `'unocss'` | `'none'`), `customDirectives`, `reservedProps`, `semanticAnchors`, and `polymorphicDecoys` (default `true`).",
+              "`mangler`: Specify `reservedIdentifiers` (e.g. `['__NEXT_DATA__', 'process']`), `excludePrefixes`, and `excludePatterns` (RegExp array) to prevent mangling critical runtime globals.",
+              "`sourcemaps`: Set `keepPrivate` (default `true`), `vaultDir` (default `'.unpeek-maps'`), and `stripComments` (default `true`) for private symbol management.",
+              "`next` / `vite`: Specify `next.distDir` for custom Next.js output directories, or `vite.outDir` / `vite.assetsDir` for custom Vite distributions.",
+            ],
+            codeBlocks: [
+              {
+                label: "unpeek.config.ts: Complete Schema Example",
+                language: "typescript",
+                code: `import { defineConfig, type UnpeekConfig } from "unpeek";
+
+export default defineConfig({
+  target: "browser",
+  filter: {
+    exclude: ["node_modules/**", "**/*.test.*", "**/*.spec.*"],
+  },
+  hotPath: {
+    customAnimationCalls: ["requestAnimationFrame", "useFrame"],
+    customHooks: ["useSpring", "useGesture"],
+    arrayHofMethods: ["map", "filter", "forEach", "reduce"],
+    maxPipelineCallers: 2,
+  },
+  vault: {
+    minStringLength: 4,
+    cssFramework: "tailwind",
+    semanticAnchors: {
+      excludeUiClasses: true,
+    },
+    polymorphicDecoys: true,
+  },
+  mangler: {
+    reservedIdentifiers: ["__NEXT_DATA__", "process"],
+    excludePrefixes: ["$$"],
+  },
+  sourcemaps: {
+    keepPrivate: true,
+    vaultDir: ".unpeek-maps",
+    stripComments: true,
+  },
+  next: {
+    distDir: ".next",
+  },
 });`,
               },
             ],
@@ -846,7 +1011,7 @@ unpeek protect --no-shield`,
     },
     hero: {
       eyebrow: "ÇAĞRI GRAFİĞİ FARKINDALIKLI JS KORUMASI",
-      metaRight: "v1.8.2 / MIT / npm",
+      metaRight: "v1.12.0 / MIT / npm",
       headlineTop: "Bakacak bir şey yok.",
       headlineBottom: "Yavaşlayacak bir şey yok.",
       subtext:
@@ -1013,10 +1178,16 @@ unpeek protect --no-shield`,
                 code: `# 1. Proje kök dizininde başlatın
 npx unpeek init
 
-# Çıktı:
-# [unpeek] Detected framework: nextjs (.next/static/chunks)
-# [unpeek] Added "postbuild": "unpeek protect" to package.json
-# [unpeek] Added ".unpeek-maps/" to .gitignore`,
+#   ▛▀▀▜  unpeek 1.12.0
+#   ▙▄▄▟  client bundle protection
+#
+#   PROJECT ──────────────────────────────────────
+#   framework            next
+#   postbuild            unpeek protect (added)
+#   vault                .unpeek-maps/ (added)
+#
+#   postbuild wired. maps stay private from the first build.
+#   run your build to protect the first bundle.`,
               },
             ],
           },
@@ -1032,13 +1203,67 @@ npx unpeek init
                 code: `# Manuel veya postbuild üzerinden çalıştırma
 npx unpeek protect --seed 482910
 
-# Çıktı:
-# [unpeek] Framework: nextjs | Directory: .next/static/chunks
-# [unpeek] Processed 18 client chunks in 142ms
-# [unpeek] Hot functions exempted: 24 | Cold functions protected: 61
-# [unpeek] Encrypted strings: 312 | Mangled lexical symbols: 489
-# [unpeek] Source maps vaulted: 18 -> .unpeek-maps/
-# [unpeek] Gzip delta: +6.42% (within <15% budget)`,
+#   ▛▀▀▜  unpeek 1.12.0
+#   ▙▄▄▟  client bundle protection
+#
+#   PROJECT ──────────────────────────────────────
+#   framework            next
+#   tier                 Tier 1 (default: <2% CPU, <15% Gzip)
+#   output               .next/static/chunks
+#   bundles              18
+#
+#   CALL GRAPH ───────────────────────────────────
+#   hot path exempt      24  0% tax
+#   cold path protected  61
+#
+#   TRANSFORM ────────────────────────────────────
+#   string vault         312 literals  O(1) memo
+#   symbol mangling      489 bindings
+#
+#   OUTPUT ───────────────────────────────────────
+#   source maps          18 moved -> .unpeek-maps/
+#   gzip                 284.12 KB -> 302.36 KB  +6.42%
+#   elapsed              142 ms
+#
+#   done. maps are private. hot path untouched.`,
+              },
+            ],
+          },
+          {
+            title: "Proje Yapılandırması: unpeek.config.ts (defineConfig)",
+            body: [
+              "unpeek, otomatik çatı tespiti (framework detection) sayesinde varsayılan olarak sıfır yapılandırmayla (zero-config) çalışır. Sıcak yol (hot path) sezgilerini özelleştirmek, metin kasası (string vault) sınırlarını belirlemek veya kaynak haritası (source map) klasörünü yapılandırmak için proje kök dizinine `unpeek.config.ts` (ya da `.js`, `.mjs`, `.cjs`, `.json`) dosyası ekleyebilirsiniz.",
+              "TypeScript otomatik tamamlama (autocomplete) ve tip doğrulaması için `unpeek` paketinden `defineConfig` fonksiyonunu içe aktarın:",
+            ],
+            codeBlocks: [
+              {
+                label: "unpeek.config.ts: Yapılandırma Dosyası & Seçenekleri",
+                language: "typescript",
+                code: `import { defineConfig } from "unpeek";
+
+export default defineConfig({
+  // Sıcak yol sezgileri & çağrıcı yayılım muafiyetleri
+  hotPath: {
+    customAnimationCalls: ["requestAnimationFrame", "useFrame"],
+    customHooks: ["useSpring", "useGesture"],
+    maxPipelineCallers: 2,
+  },
+  // O(1) metin kasası & sözdizimi gürültü filtreleri
+  vault: {
+    minStringLength: 4,
+    cssFramework: "tailwind",
+    polymorphicDecoys: true,
+  },
+  // Sözcüksel bağlama & sembol karmaşıklaştırma kuralları
+  mangler: {
+    reservedIdentifiers: ["__NEXT_DATA__", "process"],
+  },
+  // Özel kaynak haritası çıkarma kasası
+  sourcemaps: {
+    keepPrivate: true,
+    vaultDir: ".unpeek-maps",
+  },
+});`,
               },
             ],
           },
@@ -1068,7 +1293,7 @@ npx unpeek protect --seed 482910
     "postbuild": "unpeek protect"
   },
   "devDependencies": {
-    "unpeek": "^1.8.2"
+    "unpeek": "^1.12.0"
   }
 }`,
               },
@@ -1174,10 +1399,53 @@ export default {
             ],
           },
           {
-            title: "Senkron Öz-İmza Kalkanı, 4-Aileli MBA & Katman 2 (--aggressive)",
+            title: "Senkron Öz-İmza Kalkanı ve Bağlamsal MBA Koruyucuları",
             body: [
-              "Giriş paketleri `queueMicrotask` yarış durumunu ortadan kaldıran senkron FNV-1a IIFE kalkanı taşır; 5-bitlik anahtar bileşenini `window[sym]` üzerine yazarak hem 4 cebirsel MBA ailesine ve paylaşımlı modül tuzaklarına hem de string kasasına bağlar.",
-              "`--aggressive` açıldığında seçilen soğuk fonksiyonlar <1.2 KB 24-komutlu Bytecode Micro-VM'e (`eval` olmadan `async/await` ve `try/catch` destekli) derlenir; sıkı CSP için JS yedekli <512 B satıriçi WebAssembly KDF modülü ve React 19 Concurrent uyumlu çağrı-noktası tuzlu tembel kasa devreye girer.",
+              "Giriş paketleri `queueMicrotask` yarış durumunu (race condition) ortadan kaldıran senkron FNV-1a IIFE kalkanı taşır; kalkan gövdesini `Function.prototype.toString()` ile özetler ve herhangi bir metin kasası çözülmeden önce soğuk yol yürütmesini doğrulamak üzere `window[sym]` üzerine 5-bitlik anahtar farkını yazar.",
+              "Soğuk fonksiyonlar; polinom özdeşlikleri ve Euler Diophantine karesel kalanları da dahil olmak üzere 5 ayrı cebirsel aileye yayılan bağlamsal Karışık Boole-Aritmetik (MBA - Mixed Boolean-Arithmetic) opak koşul koruyucuları alır. Bunlar sıcak döngülere %0 ek yük getirirken otomatik sembolik çözücüleri caydırmak için paylaşımlı modül tuzaklarıyla birleşir.",
+            ],
+          },
+          {
+            title: "Katman 2 Derinlemesine: Bytecode Micro-VM, Satıriçi WASM KDF ve Tuzlu Kasa",
+            body: [
+              "`--aggressive` bayrağı etkinleştirildiğinde unpeek, çalışma zamanı çökmelerine yol açmadan ve CSP kısıtlamalarını ihlal etmeden en üst düzey tersine mühendislik direnci sunmak için Katman 2 savunmasını devreye alır:",
+            ],
+            bullets: [
+              "`Bytecode Micro-VM`: Seçili soğuk fonksiyonları kompakt (<1.2 KB) 24-komutlu (opcode) yığın yorumlayıcısına derler. `eval()` veya `new Function()` olmadan saf JavaScript akışıyla çalışır; katı `script-src` İçerik Güvenlik İlkeleri (CSP - Content Security Policy) ile tam uyum sağlarken `async/await` yürütmelerini, `try/catch` hata çözme akışını ve sözcüksel kapsam kapanışlarını (lexical closures) eksiksiz yürütür.",
+              "`Satıriçi WebAssembly KDF (<512 B)`: Kriptografik anahtar türetimini (`((fnId ^ seed) * 0x01000193) ^ ((callSiteSalt + shieldHash) * 0x045d9f3b)`) yürütmek için minimal (<512 B) bir WebAssembly ikilisi derler. Bellekte (heap) kalıcı anahtar bırakmaz; WebAssembly derlemesinin engellendiği çalışma zamanlarında cebirsel senkron JavaScript yedeğine (fallback) başvurur.",
+              "`İdempotent Çağrı-Noktası Tuzlu Kasa (Call-Site Salted Vault)`: İstemci paketlerindeki statik düz metin (plaintext) dizgilerini çağrı noktasına özel tuzlu çözücülerle değiştirir. Kesintili render sırasında sapan eski durum bilgili çözücülerin aksine, her çağrı noktası `_uD(stringIndex, callSiteSalt)` üzerinden çözümlenir. Bu sayede React 19 Eşzamanlı Mod (Concurrent Mode) kesintileri ve yeniden render döngülerinde tam idempotent ve iş parçacığı güvenli çalışır.",
+            ],
+            codeBlocks: [
+              {
+                label: "Terminal: Katman 2 Agresif Koruma Çağrısı",
+                language: "bash",
+                code: `# Katman 2 Bytecode Micro-VM & satıriçi WASM KDF'i etkinleştirin
+npx unpeek protect --aggressive --seed 0x7f4a2c
+
+#   ▛▀▀▜  unpeek 1.12.0
+#   ▙▄▄▟  client bundle protection
+#
+#   PROJECT ──────────────────────────────────────
+#   framework            next
+#   tier                 Tier 2 (--aggressive: Micro-VM & WASM KDF)
+#   output               .next/static/chunks
+#   bundles              18
+#
+#   CALL GRAPH ───────────────────────────────────
+#   hot path exempt      24  0% tax
+#   cold path protected  61
+#
+#   TRANSFORM ────────────────────────────────────
+#   string vault         312 literals  O(1) memo
+#   symbol mangling      489 bindings
+#
+#   OUTPUT ───────────────────────────────────────
+#   source maps          18 moved -> .unpeek-maps/
+#   gzip                 284.12 KB -> 316.50 KB  +11.39%
+#   elapsed              186 ms
+#
+#   done. maps are private. hot path untouched.`,
+              },
             ],
           },
         ],
@@ -1257,20 +1525,28 @@ export default {
               {
                 label: "CLI Referansı",
                 language: "bash",
-                code: `unpeek init [--dry-run]
-  Framework'ü algılar, package.json "postbuild" betiğini ekler ve .gitignore'u günceller.
+                code: `  ▛▀▀▜  unpeek 1.12.0
+  ▙▄▄▟  client bundle protection
 
-unpeek protect [options]
-  --out-dir <dir>            İstemci çıktı klasörünü manuel geçersiz kılma
-  --seed <number>            Deterministik 32-bit polimorfik tohum (seed)
-  --passive                  Kademeli bozulma yerine pasif telemetri caydırıcı modunu kullan
-  --no-maps                  .map dosyalarını .unpeek-maps/ yerine kalıcı olarak sil
-  --min-string-length <num>  O(1) kConst şifreleme kasasına alınacak minimum metin uzunluğu (varsayılan: 4)
-  --private-maps-dir <dir>   Kaynak haritalarının taşınacağı özel kasa klasörü (varsayılan: .unpeek-maps)
-  --no-shield                Çalışma zamanı anti-tamper kalkanı enjeksiyonunu devre dışı bırak
-  --aggressive               Katman 2 Bytecode Micro-VM, satıriçi WASM KDF ve tuzlu kasayı aç
-  -h, --help                 Yardım mesajını göster
-  -v, --version              Sürüm numarasını göster`,
+  Usage:
+    unpeek init [--dry-run]        wire postbuild and the .unpeek-maps/ vault
+    unpeek protect [options]       protect client bundles in place (Tier 1 default: <2% CPU, <15% Gzip)
+
+  Options:
+    --out-dir <dir>                explicit client output directory
+    --seed <number>                deterministic polymorphic seed
+    --passive                      passive deterrent mode instead of gradual
+    --no-maps                      delete .map files instead of vaulting them
+    --min-string-length <num>      minimum string length for the vault (default: 4)
+    --private-maps-dir <dir>       vault directory (default: .unpeek-maps)
+    --no-shield                    skip the runtime anti-tamper shield
+    --aggressive                   enable Tier 2 aggressive protection (Micro-VM & WASM KDF)
+    -h, --help                     show help
+    -v, --version                  show version
+
+  Tiers:
+    Tier 1 (default)               call-graph hot-path exemption (<2% CPU, <15% Gzip)
+    Tier 2 (--aggressive)          zero plaintext exposure via Micro-VM & WASM KDF`,
               },
             ],
           },
@@ -1311,6 +1587,60 @@ const summary: ProtectSummary = await protectProject({
   privateMapsDir: ".unpeek-maps",
   deterrentMode: "gradual",
   aggressive: false,
+});`,
+              },
+            ],
+          },
+          {
+            title: "Yapılandırma Şeması & Seçenekleri (UnpeekConfig)",
+            body: [
+              "`UnpeekConfig` arayüzü; sıcak yol (hot-path) sezgileri, metin kasası (string vault) sınırları, sembol karmaşıklaştırma (mangler) kuralları ve kaynak haritası (source map) depolamasını yönetir. Ayarlar hiyerarşik öncelik sırasına göre çözümlenir: CLI bayrakları > programatik seçenekler > keşfedilen yapılandırma dosyası > varsayılan ayarlar.",
+              "Yapılandırma dosyaları `unpeek.config.js`, `unpeek.config.mjs`, `unpeek.config.cjs` ve `unpeek.config.json` (veya TypeScript yükleyicileriyle `unpeek.config.ts`) isimleriyle proje kökünde otomatik olarak aranır.",
+            ],
+            bullets: [
+              "`hotPath`: Geçişken muafiyet için `customAnimationCalls` (ör. `['requestAnimationFrame', 'useFrame']`), `customHooks` (ör. `['useSpring', 'useGesture']`), `arrayHofMethods`, `hocWrappers` ve `maxPipelineCallers` (varsayılan `2`) seçeneklerini belirler.",
+              "`vault`: `minStringLength` (varsayılan `4`), `cssFramework` (`'tailwind'` | `'unocss'` | `'none'`), `customDirectives`, `reservedProps`, `semanticAnchors` ve `polymorphicDecoys` (varsayılan `true`) kurallarını yapılandırır.",
+              "`mangler`: Kritik çalışma zamanı global değişkenlerinin bozulmaması için `reservedIdentifiers` (ör. `['__NEXT_DATA__', 'process']`), `excludePrefixes` ve `excludePatterns` (RegExp dizisi) tanımlar.",
+              "`sourcemaps`: Özel sembol yönetimi için `keepPrivate` (varsayılan `true`), `vaultDir` (varsayılan `'.unpeek-maps'`) ve `stripComments` (varsayılan `true`) değerlerini belirler.",
+              "`next` / `vite`: Özel Next.js çıktı dizinleri için `next.distDir`, özel Vite dağıtımları için `vite.outDir` / `vite.assetsDir` geçersiz kılmalarını tanımlar.",
+            ],
+            codeBlocks: [
+              {
+                label: "unpeek.config.ts: Eksiksiz Şema Örneği",
+                language: "typescript",
+                code: `import { defineConfig, type UnpeekConfig } from "unpeek";
+
+export default defineConfig({
+  target: "browser",
+  filter: {
+    exclude: ["node_modules/**", "**/*.test.*", "**/*.spec.*"],
+  },
+  hotPath: {
+    customAnimationCalls: ["requestAnimationFrame", "useFrame"],
+    customHooks: ["useSpring", "useGesture"],
+    arrayHofMethods: ["map", "filter", "forEach", "reduce"],
+    maxPipelineCallers: 2,
+  },
+  vault: {
+    minStringLength: 4,
+    cssFramework: "tailwind",
+    semanticAnchors: {
+      excludeUiClasses: true,
+    },
+    polymorphicDecoys: true,
+  },
+  mangler: {
+    reservedIdentifiers: ["__NEXT_DATA__", "process"],
+    excludePrefixes: ["$$"],
+  },
+  sourcemaps: {
+    keepPrivate: true,
+    vaultDir: ".unpeek-maps",
+    stripComments: true,
+  },
+  next: {
+    distDir: ".next",
+  },
 });`,
               },
             ],
