@@ -29,8 +29,8 @@ export function generateRuntimeShield(config: ShieldConfig): ShieldPayload {
 
   const expectedDelta =
     config.expectedDelta !== undefined
-      ? config.expectedDelta & 31
-      : (computedHash >>> 0) & 31;
+      ? config.expectedDelta & 0xffff
+      : (computedHash >>> 0) & 0xffff;
 
   return {
     preambleCode,

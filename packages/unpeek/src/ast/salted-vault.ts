@@ -20,10 +20,15 @@ export interface SaltedVaultResult {
 }
 
 /**
- * Computes deterministic 8-bit call-site salt for lazy string resolution.
+ * Computes deterministic 5-bit call-site salt for lazy string resolution.
  */
 export function computeCallSiteSalt(seed: number, idx: number): number {
-  return (((seed & 15) ^ (idx * 5) + 3) & 31) >>> 0;
+  return (
+    ((Math.imul((seed ^ idx) >>> 0, 0x9e3779b1) ^
+      Math.imul((idx + 1) >>> 0, 0x45d9f3b)) &
+      31) >>>
+    0
+  );
 }
 
 /**
@@ -36,7 +41,12 @@ export function createSaltedDecryptorFnAst(
   windowKeySymbol: string,
   safeAlpha = SAFE_ALPHA
 ): any {
-  const fBody = `var memo=[],s=Function.prototype.toString,G=typeof globalThis!=='undefined'?globalThis:(typeof window!=='undefined'?window:(typeof self!=='undefined'?self:this)),w=typeof window!=='undefined'?window:(typeof self!=='undefined'?self:0),src=s.call(f);for(var h=0x811c9dc5,j=0;j<src.length;j++)h=Math.imul(h^src.charCodeAt(j),0x01000193)>>>0;var delta=G['${windowKeySymbol}']!=null?G['${windowKeySymbol}']:(w?0:${expectedDelta}),rot=(h^((""._u||a._u||0))^delta)&31,A="${safeAlpha}",P="${pChars}";return function(i,s){if(memo[i]!==void 0)return memo[i];var p=a[i],o="";if(!p)return "";for(var j=0;j<p.length;j++){var c=p.charAt(j),k=A.indexOf(c);if(k<0)o+=c;else{var y=(k-s+rot+9200)%92;o+=A.charAt((A.indexOf(P.charAt(y))-rot+9200)%92);}}return(memo[i]=o);};`;
+  const maskA = (computeFnv1aHash('delta-a', seed) & 0xffff) | 1;
+  const maskB = ((expectedDelta & 0xffff) ^ maskA) & 0xffff;
+  const propAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(windowKeySymbol)
+    ? `.${windowKeySymbol}`
+    : `[${JSON.stringify(windowKeySymbol)}]`;
+  const fBody = `var m=[],w=typeof window!=='undefined'?window:typeof self!=='undefined'?self:0,G=typeof globalThis!=='undefined'?globalThis:w||this,c=Function.prototype.toString.call(f),z=+!String;for(var h=0x811c9dc5,j=0;j<c.length;j++)h=Math.imul(h^c.charCodeAt(j),0x01000193)>>>0;var d=G${propAccess}!=null?G${propAccess}:w?0:(z|${maskA})^${maskB},q=(h^(""._u||a._u||0)^d)>>>0,A="${safeAlpha}",P="${pChars}";return function(i,s){if(i in m)return m[i];var p=a[i],o="";if(p)for(var t=q^s^Math.imul(i+1,0x01000193),j=0;j<p.length;j++){t=Math.imul(t^j+1,0x01000193)^0x811c9dc5;var c=p[j],k=A.indexOf(c);o+=k<0?c:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92];}return m[i]=o;};`;
 
   return (
     acorn.parse(`(function f(a){${fBody}})`, {
@@ -82,13 +92,15 @@ export function createSaltedVaultHelperAst(
 }
 
 /**
- * Encodes a string literal with a 32-bit KDF key using periodic XOR.
+ * Encodes a string literal with a 32-bit KDF key using a per-character rolling keystream.
  */
 export function encodeSaltedString(str: string, k: number): string {
   let out = '';
+  let rk = k | 0;
   for (let j = 0; j < str.length; j++) {
+    rk = (Math.imul(rk ^ (j + 1), 0x45d9f3b) + 0x9e3779b9) | 0;
     const code = str.charCodeAt(j);
-    const mask = ((k >>> (j % 24)) & 0x7f) | 1;
+    const mask = ((rk >>> 16) & 0x7f) | 1;
     out += String.fromCharCode(code ^ mask);
   }
   return out;
@@ -320,9 +332,10 @@ function ${decryptFnName}(i, s) {
   var G = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : (typeof self !== 'undefined' ? self : this));
   var d = G && G.__unpeek_delta != null ? G.__unpeek_delta : 0;
   var k = ${kdfFnName}(i, s, d);
-  var p = ${vaultVarName}[i], o = '';
+  var p = ${vaultVarName}[i], o = '', rk = k | 0;
   for (var j = 0; j < p.length; j++) {
-    o += String.fromCharCode(p.charCodeAt(j) ^ (((k >>> (j % 24)) & 127) | 1));
+    rk = (Math.imul(rk ^ (j + 1), 0x45d9f3b) + 0x9e3779b9) | 0;
+    o += String.fromCharCode(p.charCodeAt(j) ^ (((rk >>> 16) & 127) | 1));
   }
   return (${cacheVarName}[i] = o);
 }`;

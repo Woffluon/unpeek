@@ -391,24 +391,30 @@ export function createPermutationTable(seed: number): string {
 
 /**
  * Encodes a string literal using the 92-character zero-escape involutory permutation
- * bound to expectedRot and call-site salt.
+ * bound to a 32-bit rolling keystream derived from expectedKey, call-site salt, and vault index.
  */
 export function encodeStringWithSeed(
   str: string,
   P_CHARS: string,
-  expectedRot: number,
-  salt = 0
+  expectedKey: number,
+  salt = 0,
+  idx = 0
 ): string {
   let out = '';
-  for (let i = 0; i < str.length; i++) {
-    const c = str.charAt(i);
+  let st =
+    ((expectedKey >>> 0) ^ (salt >>> 0) ^ Math.imul(idx + 1, 0x01000193)) >>> 0;
+  for (let j = 0; j < str.length; j++) {
+    st = (Math.imul(st ^ (j + 1), 0x01000193) ^ 0x811c9dc5) | 0;
+    const r1 = (st >>> 16) % 92;
+    const r2 = (st & 65535) % 92;
+    const c = str.charAt(j);
     const k = SAFE_ALPHA.indexOf(c);
     if (k < 0) {
       out += c;
     } else {
-      const y = (k + expectedRot) % 92;
+      const y = (k + r1) % 92;
       const z = SAFE_ALPHA.indexOf(P_CHARS.charAt(y));
-      out += SAFE_ALPHA.charAt((z - expectedRot + salt + 9200) % 92);
+      out += SAFE_ALPHA.charAt((z + r2) % 92);
     }
   }
   return out;
@@ -517,7 +523,7 @@ export function applyStringVault(
   );
   const compactFnStr = generateCompactJs(fnAst);
   const buildH = computeIntegrityHash(compactFnStr, 0);
-  const expectedRot = (buildH ^ 0 ^ expDelta) & 31;
+  const expectedKey = (buildH ^ 0 ^ (expDelta & 0xffff)) >>> 0;
 
   const stringToIndex = new Map<string, number>();
   const encryptedPayloads: string[] = [];
@@ -669,7 +675,7 @@ export function applyStringVault(
             stringToIndex.set(val, idx);
             const salt = computeCallSiteSalt(seed, idx);
             encryptedPayloads.push(
-              encodeStringWithSeed(val, P_CHARS, expectedRot, salt)
+              encodeStringWithSeed(val, P_CHARS, expectedKey, salt, idx)
             );
           }
           targetsToReplace.push({ type: 'string', node, parent, idx });
@@ -758,7 +764,7 @@ export function applyStringVault(
             stringToIndex.set(val, idx);
             const salt = computeCallSiteSalt(seed, idx);
             encryptedPayloads.push(
-              encodeStringWithSeed(val, P_CHARS, expectedRot, salt)
+              encodeStringWithSeed(val, P_CHARS, expectedKey, salt, idx)
             );
           }
           targetsToReplace.push({ type: 'string', node, parent, idx });

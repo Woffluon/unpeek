@@ -12,7 +12,7 @@ export function deriveWindowKeySymbol(seed: number): string {
 /**
  * Generates a single-line, self-executing (IIFE), polymorphic, synchronous, SSR-safe (<1.5 KB)
  * anti-tamper deterrent snippet that calculates a synchronous 32-bit FNV-1a hash of its own
- * Function.prototype.toString() representation and writes the 5-bit key component (expectedDelta)
+ * Function.prototype.toString() representation and writes the 16-bit key component (expectedDelta)
  * to window[windowKeySymbol].
  *
  * Freedom To Operate (FTO) Compliance:
@@ -22,7 +22,7 @@ export function deriveWindowKeySymbol(seed: number): string {
  *
  * When tampering is detected (formatting, pretty-print, webdriver, toString spoofing):
  * window.__unpeek_tampered is set to true, String.prototype._u is poisoned to 14,
- * window[sym] is poisoned to expectedDelta ^ 29, and CustomEvent('unpeek:tamper') is dispatched.
+ * window[sym] is poisoned to expectedDelta ^ 0x5a5b, and CustomEvent('unpeek:tamper') is dispatched.
  */
 export function createDeterrentSnippet(config: ShieldConfig): string {
   const seed = config.seed >>> 0;
@@ -33,5 +33,9 @@ export function createDeterrentSnippet(config: ShieldConfig): string {
   const consoleSilence =
     deterrentMode === 'gradual' ? 'for(var k in console)console[k]=function(){return 0;};' : '';
 
-  return `(function ${fnName}(w){var G=typeof globalThis!=='undefined'?globalThis:(typeof window!=='undefined'?window:(typeof self!=='undefined'?self:this));if(w){try{var s=Function.prototype.toString,n=w.navigator||0,src=s.call(${fnName}),t=s.call(s).indexOf('[native code]')<0||/\\n/.test(src)||n.webdriver||/HeadlessChrome/.test(n.userAgent);for(var h=0x811c9dc5,i=0;i<src.length;i++)h=Math.imul(h^src.charCodeAt(i),0x01000193)>>>0;var d=(h&31);if(t){G.__unpeek_tampered=w.__unpeek_tampered=!0;G.__unpeek_seed=w.__unpeek_seed=((w.__unpeek_seed||${seed})^1)>>>0;String.prototype._u=14;G['${sym}']=w['${sym}']=d^29;G.__unpeek_delta=w.__unpeek_delta=d^29;try{${consoleSilence}if(typeof w.dispatchEvent==='function')w.dispatchEvent(new CustomEvent('unpeek:tamper'));}catch(e){}}else{G['${sym}']=w['${sym}']=d;}}catch(e){}}})(typeof window!=='undefined'?window:(typeof self!=='undefined'?self:0));`;
+  const propAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(sym)
+    ? `.${sym}`
+    : `[${JSON.stringify(sym)}]`;
+
+  return `(function ${fnName}(w){var G=typeof globalThis!=='undefined'?globalThis:w;if(w){try{var s=Function.prototype.toString,n=w.navigator||0,src=s.call(${fnName}),t=s.call(s).indexOf('[native code]')<0||/\\n/.test(src)||n.webdriver||/HeadlessChrome/.test(n.userAgent);for(var h=0x811c9dc5,i=0;i<src.length;i++)h=Math.imul(h^src.charCodeAt(i),0x01000193)>>>0;var d=h&0xffff;if(t){G.__unpeek_tampered=w.__unpeek_tampered=!0;G.__unpeek_seed=w.__unpeek_seed=((w.__unpeek_seed||${seed})^1)>>>0;String.prototype._u=14;G${propAccess}=w${propAccess}=G.__unpeek_delta=w.__unpeek_delta=d^0x5a5b;try{${consoleSilence}if(w.dispatchEvent)w.dispatchEvent(new CustomEvent('unpeek:tamper'));}catch(e){}}else{G${propAccess}=w${propAccess}=d;}}catch(e){}}})(typeof window!=='undefined'?window:(typeof self!=='undefined'?self:0));`;
 }

@@ -1081,4 +1081,56 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(res).toBe('fn0:1;fn1:2;fn2:3;fn3:4;30');
     });
   });
+
+  describe('v1.13.0 Vault & Shield Hardening', () => {
+    it('enforces 16-bit shield delta, zero-escape 92-char SAFE_ALPHA payloads, unicode preservation, and O(1) memoization', async () => {
+      const { createPermutationTable, encodeStringWithSeed, computeFnv1aHash } = await import('../src/ast/string-vault.js');
+      const { createSaltedDecryptorFnAst, computeCallSiteSalt } = await import('../src/ast/salted-vault.js');
+      const { generateRuntimeShield } = await import('../src/runtime/index.js');
+
+      const seed = 0x7a3b91c5;
+      const shield = generateRuntimeShield({ seed, deterrentMode: 'passive' });
+      expect(shield.expectedDelta).toBeGreaterThan(31);
+      expect(shield.expectedDelta).toBeLessThanOrEqual(0xffff);
+
+      const source = `
+        function getEndpoints() {
+          const a = "https://vault.internal.example/v1/keys?mode=prod";
+          const b = "Unicode_ğüşiöç_🚀_payload";
+          return [a, a, b, b];
+        }
+        return getEndpoints();
+      `;
+
+      const res = transformJavaScript(source, {
+        seed,
+        minStringLength: 4,
+        injectRuntimeShield: true,
+      });
+
+      expect(res.code).not.toContain('vault.internal.example');
+      expect(res.code).not.toContain('Unicode_');
+
+      // Check encrypted array contains zero backslash/quote/backtick escapes inside encrypted SAFE_ALPHA strings
+      const P = createPermutationTable(seed);
+      const ast = createSaltedDecryptorFnAst(seed, P, shield.expectedDelta!, '_zTest');
+      const compactFn = generate(ast);
+      const key = (computeFnv1aHash(compactFn, 0) ^ (shield.expectedDelta! & 0xffff)) >>> 0;
+      const samplePlain = 'API_SECRET_TOKEN_XYZ_12345';
+      const enc = encodeStringWithSeed(samplePlain, P, key, computeCallSiteSalt(seed, 0), 0);
+      expect(enc).not.toContain('\\');
+      expect(enc).not.toContain('"');
+      expect(enc).not.toContain('`');
+      expect(enc.length).toBe(samplePlain.length);
+
+      // Runtime execution with O(1) repeated access returns exact strings including unicode
+      const fn = new Function(res.code);
+      expect(fn()).toEqual([
+        'https://vault.internal.example/v1/keys?mode=prod',
+        'https://vault.internal.example/v1/keys?mode=prod',
+        'Unicode_ğüşiöç_🚀_payload',
+        'Unicode_ğüşiöç_🚀_payload',
+      ]);
+    });
+  });
 });

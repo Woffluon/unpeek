@@ -327,4 +327,76 @@ describe('Reverse Engineering & Deobfuscation Resistance (Acceptance Thresholds)
     expect(rendered.props.className).toBe('btn btn-primary');
     expect(rendered.children).toBe('api/v1/checkout:isAdmin');
   });
+
+  it('defeats offline 32-candidate brute-force attacks and blinds SSR expectedDelta constants', async () => {
+    const { SAFE_ALPHA } = await import('../src/ast/string-vault.js');
+    const { generateRuntimeShield } = await import('../src/runtime/index.js');
+
+    const seed = 0x91827364;
+    const shield = generateRuntimeShield({ seed, deterrentMode: 'passive' });
+    expect(shield.expectedDelta).toBeGreaterThan(31);
+
+    const secret = 'PROD_MASTER_API_SIGNING_SECRET_2026';
+    const src = `
+      function getApiSecret() {
+        return "${secret}";
+      }
+      return getApiSecret();
+    `;
+
+    const res = transformJavaScript(src, {
+      seed,
+      minStringLength: 4,
+      injectRuntimeShield: true,
+    });
+
+    // SSR fallback literal must not expose plaintext expectedDelta directly
+    expect(res.code).not.toContain(`w?0:${shield.expectedDelta}`);
+    expect(res.code).toContain('+!String');
+
+    // Extract encrypted array literal and P table from transformed output
+    const vaultMatch = res.code.match(/\(\[([^\]]+)\]\)/);
+    expect(vaultMatch).not.toBeNull();
+    const cipherArray: string[] = JSON.parse(`[${vaultMatch![1]}]`);
+    const targetCipher = cipherArray.find((s) => s.length === secret.length);
+    expect(targetCipher).toBeDefined();
+
+    const callMatch = res.code.match(/_uD[a-z0-9]+\(\d+,\s*(\d+)\)/);
+    expect(callMatch).not.toBeNull();
+    const publicSalt = Number(callMatch![1]);
+
+    // Extract permutation table P (92-char string)
+    const pMatch = res.code.match(/P="([^"]{92})"/);
+    expect(pMatch).not.toBeNull();
+    const pChars = pMatch![1];
+
+    // Offline 32-candidate brute-force (rot = 0..31 against constant-shift formula) must fail completely
+    const recoveredBy32BruteForce: string[] = [];
+    for (let rot = 0; rot < 32; rot++) {
+      let decoded = '';
+      for (let j = 0; j < targetCipher!.length; j++) {
+        const c = targetCipher!.charAt(j);
+        const k = SAFE_ALPHA.indexOf(c);
+        if (k < 0) decoded += c;
+        else {
+          const y = (k - publicSalt + rot + 9200) % 92;
+          decoded += SAFE_ALPHA.charAt((SAFE_ALPHA.indexOf(pChars.charAt(y)) - rot + 9200) % 92);
+        }
+      }
+      recoveredBy32BruteForce.push(decoded);
+    }
+
+    expect(recoveredBy32BruteForce).not.toContain(secret);
+    for (const candidate of recoveredBy32BruteForce) {
+      expect(candidate).not.toContain('PROD_MASTER');
+      expect(candidate).not.toContain('SIGNING_SECRET');
+    }
+
+    // Genuine runtime execution in browser context still recovers exact secret
+    const browserCtx: Record<string, any> = { window: {} };
+    browserCtx.globalThis = browserCtx;
+    vm.createContext(browserCtx);
+    const out = vm.runInContext(`(function(){${res.code}})()`, browserCtx);
+    expect(out).toBe(secret);
+  });
 });

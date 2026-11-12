@@ -1,9 +1,11 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { DeterrentMode, ProtectOptions, ProtectSummary } from '../types.js';
 import { initProject } from './init.js';
 import { protectProject } from './protect.js';
 
-const VERSION = '1.12.0';
+const VERSION = '1.13.0';
 
 function getPackageVersion(): string {
   try {
@@ -253,3 +255,19 @@ export async function runCli(args: string[]): Promise<void> {
 
   printHelp();
 }
+
+if (process.argv[1]) {
+  try {
+    const executedPath = path.resolve(process.argv[1]);
+    const currentPath = fileURLToPath(import.meta.url);
+    if (executedPath === currentPath) {
+      runCli(process.argv.slice(2)).catch((err) => {
+        console.error('[unpeek] fatal error:', err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      });
+    }
+  } catch {
+    // ignore
+  }
+}
+
