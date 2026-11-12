@@ -525,7 +525,7 @@ export function applyMicroVm(
   let virtualizedCount = 0;
 
   for (const fn of candidates) {
-    if (virtualizedCount >= 10) break; // Maximum 10 functions per chunk
+    if (virtualizedCount >= 5) break; // RFC-002: Maximum 5 functions per chunk to preserve <15% Gzip budget (Edebio 250 KB ceiling)
 
     // 1. Must be cold if coldFunctionNodes set is provided
     if (coldFunctionNodes && !coldFunctionNodes.has(fn)) {
