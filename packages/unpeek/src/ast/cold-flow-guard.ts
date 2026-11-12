@@ -269,7 +269,7 @@ export function createSotaMbaPredicate(
   // In V8 runtime, z === 0, but static SMT/constant-folding analyzers cannot resolve it.
   // v = (z | c1) === c1, k = (c2 | (!String)) === c2.
   // Target is non-zero, deterministic, seed- and index-derived integer (0x7fffffff signature is eliminated).
-  const family = Math.abs((seed + fnIndex) & 3);
+  const family = Math.abs((seed + fnIndex) % 5);
   const c1 = ((seed >>> 1) + Math.imul(family + 1, 0x15d9f3b)) & 0x7ffff;
   const c2 = (c1 ^ 0x2a5a5) & 0x7ffff;
   const target =
@@ -362,7 +362,7 @@ export function createSotaMbaPredicate(
 
     const sumTerms = makeBinary('+', shiftTerm, term3);
     mbaExpr = makeBinary('-', term1, sumTerms);
-  } else {
+  } else if (family === 3) {
     // Aile 3: (Math.imul(v | k, v | k) - (Math.imul(v & k, v & k) + Math.imul(v ^ k, v + k))) ≡ 0
     const vOrK1 = makeBinary('|', cloneNode(vNode), cloneNode(kNode));
     const vOrK2 = makeBinary('|', cloneNode(vLit), cloneNode(kLit));
@@ -378,6 +378,20 @@ export function createSotaMbaPredicate(
 
     const sumTerms = makeBinary('+', term2, term3);
     mbaExpr = makeBinary('-', term1, sumTerms);
+  } else {
+    // Aile 4: Euler Karesel Kalanlar Diophantine Invariant ((7k^2 - 1 mod 4) != (v^2 mod 4))
+    // In Z: (7k^2 - 1) & 3 in {2, 3}, while (v^2) & 3 in {0, 1}.
+    // Their equality is undecidable in general Diophantine systems and mathematically impossible (always false & 1 === 0).
+    const kSq = makeImul(cloneNode(kLit), cloneNode(kLit));
+    const sevenKSq = makeImul(makeLiteral(7), kSq);
+    const sevenKSqSub1 = makeBinary('-', sevenKSq, makeLiteral(1));
+    const term1 = makeBinary('&', sevenKSqSub1, makeLiteral(3));
+
+    const vSq = makeImul(cloneNode(vNode), cloneNode(vLit));
+    const term2 = makeBinary('&', vSq, makeLiteral(3));
+
+    const isEq = makeBinary('===', term1, term2);
+    mbaExpr = makeBinary('&', isEq, makeLiteral(1));
   }
 
   const decoyIdx = Math.abs(fnIndex) % 3;
@@ -400,6 +414,12 @@ export function createSotaMbaPredicate(
 
 export const createOpaqueGuardStatement = createSotaMbaPredicate;
 
+/**
+ * RFC-002: Maximum cold guards per bundle chunk to strictly enforce
+ * the 250 KB bundle ceiling (Edebio) and keep Gzip overhead <15%.
+ */
+export const MAX_COLD_GUARDS_PER_CHUNK = 12;
+
 export function applyColdFlowGuard(
   ast: acorn.Program,
   coldFunctionNodes: WeakSet<acorn.Node>,
@@ -420,6 +440,7 @@ export function applyColdFlowGuard(
   let guardedCount = 0;
 
   function maybeInjectGuard(node: any): void {
+    if (guardedCount >= MAX_COLD_GUARDS_PER_CHUNK) return;
     if (!coldFunctionNodes.has(node)) return;
     if (!node.body || node.body.type !== 'BlockStatement') return;
 

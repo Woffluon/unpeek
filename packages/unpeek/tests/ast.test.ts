@@ -89,6 +89,41 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(report.hotFunctionsSkipped).toContain('stepParticles');
       expect(report.coldFunctionsProtected).toContain('validateLicense');
     });
+
+    it('RFC-002: exempts UFSKAL WebGPU/Three.js render loops, GSAP ticker callbacks, Lenis raf, and React 19 hooks from protection', () => {
+      const sample = `
+        function onGsapTick(time) {
+          return time * 1000;
+        }
+        gsap.ticker.add(onGsapTick);
+
+        function lenisScrollStep(delta) {
+          return delta * 0.5;
+        }
+        lenis.raf(lenisScrollStep);
+
+        function webgpuRenderPass(device, queue) {
+          queue.submit([]);
+        }
+        renderer.setAnimationLoop(webgpuRenderPass);
+
+        function FormStatusComponent() {
+          const status = useFormStatus();
+          return status.pending;
+        }
+
+        function verifyPaymentSignature(secret, payload) {
+          return secret + ":" + payload;
+        }
+      `;
+
+      const report = detectHotPaths(sample);
+      expect(report.hotFunctionsSkipped).toContain('onGsapTick');
+      expect(report.hotFunctionsSkipped).toContain('lenisScrollStep');
+      expect(report.hotFunctionsSkipped).toContain('webgpuRenderPass');
+      expect(report.hotFunctionsSkipped).toContain('FormStatusComponent');
+      expect(report.coldFunctionsProtected).toContain('verifyPaymentSignature');
+    });
   });
 
   describe('transformJavaScript semantic preservation & obfuscation', () => {
