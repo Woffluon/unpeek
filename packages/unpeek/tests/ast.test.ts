@@ -7,7 +7,9 @@ import {
   transformJavaScript,
   detectHotPaths,
   computeFnv1aHash,
+  UnpeekError,
 } from '../src/ast/index.js';
+import * as browserEntry from '../src/browser.js';
 
 describe('AST & Call-Graph Transformation Engine', () => {
   describe('computeFnv1aHash', () => {
@@ -1271,6 +1273,87 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(minLen2Res.mangledSymbolsCount).toBe(2);
       expect(minLen2Res.code).toContain('function check(x,');
       expect(new Function(minLen2Res.code)()).toBe(33);
+    });
+  });
+
+  describe('Browser-safe shader vault & strict parse error handling', () => {
+    it('transforms 256+ char strings and GLSL shader strings when globalThis.Buffer is undefined', () => {
+      const longPayload = 'A'.repeat(280) + '_END_280';
+      const glslShader =
+        '@group(0) @binding(0) var<uniform> uTime: f32; @vertex fn vs_main() -> @builtin(position) vec4f { gl_Position = vec4f(0.0, 0.0, 0.0, 1.0); return gl_Position; }';
+      const source = `
+        function getPayloads() {
+          var longStr = ${JSON.stringify(longPayload)};
+          var shader = ${JSON.stringify(glslShader)};
+          return { longStr: longStr, shader: shader };
+        }
+        return getPayloads();
+      `;
+
+      const originalBuffer = globalThis.Buffer;
+      try {
+        (globalThis as { Buffer?: unknown }).Buffer = undefined;
+        const result = transformJavaScript(source, { seed: 0x42424242 });
+        expect(result.shaderBuffersCount).toBe(2);
+        expect(result.code).not.toContain(longPayload);
+        expect(result.code).not.toContain('vec4f(0.0, 0.0, 0.0, 1.0)');
+
+        const evaluated = new Function(result.code)() as {
+          longStr: string;
+          shader: string;
+        };
+        expect(evaluated.longStr).toBe(longPayload);
+        expect(evaluated.shader).toBe(glslShader);
+      } finally {
+        (globalThis as { Buffer?: unknown }).Buffer = originalBuffer;
+      }
+    });
+
+    it('throws UnpeekError(ERR_PARSE_FAILED) on invalid JS when strict: true, and returns input unchanged otherwise', () => {
+      const invalidJs = 'function broken( { return ;';
+
+      const nonStrict = transformJavaScript(invalidJs, { seed: 0x11111111 });
+      expect(nonStrict.code).toBe(invalidJs);
+      expect(nonStrict.encryptedStringsCount).toBe(0);
+
+      expect(() =>
+        transformJavaScript(invalidJs, {
+          seed: 0x11111111,
+          strict: true,
+          filename: 'broken.js',
+        })
+      ).toThrowError(UnpeekError);
+
+      try {
+        transformJavaScript(invalidJs, {
+          seed: 0x11111111,
+          strict: true,
+          filename: 'broken.js',
+        });
+      } catch (err) {
+        expect(err).toBeInstanceOf(UnpeekError);
+        expect(err).toBeInstanceOf(Error);
+        expect((err as UnpeekError).code).toBe('ERR_PARSE_FAILED');
+        expect((err as UnpeekError).message).toContain('broken.js');
+      }
+    });
+
+    it('exposes UnpeekError and browser-safe helpers from browser entrypoint', () => {
+      const cause = new Error('root');
+      const err = new browserEntry.UnpeekError('ERR_CONFIG_INVALID', 'bad config', {
+        cause,
+      });
+      expect(err).toBeInstanceOf(Error);
+      expect(err).toBeInstanceOf(UnpeekError);
+      expect(err.name).toBe('UnpeekError');
+      expect(err.code).toBe('ERR_CONFIG_INVALID');
+      expect(err.cause).toBe(cause);
+
+      expect(typeof browserEntry.transformJavaScript).toBe('function');
+      expect(typeof browserEntry.detectHotPaths).toBe('function');
+      expect(typeof browserEntry.computeFnv1aHash).toBe('function');
+      expect(typeof browserEntry.computeIntegrityHash).toBe('function');
+      expect(typeof browserEntry.verifyCodeIntegrity).toBe('function');
     });
   });
 });

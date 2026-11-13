@@ -1,6 +1,12 @@
 import { createUnplugin } from 'unplugin';
-import type { ProtectOptions, UnpeekConfig } from '../types.js';
-import { computeFnv1aHash, transformJavaScript } from '../ast/index.js';
+import type {
+  InternalShieldPayload,
+  InternalTransformOptions,
+  ProtectOptions,
+  UnpeekConfig,
+} from '../types.js';
+import { transformJavaScript } from '../ast/index.js';
+import { computeFnv1aHash } from '../shared/hash.js';
 import { deriveWindowKeySymbol, generateRuntimeShield } from '../runtime/index.js';
 
 const ENTRY_CHUNK_PATTERN = /(?:^|\/)(?:webpack|main|index|runtime|turbopack|pages\/_app|pages\/index)(?:[-._/]|$)/i;
@@ -64,7 +70,7 @@ export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options 
           : ENTRY_CHUNK_PATTERN.test(normalizedFileName);
       const shouldInjectShield = injectRuntimeShield && isEntry;
       const chunkSeed = computeFnv1aHash(chunk.fileName, baseSeed);
-      const result = transformJavaScript(code, {
+      const transformOptions: InternalTransformOptions = {
         seed: chunkSeed,
         minStringLength,
         filename: chunk.fileName,
@@ -77,15 +83,20 @@ export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options 
         detectHeadless,
         aggressive,
         config,
-      });
+      };
+      const result = transformJavaScript(code, transformOptions);
 
       let finalCode = result.code;
+      const integrityCheckFnName =
+        masterShield && 'integrityCheckFnName' in masterShield
+          ? (masterShield as InternalShieldPayload).integrityCheckFnName
+          : undefined;
       if (
         shouldInjectShield &&
         masterShield?.preambleCode &&
         !finalCode.includes('__unpeek_tampered') &&
         !finalCode.includes('(function _u$') &&
-        !finalCode.includes(masterShield.integrityCheckFnName) &&
+        (!integrityCheckFnName || !finalCode.includes(integrityCheckFnName)) &&
         !finalCode.startsWith(masterShield.preambleCode)
       ) {
         finalCode = `${masterShield.preambleCode}\n${finalCode}`;

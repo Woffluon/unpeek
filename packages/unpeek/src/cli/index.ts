@@ -2,23 +2,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DeterrentMode, ProtectOptions, ProtectSummary } from '../types.js';
-import { initProject } from './init.js';
-import { protectProject } from './protect.js';
+import { initProject } from '../core/init.js';
+import { protectProject } from '../core/protect.js';
 
-const VERSION = '1.15.1';
+const VERSION = '2.0.0';
+let cachedPackageVersion: string | undefined;
 
-function getPackageVersion(): string {
+export function getPackageVersion(): string {
+  if (cachedPackageVersion !== undefined) {
+    return cachedPackageVersion;
+  }
   try {
     const pkgUrl = new URL('../../package.json', import.meta.url);
     const content = fs.readFileSync(pkgUrl, 'utf8');
     const parsed = JSON.parse(content) as { version?: string };
-    return parsed.version ?? VERSION;
+    cachedPackageVersion = parsed.version ?? VERSION;
   } catch {
-    return VERSION;
+    cachedPackageVersion = VERSION;
   }
+  return cachedPackageVersion;
 }
-
-const RUNTIME_VERSION = getPackageVersion();
 
 const MARK_TOP = '  \u259B\u2580\u2580\u259C';
 const MARK_BOTTOM = '  \u2599\u2584\u2584\u259F';
@@ -41,7 +44,7 @@ function dim(text: string): string {
 
 function brandBlock(): string {
   return [
-    `${MARK_TOP}  ${paint('1', `unpeek ${RUNTIME_VERSION}`)}`,
+    `${MARK_TOP}  ${paint('1', `unpeek ${getPackageVersion()}`)}`,
     `${MARK_BOTTOM}  ${dim('client bundle protection')}`,
   ].join('\n');
 }
@@ -196,98 +199,185 @@ function printInitResult(
   }
 }
 
-export async function runCli(args: string[]): Promise<void> {
+export type ParsedCliCommand =
+  | { kind: 'help' }
+  | { kind: 'version' }
+  | { kind: 'init'; dryRun: boolean }
+  | { kind: 'protect'; options: ProtectOptions }
+  | { kind: 'error'; message: string };
+
+function readFlagValue(
+  args: string[],
+  index: number,
+  flag: string,
+): { value: string; nextIndex: number } | { error: string } {
+  const arg = args[index];
+  if (arg.startsWith(`${flag}=`)) {
+    const value = arg.slice(flag.length + 1);
+    if (!value) {
+      return { error: `Missing value for ${flag}` };
+    }
+    return { value, nextIndex: index };
+  }
+  const next = args[index + 1];
+  if (!next || next.startsWith('-')) {
+    return { error: `Missing value for ${flag}` };
+  }
+  return { value: next, nextIndex: index + 1 };
+}
+
+function parseNumericFlag(
+  raw: string,
+  flag: string,
+  requireNonNegativeInt = false,
+): { value: number } | { error: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { error: `Invalid numeric value for ${flag}: "${raw}"` };
+  }
+  const parsed = Number(trimmed);
+  if (Number.isNaN(parsed) || !Number.isFinite(parsed)) {
+    return { error: `Invalid numeric value for ${flag}: "${raw}"` };
+  }
+  if (requireNonNegativeInt && (!Number.isInteger(parsed) || parsed < 0)) {
+    return { error: `Invalid non-negative integer for ${flag}: "${raw}"` };
+  }
+  return { value: parsed };
+}
+
+export function parseCliArgs(args: string[], cwd: string = process.cwd()): ParsedCliCommand {
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
-    printHelp();
-    return;
+    return { kind: 'help' };
   }
 
   if (args.includes('--version') || args.includes('-v')) {
-    console.log(VERSION);
-    return;
+    return { kind: 'version' };
   }
 
-  const command = args[0] && !args[0].startsWith('-') ? args[0] : '';
+  const first = args[0];
+  const hasSubcommand = !first.startsWith('-');
 
-  if (command === 'init') {
-    const dryRun = args.includes('--dry-run');
-    const res = initProject(process.cwd(), { dryRun });
-    printInitResult(res, dryRun);
-    return;
-  }
-
-  if (command === 'protect' || (args.length > 0 && args[0].startsWith('-'))) {
-    const options: ProtectOptions = {
-      cwd: process.cwd(),
+  if (hasSubcommand && first !== 'init' && first !== 'protect') {
+    return {
+      kind: 'error',
+      message: `Unknown command "${first}". Run "unpeek --help" for usage.`,
     };
+  }
 
-    for (let i = 0; i < args.length; i++) {
+  if (first === 'init') {
+    let dryRun = false;
+    for (let i = 1; i < args.length; i++) {
       const arg = args[i];
-      if (arg === 'protect') {
-        continue;
-      } else if (arg === '--out-dir' && args[i + 1]) {
-        options.outDir = args[++i];
-      } else if (arg.startsWith('--out-dir=')) {
-        options.outDir = arg.slice('--out-dir='.length);
-      } else if (arg === '--seed' && args[i + 1]) {
-        const parsed = Number(args[++i]);
-        if (!Number.isNaN(parsed)) {
-          options.seed = parsed;
-        }
-      } else if (arg.startsWith('--seed=')) {
-        const parsed = Number(arg.slice('--seed='.length));
-        if (!Number.isNaN(parsed)) {
-          options.seed = parsed;
-        }
-      } else if (arg === '--min-string-length' && args[i + 1]) {
-        const parsed = Number(args[++i]);
-        if (!Number.isNaN(parsed)) {
-          options.minStringLength = parsed;
-        }
-      } else if (arg.startsWith('--min-string-length=')) {
-        const parsed = Number(arg.slice('--min-string-length='.length));
-        if (!Number.isNaN(parsed)) {
-          options.minStringLength = parsed;
-        }
-      } else if (arg === '--private-maps-dir' && args[i + 1]) {
-        options.privateMapsDir = args[++i];
-      } else if (arg.startsWith('--private-maps-dir=')) {
-        options.privateMapsDir = arg.slice('--private-maps-dir='.length);
-      } else if (arg === '--aggressive') {
-        options.aggressive = true;
-      } else if (arg === '--no-shield') {
-        options.injectRuntimeShield = false;
-      } else if (arg === '--passive') {
-        options.deterrentMode = 'passive' as DeterrentMode;
-      } else if (arg === '--gradual') {
-        options.deterrentMode = 'gradual' as DeterrentMode;
-      } else if (arg === '--detect-headless') {
-        options.detectHeadless = true;
-      } else if (arg === '--no-maps') {
-        options.keepPrivateMaps = false;
+      if (arg === '--dry-run') {
+        dryRun = true;
+      } else {
+        return {
+          kind: 'error',
+          message: `Unknown option "${arg}" for init. Run "unpeek --help" for usage.`,
+        };
       }
     }
-
-    const summary = await protectProject(options);
-    printSummaryTable(summary);
-    return;
+    return { kind: 'init', dryRun };
   }
 
-  printHelp();
+  const options: ProtectOptions = { cwd };
+  const startIndex = first === 'protect' ? 1 : 0;
+
+  for (let i = startIndex; i < args.length; i++) {
+    const arg = args[i];
+
+    if (arg === '--out-dir' || arg.startsWith('--out-dir=')) {
+      const res = readFlagValue(args, i, '--out-dir');
+      if ('error' in res) return { kind: 'error', message: res.error };
+      options.outDir = res.value;
+      i = res.nextIndex;
+    } else if (arg === '--private-maps-dir' || arg.startsWith('--private-maps-dir=')) {
+      const res = readFlagValue(args, i, '--private-maps-dir');
+      if ('error' in res) return { kind: 'error', message: res.error };
+      options.privateMapsDir = res.value;
+      i = res.nextIndex;
+    } else if (arg === '--seed' || arg.startsWith('--seed=')) {
+      const res = readFlagValue(args, i, '--seed');
+      if ('error' in res) return { kind: 'error', message: res.error };
+      const num = parseNumericFlag(res.value, '--seed');
+      if ('error' in num) return { kind: 'error', message: num.error };
+      options.seed = num.value;
+      i = res.nextIndex;
+    } else if (arg === '--min-string-length' || arg.startsWith('--min-string-length=')) {
+      const res = readFlagValue(args, i, '--min-string-length');
+      if ('error' in res) return { kind: 'error', message: res.error };
+      const num = parseNumericFlag(res.value, '--min-string-length', true);
+      if ('error' in num) return { kind: 'error', message: num.error };
+      options.minStringLength = num.value;
+      i = res.nextIndex;
+    } else if (arg === '--aggressive') {
+      options.aggressive = true;
+    } else if (arg === '--no-shield') {
+      options.injectRuntimeShield = false;
+    } else if (arg === '--passive') {
+      options.deterrentMode = 'passive' as DeterrentMode;
+    } else if (arg === '--gradual') {
+      options.deterrentMode = 'gradual' as DeterrentMode;
+    } else if (arg === '--detect-headless') {
+      options.detectHeadless = true;
+    } else if (arg === '--no-maps') {
+      options.keepPrivateMaps = false;
+    } else {
+      return {
+        kind: 'error',
+        message: `Unknown option "${arg}". Run "unpeek --help" for usage.`,
+      };
+    }
+  }
+
+  return { kind: 'protect', options };
 }
 
-if (process.argv[1]) {
-  try {
-    const executedPath = path.resolve(process.argv[1]);
-    const currentPath = fileURLToPath(import.meta.url);
-    if (executedPath === currentPath) {
-      runCli(process.argv.slice(2)).catch((err) => {
-        console.error('[unpeek] fatal error:', err instanceof Error ? err.message : String(err));
-        process.exit(1);
-      });
+export async function runCli(args: string[]): Promise<void> {
+  const parsed = parseCliArgs(args, process.cwd());
+
+  switch (parsed.kind) {
+    case 'help':
+      printHelp();
+      return;
+    case 'version':
+      console.log(getPackageVersion());
+      return;
+    case 'error':
+      console.error(`[unpeek] ${parsed.message}`);
+      process.exitCode = 1;
+      return;
+    case 'init': {
+      const res = initProject(process.cwd(), { dryRun: parsed.dryRun });
+      printInitResult(res, parsed.dryRun);
+      return;
     }
-  } catch {
-    // ignore
+    case 'protect': {
+      const summary = await protectProject(parsed.options);
+      printSummaryTable(summary);
+      return;
+    }
   }
+}
+
+function isDirectCliExecution(argv1: string | undefined): boolean {
+  if (!argv1) return false;
+  try {
+    const executedPath = fs.realpathSync(path.resolve(argv1));
+    const currentPath = fs.realpathSync(fileURLToPath(import.meta.url));
+    if (process.platform === 'win32') {
+      return executedPath.toLowerCase() === currentPath.toLowerCase();
+    }
+    return executedPath === currentPath;
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectCliExecution(process.argv[1])) {
+  runCli(process.argv.slice(2)).catch((err) => {
+    console.error('[unpeek] fatal error:', err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
 }
 

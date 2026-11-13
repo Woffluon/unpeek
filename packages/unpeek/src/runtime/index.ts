@@ -1,4 +1,4 @@
-import type { ShieldConfig, ShieldPayload } from '../types.js';
+import type { InternalShieldPayload, ShieldConfig, ShieldPayload } from '../types.js';
 import { computeIntegrityHash, verifyCodeIntegrity } from './integrity-guard.js';
 import {
   createDeterrentSnippet,
@@ -32,13 +32,14 @@ export function generateRuntimeShield(config: ShieldConfig): ShieldPayload {
       ? config.expectedDelta & 0xffff
       : (computedHash >>> 0) & 0xffff;
 
-  return {
+  const payload: InternalShieldPayload = {
     preambleCode,
     integrityCheckFnName,
     expectedHash,
     windowKeySymbol,
     expectedDelta,
   };
+  return payload;
 }
 
 export { computeIntegrityHash, verifyCodeIntegrity } from './integrity-guard.js';

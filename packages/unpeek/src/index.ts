@@ -12,6 +12,7 @@ export type {
   ProtectSummary,
   SemanticAnchorsConfig,
   ShieldConfig,
+  ShieldOptionsConfig,
   ShieldPayload,
   SourcemapsConfig,
   SourceMapVaultResult,
@@ -22,36 +23,8 @@ export type {
   ViteConfigOptions,
 } from './types.js';
 
-export {
-  DEFAULT_CONFIG,
-  defineConfig,
-  findConfigFile,
-  loadUnpeekConfig,
-  mergeUnpeekConfig,
-  resolveUnpeekConfigSync,
-} from './config.js';
-
-export {
-  transformJavaScript,
-  detectHotPaths,
-  computeFnv1aHash,
-} from './ast/index.js';
-export {
-  generateRuntimeShield,
-  computeIntegrityHash,
-  verifyCodeIntegrity,
-  createDeterrentSnippet,
-} from './runtime/index.js';
-export { detectTargetFramework, scanClientBundles, SUPPORTED_EXTENSIONS } from './bundler/detector.js';
-export { relocateSourceMaps } from './bundler/sourcemap-vault.js';
-export {
-  unpeekPlugin,
-  vitePlugin,
-  webpackPlugin,
-  rollupPlugin,
-  esbuildPlugin,
-} from './bundler/unplugin.js';
-export { initProject } from './cli/init.js';
-export { protectProject } from './cli/protect.js';
-export { runCli } from './cli/index.js';
-export { withUnpeek, createUnpeekNextAdapter } from './next/index.js';
+export { defineConfig, loadUnpeekConfig } from './config.js';
+export { transformJavaScript } from './ast/index.js';
+export { initProject, type InitOptions, type InitResult } from './core/init.js';
+export { protectProject } from './core/protect.js';
+export { UnpeekError, type UnpeekErrorCode } from './errors.js';

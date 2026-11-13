@@ -1,13 +1,21 @@
-import { createUnpeekNextAdapter, type NextAdapterContext } from './index.js';
+import {
+  createUnpeekNextAdapter,
+  readUnpeekNextOptionsFromEnv,
+  type NextAdapterContext,
+  type NextConfigObject,
+} from './index.js';
 
-const options = typeof globalThis !== 'undefined' ? (globalThis as any).__unpeekNextOptions : undefined;
+const options = readUnpeekNextOptionsFromEnv();
 const adapter = createUnpeekNextAdapter(options);
 
 export default adapter;
 
 export const name = adapter.name;
 
-export async function modifyConfig(config: any, context?: any) {
+export async function modifyConfig(
+  config: NextConfigObject,
+  context?: Record<string, unknown>
+): Promise<NextConfigObject> {
   if (typeof adapter.modifyConfig === 'function') {
     return adapter.modifyConfig(config, context);
   }

@@ -61,7 +61,20 @@ export default defineConfig({
 
 This guarantees unpeek locates client chunks under `<distDir>/static/chunks` while keeping `<distDir>/server` and SSR assets strictly untouched.
 
-### Option B: `next.config.mjs` with Webpack Plugin
+### Option B: Next.js >= 16.2 Build Adapter (`unpeek/next`)
+For Next.js >= 16.2 (including Turbopack), wrap your config with `withUnpeek` from `unpeek/next` (automatically wired by `npx unpeek init`):
+```js
+// next.config.mjs (or CommonJS: const { withUnpeek } = require('unpeek/next');)
+import { withUnpeek } from 'unpeek/next';
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {};
+
+export default withUnpeek(nextConfig);
+```
+> **Security Note:** `upstreamAdapterPath` / `UNPEEK_UPSTREAM_ADAPTER_PATH` dynamically imports an upstream adapter module at build time. Only set it in trusted project contexts.
+
+### Option C: `next.config.mjs` with Webpack Plugin (Next.js < 16.2)
 For chunk protection during the compilation lifecycle:
 ```js
 // next.config.mjs
@@ -100,7 +113,7 @@ export default defineConfig({
   plugins: [
     react(),
     unpeek({
-      deterrentMode: 'gradual',
+      deterrentMode: 'passive',
       minStringLength: 4,
     }),
   ],
@@ -131,6 +144,7 @@ export default defineConfig({
 ## 4. Webpack & Rspack Integration
 
 ### Subpath Import (`unpeek/webpack`)
+`unpeek` and all subpaths natively support both ESM `import` and CommonJS `require(...)` (with `default` export for bundler subpaths):
 ```js
 // webpack.config.js
 const unpeek = require('unpeek/webpack');
@@ -139,7 +153,7 @@ module.exports = {
   mode: 'production',
   plugins: [
     unpeek({
-      deterrentMode: 'gradual',
+      deterrentMode: 'passive',
       seed: 0x42f00d,
     }),
   ],
@@ -186,7 +200,10 @@ await esbuild.build({
 
 | Subpath | Bundler Target |
 | :--- | :--- |
-| `unpeek` | Universal programmatic API & CLI exports |
+| `unpeek` | Narrowed root API (`protectProject`, `transformJavaScript`, `initProject`, `defineConfig`, `loadUnpeekConfig`, `UnpeekError`, `UnpeekErrorCode`, types) |
+| `unpeek/config` | Configuration utilities (`defineConfig`, `loadUnpeekConfig`, `findConfigFile`, `mergeUnpeekConfig`, `DEFAULT_CONFIG`) |
+| `unpeek/next` | Next.js >= 16.2 Build Adapter (`withUnpeek`, `createUnpeekNextAdapter`) |
+| `unpeek/next/adapter` | Next.js adapter entry referenced by `adapterPath` |
 | `unpeek/unplugin` | Base Unplugin instance (`unpeekPlugin`, `vitePlugin`, `webpackPlugin`, etc.) |
 | `unpeek/vite` | Dedicated Vite plugin export |
 | `unpeek/webpack` | Dedicated Webpack / Rspack plugin export |

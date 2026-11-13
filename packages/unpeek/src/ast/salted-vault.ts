@@ -104,8 +104,8 @@ export function createSaltedDecryptorFnAst(
 export function createSaltedVaultHelperAst(
   decryptFnName: string,
   encryptedPayloads: string[],
-  fnAst: any
-): any {
+  fnAst: acorn.Expression | Omit<acorn.Node, 'start' | 'end'>
+): acorn.VariableDeclaration {
   return {
     type: 'VariableDeclaration',
     kind: 'var',
@@ -130,7 +130,7 @@ export function createSaltedVaultHelperAst(
         },
       },
     ],
-  };
+  } as unknown as acorn.VariableDeclaration;
 }
 
 /**

@@ -1,4 +1,5 @@
 import { generate, baseGenerator, type Generator, type State } from 'astring';
+import type * as acorn from 'acorn';
 
 export type PolymorphicRole =
   | 'vault'
@@ -423,8 +424,10 @@ export const compactGenerator: Generator = Object.assign({}, baseGenerator, {
  * Generates compact, single-line JavaScript using custom astring rules to eliminate
  * redundant whitespace while preserving string literal contents and language semantics.
  */
-export function generateCompactJs(ast: any): string {
-  return generate(ast, {
+export function generateCompactJs(
+  ast: Omit<acorn.Node, 'start' | 'end'>
+): string {
+  return generate(ast as Parameters<typeof generate>[0], {
     generator: compactGenerator,
     indent: '',
     lineEnd: '',

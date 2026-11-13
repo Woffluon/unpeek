@@ -42,11 +42,11 @@ console.log(result.message);
 ## 2. Configuration Functions
 
 ### `defineConfig(config: UnpeekConfig): UnpeekConfig`
-Type helper providing IDE auto-completion and static verification for `unpeek.config.js`, `unpeek.config.mjs`, or `unpeek.config.ts`.
+Type helper providing IDE auto-completion and static verification for `unpeek.config.js`, `unpeek.config.mjs`, or `unpeek.config.cjs`. Re-exported from `unpeek` and `unpeek/config`.
 
 ```ts
 // unpeek.config.js
-import { defineConfig } from 'unpeek';
+import { defineConfig } from 'unpeek/config';
 
 export default defineConfig({
   target: 'browser',
@@ -71,14 +71,14 @@ Searches `cwd` (default: `process.cwd()`) for configuration candidates in order:
 Returns the absolute path to the configuration file, or `null` if none exists.
 
 ```ts
-import { findConfigFile } from 'unpeek';
+import { findConfigFile } from 'unpeek/config';
 
 const configPath = findConfigFile(process.cwd());
 // => '/workspace/unpeek.config.js' or null
 ```
 
 ### `loadUnpeekConfig(cwd?: string, explicitConfig?: UnpeekConfig): Promise<UnpeekConfig>`
-Asynchronously locates, parses, normalizes regexes, and merges project configuration with `DEFAULT_CONFIG` and optional explicit overrides. Supports ESM modules, CommonJS, and JSON.
+Asynchronously locates, parses, normalizes regexes, and merges project configuration with `DEFAULT_CONFIG` and optional explicit overrides. Supports ESM modules, CommonJS, and JSON. Throws `UnpeekError` (`ERR_CONFIG_INVALID` or `ERR_CONFIG_LOAD`) on malformed or non-object config files.
 
 ```ts
 import { loadUnpeekConfig } from 'unpeek';
@@ -92,7 +92,7 @@ const resolvedConfig = await loadUnpeekConfig(process.cwd(), {
 Performs a deep merge between two `UnpeekConfig` objects. Combines string arrays, merges nested objects (`hotPath`, `vault`, `mangler`, `sourcemaps`, `filter`, `next`, `vite`), and preserves regex instances.
 
 ```ts
-import { DEFAULT_CONFIG, mergeUnpeekConfig } from 'unpeek';
+import { DEFAULT_CONFIG, mergeUnpeekConfig } from 'unpeek/config';
 
 const customConfig = mergeUnpeekConfig(DEFAULT_CONFIG, {
   hotPath: {
@@ -311,8 +311,28 @@ export interface ProtectSummary {
 export interface InitResult {
   updatedPackageJson: boolean;
   updatedGitignore: boolean;
+  updatedNextConfig?: boolean;
   framework?: string;
+  isNext162Plus?: boolean;
   message: string;
+}
+```
+
+### `UnpeekError` & `UnpeekErrorCode`
+Structured error class exported from `unpeek` for deterministic error handling across config loading, CLI validation, AST parsing, and Next.js adapter chaining:
+```ts
+export type UnpeekErrorCode =
+  | 'ERR_CONFIG_INVALID'
+  | 'ERR_CONFIG_LOAD'
+  | 'ERR_INIT_INVALID_PACKAGE_JSON'
+  | 'ERR_SECURITY_PATH_TRAVERSAL'
+  | 'ERR_CLI_INVALID_ARGS'
+  | 'ERR_PARSE_FAILED'
+  | 'ERR_NEXT_ADAPTER';
+
+export declare class UnpeekError extends Error {
+  readonly code: UnpeekErrorCode;
+  constructor(code: UnpeekErrorCode, message: string, options?: { cause?: unknown });
 }
 ```
 

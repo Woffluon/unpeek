@@ -10,6 +10,7 @@ import {
   mergeUnpeekConfig,
   resolveUnpeekConfigSync,
 } from '../src/config.js';
+import { UnpeekError } from '../src/errors.js';
 import type { UnpeekConfig } from '../src/types.js';
 
 describe('Unpeek Config System', () => {
@@ -221,6 +222,37 @@ describe('Unpeek Config System', () => {
       const config = await loadUnpeekConfig(tempDir);
       expect(config.framework).toBe('webpack');
       expect(config.vault?.cssFramework).toBe('unocss');
+    });
+  });
+
+  describe('error handling (UnpeekError)', () => {
+    it('throws ERR_CONFIG_INVALID consistently in both loadUnpeekConfig and resolveUnpeekConfigSync on malformed JSON', async () => {
+      const filePath = join(tempDir, 'unpeek.config.json');
+      writeFileSync(filePath, '{ invalid json }', 'utf8');
+
+      await expect(loadUnpeekConfig(tempDir)).rejects.toMatchObject({
+        name: 'UnpeekError',
+        code: 'ERR_CONFIG_INVALID',
+      });
+
+      let syncErr: unknown;
+      try {
+        resolveUnpeekConfigSync(tempDir);
+      } catch (err) {
+        syncErr = err;
+      }
+      expect(syncErr).toBeInstanceOf(UnpeekError);
+      expect((syncErr as UnpeekError).code).toBe('ERR_CONFIG_INVALID');
+    });
+
+    it('throws ERR_CONFIG_INVALID when JSON config is not an object', async () => {
+      const filePath = join(tempDir, 'unpeek.config.json');
+      writeFileSync(filePath, '["not", "an", "object"]', 'utf8');
+
+      await expect(loadUnpeekConfig(tempDir)).rejects.toMatchObject({
+        code: 'ERR_CONFIG_INVALID',
+      });
+      expect(() => resolveUnpeekConfigSync(tempDir)).toThrowError(UnpeekError);
     });
   });
 });

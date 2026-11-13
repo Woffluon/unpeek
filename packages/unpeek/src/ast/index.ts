@@ -1,10 +1,19 @@
-import type { TransformOptions, TransformResult } from '../types.js';
+import type * as acorn from 'acorn';
+import type {
+  InternalShieldPayload,
+  InternalTransformOptions,
+  InternalTransformResult,
+  TransformOptions,
+  TransformResult,
+} from '../types.js';
+import { UnpeekError, type UnpeekErrorCode } from '../errors.js';
+import { computeFnv1aHash } from '../shared/hash.js';
 import {
   analyzeAstHotPaths,
   detectHotPaths,
   parseJavaScriptAst,
 } from './hot-path-detector.js';
-import { applyStringVault, computeFnv1aHash } from './string-vault.js';
+import { applyStringVault } from './string-vault.js';
 import { applyPolymorphicMangler } from './polymorphic-mangler.js';
 import { applyColdFlowGuard } from './cold-flow-guard.js';
 import { generateCompactJs, derivePolymorphicIdent } from './codegen.js';
@@ -12,21 +21,15 @@ import { applyMicroVm } from './micro-vm.js';
 import { applySaltedStringVault } from './salted-vault.js';
 import { deriveWindowKeySymbol, generateRuntimeShield } from '../runtime/index.js';
 
-export { detectHotPaths, analyzeAstHotPaths } from './hot-path-detector.js';
-export { applyStringVault, computeFnv1aHash } from './string-vault.js';
-export { applyPolymorphicMangler } from './polymorphic-mangler.js';
-export { applyColdFlowGuard } from './cold-flow-guard.js';
-export { generateCompactJs, derivePolymorphicIdent } from './codegen.js';
-export { applyMicroVm } from './micro-vm.js';
-export { injectWasmVault } from './wasm-vault.js';
-export { applySaltedStringVault } from './salted-vault.js';
+export { detectHotPaths, computeFnv1aHash, UnpeekError };
+export type { UnpeekErrorCode };
 
-function isAstAlreadyProtected(ast: any): boolean {
+function isAstAlreadyProtected(ast: acorn.Program): boolean {
   if (!ast || !Array.isArray(ast.body)) return false;
-  return ast.body.some((stmt: any) => {
+  return ast.body.some((stmt) => {
     if (stmt.type === 'VariableDeclaration' && Array.isArray(stmt.declarations)) {
       for (const d of stmt.declarations) {
-        const name = d.id?.name;
+        const name = d.id?.type === 'Identifier' ? d.id.name : undefined;
         if (typeof name === 'string') {
           if (
             name === '_d' ||
@@ -74,13 +77,14 @@ export function transformJavaScript(
   code: string,
   options: TransformOptions = {}
 ): TransformResult {
-  const seed = options.seed ?? 0x9e3779b9;
+  const internalOptions = options as InternalTransformOptions;
+  const seed = internalOptions.seed ?? 0x9e3779b9;
   const minStringLength =
     options.minStringLength ?? options.config?.vault?.minStringLength ?? 4;
   const isAggressive = options.aggressive ?? false;
 
   if (!code || !code.trim()) {
-    return {
+    const emptyResult: InternalTransformResult = {
       code,
       encryptedStringsCount: 0,
       mangledSymbolsCount: 0,
@@ -93,11 +97,19 @@ export function transformJavaScript(
       virtualizedFunctionsCount: 0,
       shaderBuffersCount: 0,
     };
+    return emptyResult;
   }
 
   const ast = parseJavaScriptAst(code);
-  if (!ast || isAstAlreadyProtected(ast)) {
-    return {
+  if (!ast) {
+    if (options.strict) {
+      const targetLabel = options.filename ? ` "${options.filename}"` : '';
+      throw new UnpeekError(
+        'ERR_PARSE_FAILED',
+        `Failed to parse JavaScript${targetLabel}.`
+      );
+    }
+    const unparsedResult: InternalTransformResult = {
       code,
       encryptedStringsCount: 0,
       mangledSymbolsCount: 0,
@@ -110,6 +122,23 @@ export function transformJavaScript(
       virtualizedFunctionsCount: 0,
       shaderBuffersCount: 0,
     };
+    return unparsedResult;
+  }
+  if (isAstAlreadyProtected(ast)) {
+    const protectedResult: InternalTransformResult = {
+      code,
+      encryptedStringsCount: 0,
+      mangledSymbolsCount: 0,
+      hotPathReport: {
+        totalFunctions: 0,
+        hotFunctionsSkipped: [],
+        coldFunctionsProtected: [],
+      },
+      integrityToken: computeFnv1aHash(code, seed),
+      virtualizedFunctionsCount: 0,
+      shaderBuffersCount: 0,
+    };
+    return protectedResult;
   }
 
   // 1. Detect hot paths (loops, array HOF callbacks, rAF, UI components, and their callees)
@@ -122,22 +151,22 @@ export function transformJavaScript(
   } = analyzeAstHotPaths(ast, options.config);
 
   const shieldCoupled =
-    options.shieldCoupled ?? Boolean(options.injectRuntimeShield);
+    internalOptions.shieldCoupled ?? Boolean(internalOptions.injectRuntimeShield);
   const deterrentMode =
-    options.deterrentMode ?? options.config?.shield?.deterrentMode ?? 'passive';
+    internalOptions.deterrentMode ?? internalOptions.config?.shield?.deterrentMode ?? 'passive';
   const detectHeadless =
-    options.detectHeadless ?? options.config?.shield?.detectHeadless ?? false;
+    internalOptions.detectHeadless ?? internalOptions.config?.shield?.detectHeadless ?? false;
   const sym = shieldCoupled
-    ? options.windowKeySymbol ?? deriveWindowKeySymbol(seed)
+    ? internalOptions.windowKeySymbol ?? deriveWindowKeySymbol(seed)
     : undefined;
-  let shieldDelta = shieldCoupled ? options.expectedDelta : undefined;
+  let shieldDelta = shieldCoupled ? internalOptions.expectedDelta : undefined;
   if (shieldCoupled && shieldDelta === undefined) {
     const shieldInfo = generateRuntimeShield({
       seed,
       windowKeySymbol: sym,
       deterrentMode,
       detectHeadless,
-    });
+    }) as InternalShieldPayload;
     shieldDelta = shieldInfo.expectedDelta ?? 0;
   }
 
@@ -206,7 +235,7 @@ export function transformJavaScript(
   const outputCode = generateCompactJs(ast);
 
   let finalCode = outputCode;
-  if (options.injectRuntimeShield && !options.skipShieldPreamble) {
+  if (internalOptions.injectRuntimeShield && !internalOptions.skipShieldPreamble) {
     const shield = generateRuntimeShield({
       seed,
       windowKeySymbol: sym,
@@ -220,7 +249,7 @@ export function transformJavaScript(
     }
   }
 
-  return {
+  const finalResult: InternalTransformResult = {
     code: finalCode,
     encryptedStringsCount,
     mangledSymbolsCount,
@@ -229,4 +258,5 @@ export function transformJavaScript(
     virtualizedFunctionsCount,
     shaderBuffersCount,
   };
+  return finalResult;
 }
