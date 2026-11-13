@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { DetectedFramework, UnpeekConfig } from '../types.js';
+import type { UnpeekConfig, UnpeekFramework } from '../config.js';
 
 export const SUPPORTED_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 
@@ -86,7 +86,7 @@ export function detectTargetFramework(
   cwd: string,
   explicitOutDir?: string,
   explicitConfig?: UnpeekConfig
-): { framework: DetectedFramework; outDir: string };
+): { framework: UnpeekFramework; outDir: string };
 /**
  * @deprecated Passing `UnpeekConfig` as the second argument (`explicitOutDir`) is deprecated.
  * Pass `explicitOutDir?: string` as the second argument and `explicitConfig?: UnpeekConfig` as the third.
@@ -95,12 +95,12 @@ export function detectTargetFramework(
   cwd: string,
   explicitOutDir?: string | UnpeekConfig,
   explicitConfig?: UnpeekConfig
-): { framework: DetectedFramework; outDir: string };
+): { framework: UnpeekFramework; outDir: string };
 export function detectTargetFramework(
   cwd: string,
   explicitOutDir?: string | UnpeekConfig,
   explicitConfig?: UnpeekConfig
-): { framework: DetectedFramework; outDir: string } {
+): { framework: UnpeekFramework; outDir: string } {
   let config: UnpeekConfig | undefined = explicitConfig;
   let outDirOverride: string | undefined;
 
@@ -112,7 +112,7 @@ export function detectTargetFramework(
   }
 
   const rootDir = path.resolve(cwd);
-  let framework: DetectedFramework | undefined = config?.framework;
+  let framework: UnpeekFramework | undefined = config?.framework;
 
   // Auto-discover Next distDir & Vite outDir/assetsDir
   const discoveredNextDist = extractConfigValue(

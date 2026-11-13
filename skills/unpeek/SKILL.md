@@ -19,10 +19,11 @@ Zero-config, call-graph-aware client-side JavaScript protection and source map i
 
 ## Quick Workflow
 
-1. **Initialize**: Run `npx unpeek init` to wire `"postbuild": "unpeek protect"` in `package.json` and add `.unpeek-maps/` to `.gitignore`.
-2. **Configure (Optional)**: Declare settings in `unpeek.config.js` via `defineConfig` to tune hot paths, vaults, mangling, or framework options.
+1. **Initialize**: Run `npx unpeek init` (optionally with `--dry-run` or `--profile <minimal|recommended|strict>`) to wire `"postbuild": "unpeek protect"` in `package.json` and add `.unpeek-maps/` to `.gitignore`.
+2. **Configure (Optional)**: Declare settings in `unpeek.config.js` via `defineConfig` and `PRESETS` to tune hot paths, vaults, mangling, or framework options.
 3. **Build**: Run the project's standard production build (`npm run build`).
-4. **Protect**: `unpeek protect` runs post-build under Tier 1 (<2% CPU, <15% Gzip). Append `--aggressive` for Tier 2 defense (Micro-VM & WASM KDF).
+4. **Protect**: `unpeek protect` runs post-build under Tier 1 (<2% CPU, <15% Gzip). Append `--aggressive` for Tier 2 defense (Micro-VM & WASM KDF), `--dry-run` to preview, or `--max-gzip-delta <percent>` to enforce a budget.
+5. **Verify & Symbolicate**: Run `npx unpeek check` as a read-only CI gate and `npx unpeek symbolicate` to resolve production stack traces locally using `.unpeek-maps/`.
 
 ## Two-Tier Defense Architecture
 
@@ -33,9 +34,9 @@ Zero-config, call-graph-aware client-side JavaScript protection and source map i
 
 Direct requests to the relevant modular guide:
 
-- **CLI & Zero-Config Setup**: See [Quickstart Guide](references/quickstart.md) for syntax, `unpeek.config.js` setup, postbuild hooks, and CLI flags (`--out-dir`, `--seed`, `--passive`, `--min-string-length`, `--private-maps-dir`, `--no-shield`, `--aggressive`).
-- **Framework Integrations**: See [Frameworks Guide](references/frameworks.md) for Next.js (SSR boundary, custom `distDir` in `unpeek.config.ts`), Vite, Webpack, Rollup, and subpath imports (`unpeek/vite`, `unpeek/webpack`, `unpeek/unplugin`).
+- **CLI & Zero-Config Setup**: See [Quickstart Guide](references/quickstart.md) for `init`, `protect`, `check`, `symbolicate`, `unpeek.config.js` setup, and CLI flags (`--profile`, `--dry-run`, `--max-gzip-delta`, `--out-dir`, `--seed`, `--passive`, `--min-string-length`, `--private-maps-dir`, `--no-shield`, `--aggressive`).
+- **Framework Integrations**: See [Frameworks Guide](references/frameworks.md) for Next.js (`phase`-aware `withUnpeek`, SSR boundary, custom `distDir`), Vite, Webpack, Rspack, Rollup, and subpath imports (`unpeek/vite`, `unpeek/webpack`, `unpeek/rspack`, `unpeek/unplugin`).
 - **Core Architecture & Performance**: See [Architecture Guide](references/architecture.md) for two-tier defense, 3-tier hot-path exemption (loops, rAF, useFrame), shader vault, Bytecode Micro-VM, WASM KDF, O(1) string vault, and runtime shield.
-- **Source Map Vaulting & Security**: See [Source Maps Guide](references/sourcemaps.md) for `.unpeek-maps/` relocation, `sourceMappingURL` stripping, Sentry/Datadog CI workflows, and `.dockerignore` best practices.
-- **Programmatic API**: See [API Reference](references/api.md) for `protectProject()`, `transformJavaScript()`, `initProject()`, config helpers (`defineConfig`, `loadUnpeekConfig`), and TypeScript types (`UnpeekConfig`, `ProtectOptions`, `ProtectSummary`).
+- **Source Map Vaulting & Security**: See [Source Maps Guide](references/sourcemaps.md) for `.unpeek-maps/` relocation, `sourceMappingURL` stripping, `unpeek check` / `unpeek symbolicate`, Sentry/Datadog CI workflows, and `.dockerignore` best practices.
+- **Programmatic API**: See [API Reference](references/api.md) for `protectProject()`, `transformJavaScript()`, `initProject()`, `checkProject()`, `symbolicateStackTrace()`, `PRESETS`, `isUnpeekError`, config helpers (`defineConfig`, `loadUnpeekConfig`), and TypeScript types (`UnpeekConfig`, `ProtectOptions`, `ProtectSummary`, `UnpeekDiagnostic`, `TransformResult`).
 - **Operational Recipes & Troubleshooting**: See [Recipes Guide](references/recipes.md) for Next.js SSR hydration solutions, telemetry hooks, and deterministic CI seeds.

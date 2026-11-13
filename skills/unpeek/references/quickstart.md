@@ -97,8 +97,17 @@ unpeek provides two distinct defense tiers depending on security and performance
 
 ## 4. CLI Command Options & Flags
 
+Subcommands:
+- `unpeek init [--dry-run] [--profile <minimal|recommended|strict>]` — wire `postbuild` and `.unpeek-maps/`.
+- `unpeek protect [options]` — protect client bundles in place (default command).
+- `unpeek check [--out-dir <dir>] [--max-gzip-delta <num>] [--require-zero-eval] [--private-maps-dir <dir>] [--json]` — read-only CI gate for leaked `.map` files, `sourceMappingURL` comments, ignore entries, Gzip budget, and `eval()`/`new Function()`.
+- `unpeek symbolicate [--maps-dir <dir>] [--trace <str> | --file <path>]` — resolve production stack traces locally using `.unpeek-maps/`.
+
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
+| `--profile <name>` | `'minimal' \| 'recommended' \| 'strict'` | — | Preset protection profile (`init` / `protect`). |
+| `--dry-run` | `boolean` | `false` | Compute transform & Gzip delta in memory without writing files (`init` / `protect`). |
+| `--max-gzip-delta <num>` | `number` | `15` (`check`) | Fail if Gzip delta exceeds percentage (`protect` / `check`). |
 | `--out-dir <dir>` | `string` | Auto-detected | Explicit client output directory override. |
 | `--seed <number>` | `number` | Random per build | Deterministic polymorphic seed for reproducible CI builds. |
 | `--passive` | `boolean` | `true` (default) | Passive deterrent mode (telemetry event only; does not mute console). |

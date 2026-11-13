@@ -1,6 +1,7 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
-import type { DeterrentMode, UnpeekConfig } from '../types.js';
+import type { DeterrentMode } from '../runtime/types.js';
+import type { UnpeekConfig } from '../config.js';
 import {
   computeFnv1aHash,
   SAFE_ALPHA,
@@ -11,7 +12,9 @@ import {
 } from './string-vault.js';
 import { generateCompactJs } from './codegen.js';
 import { fallbackKdf, injectWasmVault } from './wasm-vault.js';
-import { deriveWindowKeySymbol, generateRuntimeShield } from '../runtime/index.js';
+import { generateRuntimeShield } from '../runtime/index.js';
+import { deriveWindowKeySymbol } from '../internal/runtime.js';
+import { isNodeInExemptSubtree } from './boundary-classifier.js';
 
 export interface SaltedVaultResult {
   encryptedStringsCount: number;
@@ -209,7 +212,8 @@ export function applySaltedStringVault(
   expectedDelta?: number,
   deterrentMode?: DeterrentMode,
   shieldCoupled = true,
-  detectHeadless = false
+  detectHeadless = false,
+  exemptSubtreeRoots?: WeakSet<acorn.Node>
 ): SaltedVaultResult {
   if (isAstAlreadySalted(ast)) {
     return {
@@ -251,6 +255,10 @@ export function applySaltedStringVault(
 
       const parent = ancestors[ancestors.length - 2];
       if (!parent) return;
+
+      if (isNodeInExemptSubtree(ancestors, exemptSubtreeRoots)) {
+        return;
+      }
 
       if (
         parent.type === 'ExpressionStatement' &&

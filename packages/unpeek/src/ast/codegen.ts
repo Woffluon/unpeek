@@ -418,6 +418,21 @@ export const compactGenerator: Generator = Object.assign({}, baseGenerator, {
     }
     state.write(';');
   },
+
+  ImportExpression(this: any, node: any, state: any) {
+    state.write('import(');
+    if (Array.isArray(node.source?.comments) && node.source.comments.length > 0) {
+      for (const c of node.source.comments) {
+        state.write(c.type === 'Block' ? `/*${c.value}*/` : `//${c.value}\n`);
+      }
+    }
+    this[node.source.type](node.source, state);
+    if (node.options != null) {
+      state.write(',');
+      this[node.options.type](node.options, state);
+    }
+    state.write(')');
+  },
 } as any);
 
 /**

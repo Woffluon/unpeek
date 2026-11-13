@@ -3,9 +3,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
-import type { ProtectOptions, ProtectSummary, UnpeekConfig } from '../types.js';
-import { protectProject } from '../core/protect.js';
-import { computeFnv1aHash } from '../shared/hash.js';
+import type { ProtectOptions, ProtectSummary } from '../../core/types.js';
+import type { UnpeekConfig } from '../../config.js';
+import { protectProject } from '../../core/protect.js';
+import { computeFnv1aHash } from '../../shared/hash.js';
+import { UnpeekError } from '../../shared/errors.js';
+import { serializeNextOptions } from '../../internal/next.js';
+
+const MAX_NEXT_OPTIONS_ENV_BYTES = 32_767;
 
 export interface NextStaticFileOutput {
   filePath?: string;
@@ -20,13 +25,20 @@ export interface NextConfigObject {
   [key: string]: unknown;
 }
 
-export type NextConfigLike =
-  | NextConfigObject
-  | ((...args: never[]) => NextConfigObject | Promise<NextConfigObject>);
+export type NextConfigFunction<
+  TArgs extends readonly unknown[] = readonly [
+    phase: string,
+    ctx?: { defaultConfig: NextConfigObject },
+  ],
+  TResult extends NextConfigObject = NextConfigObject,
+> = (...args: TArgs) => TResult | Promise<TResult>;
+
+export type NextConfigLike = NextConfigObject | NextConfigFunction<never[], NextConfigObject>;
 
 export interface NextAdapterContext {
   distDir: string;
   buildId?: string;
+  phase?: string;
   config?: Record<string, unknown>;
   routing?: Record<string, unknown>;
   outputs?: {
@@ -91,6 +103,35 @@ function recomputeHash(content: Buffer, existingHash?: string): string {
   return crypto.createHash(algo).update(content).digest('hex');
 }
 
+function isNonProductionPhase(phase?: string): boolean {
+  return (
+    phase !== undefined &&
+    phase !== 'phase-production-build' &&
+    phase !== 'phase-export'
+  );
+}
+
+async function delegateToUpstreamOnBuildComplete(
+  upstreamPath: string | undefined,
+  context: NextAdapterContext
+): Promise<void> {
+  if (!upstreamPath) return;
+  try {
+    const upstream = await loadUpstreamAdapter(upstreamPath);
+    if (
+      upstream &&
+      typeof upstream !== 'function' &&
+      typeof upstream.onBuildComplete === 'function'
+    ) {
+      await upstream.onBuildComplete(context);
+    } else if (typeof upstream === 'function') {
+      await upstream(context);
+    }
+  } catch (err) {
+    console.warn('[unpeek:next] Failed to delegate to upstream adapter onBuildComplete:', err);
+  }
+}
+
 export function createUnpeekNextAdapter(
   options: UnpeekNextAdapterOptions = {}
 ): UnpeekNextAdapter {
@@ -98,11 +139,15 @@ export function createUnpeekNextAdapter(
     options.upstreamAdapterPath ||
     process.env.UNPEEK_UPSTREAM_ADAPTER_PATH ||
     process.env.NEXT_ADAPTER_PATH;
+  let recordedPhase: string | undefined;
 
   return {
     name: 'unpeek',
 
     async modifyConfig(config: NextConfigObject, context?: Record<string, unknown>) {
+      if (context && typeof context.phase === 'string') {
+        recordedPhase = context.phase;
+      }
       if (upstreamPath) {
         try {
           const upstream = await loadUpstreamAdapter(upstreamPath);
@@ -128,6 +173,27 @@ export function createUnpeekNextAdapter(
       // Server/SSR bundles are under distDir/server and distDir/ssr - these MUST NOT be modified.
       const staticDir = path.join(distDir, 'static');
       const targetDir = fs.existsSync(staticDir) ? staticDir : distDir;
+
+      const phase = context.phase ?? recordedPhase;
+      if (isNonProductionPhase(phase)) {
+        await delegateToUpstreamOnBuildComplete(upstreamPath, context);
+        return {
+          framework: 'nextjs',
+          outDir: targetDir,
+          processedFiles: 0,
+          movedSourceMaps: 0,
+          originalBytes: 0,
+          protectedBytes: 0,
+          originalGzipBytes: 0,
+          protectedGzipBytes: 0,
+          gzipDeltaPercent: 0,
+          totalHotFunctionsSkipped: 0,
+          totalColdFunctionsProtected: 0,
+          totalEncryptedStrings: 0,
+          totalMangledSymbols: 0,
+          elapsedMs: 0,
+        };
+      }
 
       // Deterministic seed based on Next.js buildId if not explicitly provided
       const deterministicSeed =
@@ -198,22 +264,7 @@ export function createUnpeekNextAdapter(
       }
 
       // Delegate to upstream platform adapter (e.g. Vercel's NEXT_ADAPTER_PATH or user adapterPath)
-      if (upstreamPath) {
-        try {
-          const upstream = await loadUpstreamAdapter(upstreamPath);
-          if (
-            upstream &&
-            typeof upstream !== 'function' &&
-            typeof upstream.onBuildComplete === 'function'
-          ) {
-            await upstream.onBuildComplete(context);
-          } else if (typeof upstream === 'function') {
-            await upstream(context);
-          }
-        } catch (err) {
-          console.warn('[unpeek:next] Failed to delegate to upstream adapter onBuildComplete:', err);
-        }
-      }
+      await delegateToUpstreamOnBuildComplete(upstreamPath, context);
 
       return summary;
     },
@@ -236,14 +287,14 @@ export function getUnpeekAdapterPath(): string {
     const currentDir = isCjs ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 
     const candidates = [
-      path.resolve(currentDir, isCjs ? 'next/adapter.cjs' : 'next/adapter.js'),
-      path.resolve(currentDir, isCjs ? 'next/adapter.js' : 'next/adapter.cjs'),
+      path.resolve(currentDir, isCjs ? 'adapters/next/adapter.cjs' : 'adapters/next/adapter.js'),
+      path.resolve(currentDir, isCjs ? 'adapters/next/adapter.js' : 'adapters/next/adapter.cjs'),
       path.resolve(currentDir, isCjs ? 'adapter.cjs' : 'adapter.js'),
       path.resolve(currentDir, isCjs ? 'adapter.js' : 'adapter.cjs'),
-      path.resolve(currentDir, '../dist/next/adapter.cjs'),
-      path.resolve(currentDir, '../dist/next/adapter.js'),
-      path.resolve(process.cwd(), 'node_modules/unpeek/dist/next/adapter.cjs'),
-      path.resolve(process.cwd(), 'node_modules/unpeek/dist/next/adapter.js'),
+      path.resolve(currentDir, '../dist/adapters/next/adapter.cjs'),
+      path.resolve(currentDir, '../dist/adapters/next/adapter.js'),
+      path.resolve(process.cwd(), 'node_modules/unpeek/dist/adapters/next/adapter.cjs'),
+      path.resolve(process.cwd(), 'node_modules/unpeek/dist/adapters/next/adapter.js'),
     ];
 
     for (const cand of candidates) {
@@ -254,24 +305,8 @@ export function getUnpeekAdapterPath(): string {
 
     return candidates[0];
   } catch {
-    return path.resolve(process.cwd(), 'node_modules/unpeek/dist/next/adapter.js');
+    return path.resolve(process.cwd(), 'node_modules/unpeek/dist/adapters/next/adapter.js');
   }
-}
-
-export function readUnpeekNextOptionsFromEnv(): UnpeekNextAdapterOptions | undefined {
-  const raw = process.env.UNPEEK_NEXT_OPTIONS;
-  if (!raw) {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as UnpeekNextAdapterOptions;
-    }
-  } catch {
-    // Ignore malformed UNPEEK_NEXT_OPTIONS JSON
-  }
-  return undefined;
 }
 
 function applyWithUnpeek<T extends NextConfigObject>(
@@ -287,7 +322,15 @@ function applyWithUnpeek<T extends NextConfigObject>(
   }
 
   if (options) {
-    process.env.UNPEEK_NEXT_OPTIONS = JSON.stringify(options);
+    const serialized = serializeNextOptions(options);
+    const byteLength = Buffer.byteLength(serialized, 'utf8');
+    if (byteLength > MAX_NEXT_OPTIONS_ENV_BYTES) {
+      throw new UnpeekError(
+        'ERR_NEXT_ADAPTER',
+        `Serialized UNPEEK_NEXT_OPTIONS (${byteLength} bytes) exceeds the ${MAX_NEXT_OPTIONS_ENV_BYTES}-byte process.env limit.`
+      );
+    }
+    process.env.UNPEEK_NEXT_OPTIONS = serialized;
   } else {
     delete process.env.UNPEEK_NEXT_OPTIONS;
   }
@@ -300,16 +343,37 @@ function applyWithUnpeek<T extends NextConfigObject>(
   };
 }
 
-export function withUnpeek<T extends NextConfigLike = NextConfigObject>(
-  nextConfig: T = {} as T,
+export function withUnpeek<T extends NextConfigObject = NextConfigObject>(
+  nextConfig?: T,
   options?: UnpeekNextAdapterOptions
-): T {
+): T & { adapterPath: string };
+export function withUnpeek<
+  TArgs extends readonly unknown[],
+  TResult extends NextConfigObject,
+>(
+  nextConfig: (...args: TArgs) => TResult | Promise<TResult>,
+  options?: UnpeekNextAdapterOptions
+): (...args: TArgs) => Promise<TResult & { adapterPath: string }>;
+export function withUnpeek<
+  T extends NextConfigObject,
+  TArgs extends readonly unknown[],
+  TResult extends NextConfigObject,
+>(
+  nextConfig: T | ((...args: TArgs) => TResult | Promise<TResult>) = {} as T,
+  options?: UnpeekNextAdapterOptions
+):
+  | (T & { adapterPath: string })
+  | ((...args: TArgs) => Promise<TResult & { adapterPath: string }>) {
   if (typeof nextConfig === 'function') {
-    return (async (...args: never[]) => {
+    return async (...args: TArgs): Promise<TResult & { adapterPath: string }> => {
       const resolved = await nextConfig(...args);
+      const phase = typeof args[0] === 'string' ? args[0] : undefined;
+      if (isNonProductionPhase(phase)) {
+        return resolved as TResult & { adapterPath: string };
+      }
       return applyWithUnpeek(resolved, options);
-    }) as unknown as T;
+    };
   }
 
-  return applyWithUnpeek(nextConfig, options) as unknown as T;
+  return applyWithUnpeek(nextConfig, options);
 }

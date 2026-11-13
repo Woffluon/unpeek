@@ -1,6 +1,7 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
-import type { HotPathReport, UnpeekConfig } from '../types.js';
+import type { HotPathReport } from './types.js';
+import type { UnpeekConfig } from '../config.js';
 
 const LOOP_NODE_TYPES = new Set([
   'ForStatement',
@@ -86,19 +87,25 @@ export interface HotPathAnalysis {
   serializedFunctionNodes: WeakSet<acorn.Node>;
 }
 
-export function parseJavaScriptAst(code: string): acorn.Program | null {
+export function parseJavaScriptAst(
+  code: string,
+  comments?: acorn.Comment[]
+): acorn.Program | null {
   try {
     return acorn.parse(code, {
       ecmaVersion: 'latest',
       sourceType: 'module',
       allowReturnOutsideFunction: true,
+      ...(comments ? { onComment: comments } : {}),
     });
   } catch {
+    if (comments) comments.length = 0;
     try {
       return acorn.parse(code, {
         ecmaVersion: 'latest',
         sourceType: 'script',
         allowReturnOutsideFunction: true,
+        ...(comments ? { onComment: comments } : {}),
       });
     } catch {
       return null;
@@ -381,10 +388,17 @@ export function analyzeAstHotPaths(
     }
   }
 
+  const rawEventRegex = config?.hotPath?.eventHandlerRegex;
   const eventHandlerRegex =
-    config?.hotPath?.eventHandlerRegex ?? DEFAULT_EVENT_HANDLER_REGEX;
+    typeof rawEventRegex === 'string'
+      ? new RegExp(rawEventRegex)
+      : (rawEventRegex ?? DEFAULT_EVENT_HANDLER_REGEX);
 
-  const hookRegex = config?.hotPath?.hookPattern ?? DEFAULT_HOOK_REGEX;
+  const rawHookRegex = config?.hotPath?.hookPattern;
+  const hookRegex =
+    typeof rawHookRegex === 'string'
+      ? new RegExp(rawHookRegex)
+      : (rawHookRegex ?? DEFAULT_HOOK_REGEX);
   const customHooksSet = new Set(config?.hotPath?.customHooks ?? []);
 
   function isHookName(name: string): boolean {

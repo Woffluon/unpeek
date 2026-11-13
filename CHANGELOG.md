@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] (v3.0.0)
+
+### Added
+- **CLI**: Added `unpeek check` (read-only CI gate for leaked maps, `sourceMappingURL` comments, ignore entries, Gzip budget, and `eval()`/`new Function()`), `unpeek symbolicate` (local stack trace resolution via `.unpeek-maps/`), and `--profile <minimal|recommended|strict>`, `--dry-run`, `--max-gzip-delta <percent>` flags.
+- **Public API & Options**: Added `PRESETS` (`UnpeekProfile`), `defineConfig<const T>`, `isUnpeekError`, `UnpeekDiagnostic`, `TransformResult.skippedReason`, `checkProject`, `symbolicateStackTrace`, `scrubPaths`, and `vault.fragmented` / `vault.fragmentCount`.
+- **Adapters & Exports**: Added `./rspack` (`unpeek/rspack`) and `./package.json` subpath exports, plus Next.js 16 `phase`-aware `withUnpeek` and `RegExp`-safe `UNPEEK_NEXT_OPTIONS` config bridge.
+- **Migration Guide**: Added `docs/MIGRATION_V3.md`.
+
+### Breaking Changes
+- Removed `./ast` and `./runtime` subpath exports; import `transformJavaScript` and public types from the root `unpeek` entry point.
+- Removed internal config helpers from `unpeek/config` (`DEFAULT_CONFIG`, `normalizeConfig`, `mergeUnpeekConfig`, `findConfigFile`, `resolveUnpeekConfigSync`, `CONFIG_CANDIDATES`) and internal runtime helpers (`deriveWindowKeySymbol`, `deriveIntegrityFnName`).
+- Removed `unplugin` inline `UnpeekConfig` duck-typing; pass `UnpeekConfig` overrides via `options.config`.
+- Narrowed `ProtectSummary.tier` (`'Tier 1' | 'Tier 2' | undefined`) and `InitResult.framework` (`UnpeekFramework | undefined`).
+
+---
+
 ## [1.0.1] - 2026-11-04
 
 ### Changed

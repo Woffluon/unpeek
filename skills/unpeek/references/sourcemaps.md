@@ -130,10 +130,14 @@ CMD ["node", "server.js"]
 ```
 
 ### Verification Command
-Run this in your CI pipeline before deploying to guarantee zero source map exposure:
+Run `unpeek check` in your CI pipeline before deploying to verify zero source map exposure, clean `sourceMappingURL` stripping, `.gitignore`/`.dockerignore` coverage, and Gzip budget compliance:
 ```bash
-# Must return 0 lines found in public directory
-grep -rn "sourceMappingURL" dist/ .next/static/ || echo "Public bundles are clean!"
+npx unpeek check --max-gzip-delta 15 --require-zero-eval
+```
+
+To resolve a production stack trace locally using the vaulted maps:
+```bash
+npx unpeek symbolicate --maps-dir .unpeek-maps --file error.log
 ```
 
 ---

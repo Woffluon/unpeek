@@ -101,8 +101,13 @@ npx unpeek protect
 
 | Command / Flag | Description | Default |
 | :--- | :--- | :--- |
-| `init [--dry-run]` | Automatically detect project framework, configure `postbuild` script, and create `.unpeek-maps/` vault | |
+| `init [--dry-run] [--profile <name>]` | Automatically detect project framework, configure `postbuild` script, and create `.unpeek-maps/` vault | |
 | `protect` | Protect production client bundles in-place (default command) | |
+| `check` | Read-only CI gate for leaked maps, `sourceMappingURL` comments, ignore entries, Gzip budget, and `eval()` | |
+| `symbolicate` | Resolve production stack traces locally using `.unpeek-maps/` (`--maps-dir`, `--trace`, `--file`) | |
+| `--profile <name>` | Preset profile: `minimal`, `recommended`, or `strict` | |
+| `--dry-run` | Compute transform & Gzip delta in memory without writing files | Disabled |
+| `--max-gzip-delta <num>` | Fail if Gzip delta exceeds percentage (`protect` / `check`) | `15` (for `check`) |
 | `--out-dir <path>` | Explicit client output directory override (e.g., `dist/assets`, `.next/static/chunks`) | Auto-detected from project framework |
 | `--seed <number>` | Deterministic 32-bit polymorphic build seed | Random per build |
 | `--aggressive` | Enable Tier 2 aggressive protection (Micro-VM & WASM KDF) | Disabled (Tier 1 default: <2% CPU, <15% Gzip) |
@@ -125,7 +130,7 @@ npx unpeek protect
 
 > [!IMPORTANT]
 > **Native CommonJS & ESM Dual-Package Support:**
-> `unpeek` and all subpaths (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/unplugin`, `unpeek/next`, `unpeek/config`, `unpeek/ast`, `unpeek/runtime`) natively support both ESM `import` and CommonJS `require(...)`. Bundler subpaths expose a `default` export in CJS:
+> `unpeek` and all subpaths (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/rspack`, `unpeek/unplugin`, `unpeek/next`, `unpeek/config`, `unpeek/browser`, `unpeek/package.json`) natively support both ESM `import` and CommonJS `require(...)`. Bundler subpaths expose a `default` export in CJS:
 > ```javascript
 > // CommonJS (next.config.js / webpack.config.cjs / scripts)
 > const unpeek = require('unpeek/vite');
@@ -135,7 +140,7 @@ npx unpeek protect
 
 ### 3. Universal Bundler Plugin (`unpeek/unplugin`)
 
-For in-memory chunk transformations during the bundler build lifecycle rather than a post-build CLI pass, use [`unpeek/unplugin`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/bundler/unplugin.ts) or the dedicated subpath (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`):
+For in-memory chunk transformations during the bundler build lifecycle rather than a post-build CLI pass, use [`unpeek/unplugin`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/plugins/unplugin.ts) or the dedicated subpath (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/rspack`):
 
 #### Vite (`vite.config.ts`)
 
@@ -191,12 +196,19 @@ const nextConfig = {
 export default nextConfig;
 ```
 
-#### Programmatic API & Package Exports (`2.0.0`)
+#### Programmatic API & Package Exports (`3.0.0`)
 
-In `unpeek` 2.0.0, the root `unpeek` entry exposes the core high-level API (`protectProject`, `transformJavaScript`, `initProject`, `defineConfig`, `loadUnpeekConfig`, `UnpeekError`, `UnpeekErrorCode`, and public TypeScript types), while low-level primitives and bundler integrations live on dedicated subpaths (`unpeek/config`, `unpeek/ast`, `unpeek/runtime`, `unpeek/browser`, `unpeek/next`, `unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/unplugin`).
+In `unpeek` 3.0.0, the root `unpeek` entry exposes the core high-level API (`protectProject`, `transformJavaScript`, `initProject`, `checkProject`, `symbolicateStackTrace`, `PRESETS`, `defineConfig`, `loadUnpeekConfig`, `UnpeekError`, `isUnpeekError`, `UnpeekErrorCode`, and public TypeScript types such as `UnpeekProfile`, `UnpeekDiagnostic`, `TransformResult`), while bundler integrations and config helpers live on dedicated subpaths (`unpeek/config`, `unpeek/browser`, `unpeek/next`, `unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/rspack`, `unpeek/unplugin`, `unpeek/package.json`). See [Migration Guide (v3.0.0)](https://github.com/Woffluon/unpeek/blob/main/docs/MIGRATION_V3.md) for breaking changes from v2.x.
 
 ```ts
-import { transformJavaScript, protectProject, UnpeekError } from 'unpeek';
+import {
+  PRESETS,
+  transformJavaScript,
+  protectProject,
+  checkProject,
+  symbolicateStackTrace,
+  isUnpeekError,
+} from 'unpeek';
 
 try {
   // Transform an individual JavaScript string in memory
@@ -205,20 +217,25 @@ try {
     minStringLength: 4,
     injectRuntimeShield: true,
     deterrentMode: 'passive',
+    scrubPaths: true,
   });
 
+  if (result.skippedReason) {
+    console.log('Skipped:', result.skippedReason);
+  }
   console.log(result.hotPathReport);
   // { totalFunctions: 12, hotFunctionsSkipped: ['renderLoop'], coldFunctionsProtected: ['signRequest'] }
 
   // Or protect an entire build directory
   const summary = await protectProject({
     cwd: process.cwd(),
+    profile: 'recommended',
     keepPrivateMaps: true,
     privateMapsDir: '.unpeek-maps',
   });
 } catch (err) {
-  if (err instanceof UnpeekError) {
-    // err.code is an UnpeekErrorCode (e.g. 'ERR_CONFIG_INVALID', 'ERR_CONFIG_LOAD', 'ERR_PARSE_FAILED')
+  if (isUnpeekError(err)) {
+    // err.code is an UnpeekErrorCode (e.g. 'ERR_CONFIG_INVALID', 'ERR_CONFIG_LOAD', 'ERR_PARSE_FAILED', 'ERR_BUDGET_EXCEEDED')
     console.error(err.code, err.message);
   }
   throw err;
@@ -291,7 +308,12 @@ export default defineConfig({
     },
     // Generate decoy strings to defeat automated entropy scanners
     polymorphicDecoys: true,
+    // Split string vault across multiple fragments (enabled in 'strict' profile)
+    fragmented: true,
+    fragmentCount: 4,
   },
+  // Scrub local filesystem paths and residual dev metadata (CWE-540)
+  scrubPaths: true,
 
   // Identifier and symbol mangler configuration
   mangler: {

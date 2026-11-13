@@ -1,11 +1,37 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { SourceMapVaultResult, UnpeekConfig } from '../types.js';
-import { UnpeekError } from '../errors.js';
+import type { SourceMapVaultResult } from './types.js';
+import type { UnpeekConfig } from '../config.js';
+import { UnpeekError } from '../shared/errors.js';
 import { hasNextServerSegment, scanClientBundles } from './detector.js';
 
 export const SOURCE_MAP_COMMENT_REGEX =
   /(?:^\s*\/\/[#@]\s*sourceMappingURL=.*$|\/\*[#@]\s*sourceMappingURL=[\s\S]*?\*\/)\s*/gm;
+
+export const DEBUG_ID_COMMENT_REGEX =
+  /(?:\/\/[#@]\s*debugId=([^\s*]+)|\/\*[#@]\s*debugId=([^\s*]+)\s*\*\/)/;
+
+export function extractDebugId(code: string): string | undefined {
+  const match = code.match(DEBUG_ID_COMMENT_REGEX);
+  const id = match?.[1] ?? match?.[2];
+  return id ? id.trim() : undefined;
+}
+
+export function stripSourceMapComments(code: string): {
+  code: string;
+  stripped: boolean;
+  debugId?: string;
+} {
+  const debugId = extractDebugId(code);
+  SOURCE_MAP_COMMENT_REGEX.lastIndex = 0;
+  let next = code.replace(SOURCE_MAP_COMMENT_REGEX, '');
+  const stripped = next !== code;
+  if (debugId && !DEBUG_ID_COMMENT_REGEX.test(next)) {
+    const suffix = next.length > 0 && !next.endsWith('\n') ? '\n' : '';
+    next = `${next}${suffix}//# debugId=${debugId}\n`;
+  }
+  return { code: next, stripped, debugId };
+}
 
 function ensureIgnoreEntry(dir: string, fileName: string, entryName: string): void {
   const filePath = path.join(path.resolve(dir), fileName);
@@ -32,7 +58,7 @@ function isSubdirectoryOrSame(parent: string, child: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-function findMonorepoRoots(cwd: string): string[] {
+export function findMonorepoRoots(cwd: string): string[] {
   const resolved = path.resolve(cwd);
   const dirs: string[] = [resolved];
   let curr = resolved;
@@ -101,6 +127,8 @@ function updateAllIgnoreFiles(cwd: string, vaultDir: string): void {
 export interface RelocateSourceMapsOptions {
   /** Whether to update .gitignore/.dockerignore/.npmignore files (default: true). */
   updateIgnoreFiles?: boolean;
+  /** Compute vault actions without modifying files on disk (default: false). */
+  dryRun?: boolean;
 }
 
 export function relocateSourceMaps(
@@ -119,6 +147,7 @@ export function relocateSourceMaps(
   const effectiveStripComments = config?.sourcemaps?.stripComments ?? stripComments;
   const updateIgnoreFiles =
     typeof options === 'boolean' ? options : (options?.updateIgnoreFiles ?? true);
+  const dryRun = typeof options === 'object' && options !== null ? (options.dryRun ?? false) : false;
   const vaultDir = path.resolve(resolvedCwd, effectiveVaultDirName);
 
   const publicDirsToCheck = new Set<string>();
@@ -198,11 +227,13 @@ export function relocateSourceMaps(
         if (effectiveKeepPrivate !== false) {
           const relPath = path.relative(resolvedOutDir, fullPath);
           const targetPath = path.join(vaultDir, relPath);
-          fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-          fs.copyFileSync(fullPath, targetPath);
-          fs.unlinkSync(fullPath);
+          if (!dryRun) {
+            fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+            fs.copyFileSync(fullPath, targetPath);
+            fs.unlinkSync(fullPath);
+          }
           movedFiles.push(targetPath);
-        } else {
+        } else if (!dryRun) {
           fs.unlinkSync(fullPath);
         }
         movedMapsCount++;
@@ -212,7 +243,7 @@ export function relocateSourceMaps(
 
   walkForMaps(resolvedOutDir);
 
-  if (updateIgnoreFiles && effectiveKeepPrivate !== false && movedMapsCount > 0) {
+  if (!dryRun && updateIgnoreFiles && effectiveKeepPrivate !== false && movedMapsCount > 0) {
     updateAllIgnoreFiles(resolvedCwd, vaultDir);
   }
 
@@ -221,9 +252,11 @@ export function relocateSourceMaps(
     for (const filePath of clientFiles) {
       const original = fs.readFileSync(filePath, 'utf8');
       if (original.includes('sourceMappingURL=')) {
-        const stripped = original.replace(SOURCE_MAP_COMMENT_REGEX, '');
-        if (stripped !== original) {
-          fs.writeFileSync(filePath, stripped, 'utf8');
+        const { code: strippedCode, stripped } = stripSourceMapComments(original);
+        if (stripped) {
+          if (!dryRun) {
+            fs.writeFileSync(filePath, strippedCode, 'utf8');
+          }
           strippedFilesCount++;
         }
       }

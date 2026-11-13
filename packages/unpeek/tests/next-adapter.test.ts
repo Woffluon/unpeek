@@ -7,9 +7,14 @@ import {
   createUnpeekNextAdapter,
   withUnpeek,
   getUnpeekAdapterPath,
+} from '../src/adapters/next/index.js';
+import { initProject } from '../src/core/init.js';
+import {
+  isNext16OrAbove,
+  parseNextOptions,
   readUnpeekNextOptionsFromEnv,
-} from '../src/next/index.js';
-import { initProject, isNext16OrAbove } from '../src/cli/init.js';
+} from '../src/internal/next.js';
+import { isUnpeekError } from '../src/shared/errors.js';
 
 describe('Next.js 16+ Build Adapter & onBuildComplete Lifecycle', () => {
   let tmpDir: string;
@@ -263,13 +268,13 @@ describe('Next.js 16+ Build Adapter & onBuildComplete Lifecycle', () => {
   });
 
   it('adapter entry module exports default adapter and named lifecycle methods', async () => {
-    const adapterMod = await import('../src/next/adapter.js');
+    const adapterMod = await import('../src/adapters/next/adapter.js');
     expect(adapterMod.name).toBe('unpeek');
     expect(typeof adapterMod.onBuildComplete).toBe('function');
     expect(typeof adapterMod.modifyConfig).toBe('function');
     expect(typeof adapterMod.default.onBuildComplete).toBe('function');
 
-    const withUnpeekMod = await import('../src/next/with-unpeek.js');
+    const withUnpeekMod = await import('../src/adapters/next/index.js');
     expect(typeof withUnpeekMod.withUnpeek).toBe('function');
     expect(typeof withUnpeekMod.createUnpeekNextAdapter).toBe('function');
   });
@@ -292,5 +297,172 @@ describe('Next.js 16+ Build Adapter & onBuildComplete Lifecycle', () => {
     withUnpeek({ reactStrictMode: false });
     expect(process.env.UNPEEK_NEXT_OPTIONS).toBeUndefined();
     expect(readUnpeekNextOptionsFromEnv()).toBeUndefined();
+  });
+
+  it('preserves RegExp instances (hookPattern, eventHandlerRegex, excludePatterns) across env serialization and handles invalid flags safely', () => {
+    withUnpeek(
+      { reactStrictMode: true },
+      {
+        config: {
+          hotPath: {
+            hookPattern: /^useCustom[A-Z]/i,
+            eventHandlerRegex: /^on[A-Z]\w+$/g,
+          },
+          mangler: {
+            excludePatterns: [/^_internal/, /SecretKey$/i],
+          },
+        },
+      }
+    );
+
+    const parsed = readUnpeekNextOptionsFromEnv();
+    const hookPattern = parsed?.config?.hotPath?.hookPattern;
+    const eventHandlerRegex = parsed?.config?.hotPath?.eventHandlerRegex;
+    const excludePatterns = parsed?.config?.mangler?.excludePatterns;
+
+    expect(hookPattern).toBeInstanceOf(RegExp);
+    expect(hookPattern?.source).toBe('^useCustom[A-Z]');
+    expect(hookPattern?.flags).toBe('i');
+
+    expect(eventHandlerRegex).toBeInstanceOf(RegExp);
+    expect(eventHandlerRegex?.source).toBe('^on[A-Z]\\w+$');
+    expect(eventHandlerRegex?.flags).toBe('g');
+
+    expect(Array.isArray(excludePatterns)).toBe(true);
+    expect(excludePatterns?.[0]).toBeInstanceOf(RegExp);
+    expect((excludePatterns?.[0] as RegExp).source).toBe('^_internal');
+    expect((excludePatterns?.[0] as RegExp).flags).toBe('');
+    expect(excludePatterns?.[1]).toBeInstanceOf(RegExp);
+    expect((excludePatterns?.[1] as RegExp).source).toBe('SecretKey$');
+    expect((excludePatterns?.[1] as RegExp).flags).toBe('i');
+
+    // Malformed / invalid RegExp flags must not crash parseNextOptions or readUnpeekNextOptionsFromEnv
+    const malformedPayload = JSON.stringify({
+      config: {
+        hotPath: {
+          hookPattern: { __unpeekRegExp: true, source: '^useBad', flags: 'invalid_xyz' },
+        },
+      },
+    });
+    expect(() => parseNextOptions(malformedPayload)).not.toThrow();
+    process.env.UNPEEK_NEXT_OPTIONS = malformedPayload;
+    const safeParsed = readUnpeekNextOptionsFromEnv();
+    expect(safeParsed?.config?.hotPath?.hookPattern).toBeUndefined();
+  });
+
+  it('throws UnpeekError(ERR_NEXT_ADAPTER) when serialized UNPEEK_NEXT_OPTIONS exceeds ~32KB', () => {
+    const oversizedPattern = new RegExp('a'.repeat(33_000));
+    let caught: unknown;
+    try {
+      withUnpeek(
+        { reactStrictMode: true },
+        {
+          config: {
+            hotPath: {
+              hookPattern: oversizedPattern,
+            },
+          },
+        }
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(isUnpeekError(caught)).toBe(true);
+    if (isUnpeekError(caught)) {
+      expect(caught.code).toBe('ERR_NEXT_ADAPTER');
+    }
+  });
+
+  it('withUnpeek function form skips adapterPath and env injection during non-production phases and preserves argument types', async () => {
+    const fnConfig = withUnpeek(
+      (phase: string, ctx: { defaultConfig: { reactStrictMode?: boolean } }) => ({
+        phase,
+        reactStrictMode: ctx.defaultConfig.reactStrictMode ?? true,
+      }),
+      { seed: 777 }
+    );
+
+    const devResolved = await fnConfig('phase-development-server', {
+      defaultConfig: { reactStrictMode: false },
+    });
+    expect(devResolved.phase).toBe('phase-development-server');
+    expect(devResolved.reactStrictMode).toBe(false);
+    expect(devResolved.adapterPath).toBeUndefined();
+    expect(process.env.UNPEEK_NEXT_OPTIONS).toBeUndefined();
+
+    const testResolved = await fnConfig('phase-test', {
+      defaultConfig: { reactStrictMode: true },
+    });
+    expect(testResolved.adapterPath).toBeUndefined();
+    expect(process.env.UNPEEK_NEXT_OPTIONS).toBeUndefined();
+
+    const exportResolved = await fnConfig('phase-export', {
+      defaultConfig: { reactStrictMode: true },
+    });
+    expect(typeof exportResolved.adapterPath).toBe('string');
+    expect(process.env.UNPEEK_NEXT_OPTIONS).toBeDefined();
+  });
+
+  it('createUnpeekNextAdapter skips protectProject in non-production phase while still delegating to upstream adapter', async () => {
+    const distDir = path.join(tmpDir, '.next');
+    const staticChunksDir = path.join(distDir, 'static', 'chunks');
+    fs.mkdirSync(staticChunksDir, { recursive: true });
+
+    const clientFile = path.join(staticChunksDir, 'dev-chunk.js');
+    const originalCode = 'export const DEV_SECRET = "SHOULD_NOT_BE_TRANSFORMED_IN_DEV";';
+    fs.writeFileSync(clientFile, originalCode, 'utf8');
+
+    const upstreamPath = path.join(tmpDir, 'upstream-dev.mjs');
+    fs.writeFileSync(
+      upstreamPath,
+      `export default {
+        async onBuildComplete() {
+          globalThis.__devUpstreamInvoked = true;
+        }
+      };`,
+      'utf8'
+    );
+
+    const adapter = createUnpeekNextAdapter({
+      cwd: tmpDir,
+      upstreamAdapterPath: upstreamPath,
+    });
+
+    await adapter.modifyConfig?.({ reactStrictMode: true }, { phase: 'phase-development-server' });
+    const summary = await adapter.onBuildComplete({ distDir: '.next' });
+
+    expect(summary.processedFiles).toBe(0);
+    expect(summary.movedSourceMaps).toBe(0);
+    expect(fs.readFileSync(clientFile, 'utf8')).toBe(originalCode);
+    expect((globalThis as Record<string, unknown>).__devUpstreamInvoked).toBe(true);
+    delete (globalThis as Record<string, unknown>).__devUpstreamInvoked;
+  });
+
+  it('next/adapter.ts lazy getAdapter() does not read UNPEEK_NEXT_OPTIONS at module import time', async () => {
+    vi.resetModules();
+    delete process.env.UNPEEK_NEXT_OPTIONS;
+
+    // Import adapter module before UNPEEK_NEXT_OPTIONS is set
+    const adapterMod = await import('../src/adapters/next/adapter.js');
+    expect(adapterMod.name).toBe('unpeek');
+
+    // Set UNPEEK_NEXT_OPTIONS after import; lazy getAdapter() must pick it up on first call
+    const upstreamPath = path.join(tmpDir, 'lazy-upstream.mjs');
+    fs.writeFileSync(
+      upstreamPath,
+      `export default {
+        async modifyConfig(cfg) {
+          return { ...cfg, __lazyUpstreamApplied: true };
+        }
+      };`,
+      'utf8'
+    );
+    process.env.UNPEEK_NEXT_OPTIONS = JSON.stringify({ upstreamAdapterPath: upstreamPath });
+
+    const modified = await adapterMod.modifyConfig(
+      { reactStrictMode: true },
+      { phase: 'phase-production-build' }
+    );
+    expect(modified.__lazyUpstreamApplied).toBe(true);
   });
 });
