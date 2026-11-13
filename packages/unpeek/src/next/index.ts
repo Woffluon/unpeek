@@ -4,24 +4,39 @@ import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import type { ProtectOptions, ProtectSummary, UnpeekConfig } from '../types.js';
-import { protectProject } from '../cli/protect.js';
-import { computeFnv1aHash } from '../ast/index.js';
+import { protectProject } from '../core/protect.js';
+import { computeFnv1aHash } from '../shared/hash.js';
+
+export interface NextStaticFileOutput {
+  filePath?: string;
+  path?: string;
+  immutableHash?: string;
+  size?: number;
+  [key: string]: unknown;
+}
+
+export interface NextConfigObject {
+  adapterPath?: string;
+  [key: string]: unknown;
+}
+
+export type NextConfigLike =
+  | NextConfigObject
+  | ((...args: never[]) => NextConfigObject | Promise<NextConfigObject>);
 
 export interface NextAdapterContext {
   distDir: string;
   buildId?: string;
-  config?: any;
-  routing?: any;
+  config?: Record<string, unknown>;
+  routing?: Record<string, unknown>;
   outputs?: {
-    staticFiles?: Array<{
-      filePath: string;
-      immutableHash?: string;
-      size?: number;
-      [key: string]: any;
-    }> | Map<string, any> | Record<string, any>;
-    [key: string]: any;
+    staticFiles?:
+      | NextStaticFileOutput[]
+      | Map<string, NextStaticFileOutput>
+      | Record<string, NextStaticFileOutput>;
+    [key: string]: unknown;
   };
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface UnpeekNextAdapterOptions extends ProtectOptions {
@@ -31,26 +46,41 @@ export interface UnpeekNextAdapterOptions extends ProtectOptions {
 
 export interface UnpeekNextAdapter {
   name: string;
-  modifyConfig?: (config: any, context?: any) => Promise<any> | any;
+  modifyConfig?: (
+    config: NextConfigObject,
+    context?: Record<string, unknown>
+  ) => Promise<NextConfigObject> | NextConfigObject;
   onBuildComplete: (context: NextAdapterContext) => Promise<ProtectSummary>;
 }
 
-declare global {
-  // eslint-disable-next-line no-var
-  var __unpeekNextOptions: UnpeekNextAdapterOptions | undefined;
+interface UpstreamNextAdapter {
+  modifyConfig?: (
+    config: NextConfigObject,
+    context?: Record<string, unknown>
+  ) => Promise<NextConfigObject> | NextConfigObject;
+  onBuildComplete?: (context: NextAdapterContext) => Promise<unknown> | unknown;
 }
 
-async function loadUpstreamAdapter(adapterPath: string): Promise<any> {
+type UpstreamAdapterModule =
+  | UpstreamNextAdapter
+  | ((context: NextAdapterContext) => Promise<unknown> | unknown)
+  | undefined;
+
+async function loadUpstreamAdapter(adapterPath: string): Promise<UpstreamAdapterModule> {
   const resolved = path.isAbsolute(adapterPath)
     ? adapterPath
     : path.resolve(process.cwd(), adapterPath);
 
   try {
-    const mod = await import(pathToFileURL(resolved).href);
+    const mod = (await import(pathToFileURL(resolved).href)) as {
+      default?: UpstreamAdapterModule;
+    } & UpstreamNextAdapter;
     return mod.default ?? mod;
   } catch {
     const req = createRequire(import.meta.url);
-    const mod = req(resolved);
+    const mod = req(resolved) as {
+      default?: UpstreamAdapterModule;
+    } & UpstreamNextAdapter;
     return mod.default ?? mod;
   }
 }
@@ -72,11 +102,15 @@ export function createUnpeekNextAdapter(
   return {
     name: 'unpeek',
 
-    async modifyConfig(config: any, context?: any) {
+    async modifyConfig(config: NextConfigObject, context?: Record<string, unknown>) {
       if (upstreamPath) {
         try {
           const upstream = await loadUpstreamAdapter(upstreamPath);
-          if (typeof upstream?.modifyConfig === 'function') {
+          if (
+            upstream &&
+            typeof upstream !== 'function' &&
+            typeof upstream.modifyConfig === 'function'
+          ) {
             config = await upstream.modifyConfig(config, context);
           }
         } catch (err) {
@@ -113,7 +147,7 @@ export function createUnpeekNextAdapter(
       // Update immutable hashes for modified client assets in Next.js 16 outputs
       if (context.outputs?.staticFiles) {
         const rawStatic = context.outputs.staticFiles;
-        const fileList: any[] = Array.isArray(rawStatic)
+        const fileList: NextStaticFileOutput[] = Array.isArray(rawStatic)
           ? rawStatic
           : rawStatic instanceof Map
             ? Array.from(rawStatic.values())
@@ -167,7 +201,11 @@ export function createUnpeekNextAdapter(
       if (upstreamPath) {
         try {
           const upstream = await loadUpstreamAdapter(upstreamPath);
-          if (typeof upstream?.onBuildComplete === 'function') {
+          if (
+            upstream &&
+            typeof upstream !== 'function' &&
+            typeof upstream.onBuildComplete === 'function'
+          ) {
             await upstream.onBuildComplete(context);
           } else if (typeof upstream === 'function') {
             await upstream(context);
@@ -220,7 +258,26 @@ export function getUnpeekAdapterPath(): string {
   }
 }
 
-function applyWithUnpeek(config: any = {}, options?: UnpeekNextAdapterOptions): any {
+export function readUnpeekNextOptionsFromEnv(): UnpeekNextAdapterOptions | undefined {
+  const raw = process.env.UNPEEK_NEXT_OPTIONS;
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as UnpeekNextAdapterOptions;
+    }
+  } catch {
+    // Ignore malformed UNPEEK_NEXT_OPTIONS JSON
+  }
+  return undefined;
+}
+
+function applyWithUnpeek<T extends NextConfigObject>(
+  config: T = {} as T,
+  options?: UnpeekNextAdapterOptions
+): T & { adapterPath: string } {
   const existingAdapter = config.adapterPath || process.env.NEXT_ADAPTER_PATH;
   if (existingAdapter && !process.env.UNPEEK_UPSTREAM_ADAPTER_PATH) {
     process.env.UNPEEK_UPSTREAM_ADAPTER_PATH = existingAdapter;
@@ -230,7 +287,9 @@ function applyWithUnpeek(config: any = {}, options?: UnpeekNextAdapterOptions): 
   }
 
   if (options) {
-    globalThis.__unpeekNextOptions = options;
+    process.env.UNPEEK_NEXT_OPTIONS = JSON.stringify(options);
+  } else {
+    delete process.env.UNPEEK_NEXT_OPTIONS;
   }
 
   const adapterPath = getUnpeekAdapterPath();
@@ -241,16 +300,16 @@ function applyWithUnpeek(config: any = {}, options?: UnpeekNextAdapterOptions): 
   };
 }
 
-export function withUnpeek(
-  nextConfig: any = {},
+export function withUnpeek<T extends NextConfigLike = NextConfigObject>(
+  nextConfig: T = {} as T,
   options?: UnpeekNextAdapterOptions
-): any {
+): T {
   if (typeof nextConfig === 'function') {
-    return async (...args: any[]) => {
+    return (async (...args: never[]) => {
       const resolved = await nextConfig(...args);
       return applyWithUnpeek(resolved, options);
-    };
+    }) as unknown as T;
   }
 
-  return applyWithUnpeek(nextConfig, options);
+  return applyWithUnpeek(nextConfig, options) as unknown as T;
 }

@@ -116,16 +116,21 @@ export interface TransformOptions {
   minStringLength?: number;
   filename?: string;
   injectRuntimeShield?: boolean;
-  skipShieldPreamble?: boolean;
-  shieldCoupled?: boolean;
-  windowKeySymbol?: string;
-  expectedDelta?: number;
   deterrentMode?: DeterrentMode;
   detectHeadless?: boolean;
   /** Enable Layer 2 aggressive protection */
   aggressive?: boolean;
+  /** Throw UnpeekError on JavaScript parse failures instead of returning input unchanged */
+  strict?: boolean;
   /** Optional Unpeek configuration */
   config?: UnpeekConfig;
+}
+
+export interface InternalTransformOptions extends TransformOptions {
+  skipShieldPreamble?: boolean;
+  shieldCoupled?: boolean;
+  windowKeySymbol?: string;
+  expectedDelta?: number;
 }
 
 export interface TransformResult {
@@ -135,6 +140,9 @@ export interface TransformResult {
   hotPathReport: HotPathReport;
   integrityToken: number;
   virtualizedFunctionsCount?: number;
+}
+
+export interface InternalTransformResult extends TransformResult {
   shaderBuffersCount?: number;
 }
 
@@ -149,10 +157,13 @@ export interface ShieldConfig {
 
 export interface ShieldPayload {
   preambleCode: string;
-  integrityCheckFnName: string;
   expectedHash: number;
   windowKeySymbol?: string;
   expectedDelta?: number;
+}
+
+export interface InternalShieldPayload extends ShieldPayload {
+  integrityCheckFnName: string;
 }
 
 export interface SourceMapVaultResult {

@@ -5,14 +5,13 @@ import os from 'node:os';
 import vm from 'node:vm';
 import {
   transformJavaScript,
-  detectHotPaths,
   protectProject,
-  scanClientBundles,
-  SUPPORTED_EXTENSIONS,
-  unpeekPlugin,
   loadUnpeekConfig,
-  resolveUnpeekConfigSync,
 } from '../src/index.js';
+import { detectHotPaths } from '../src/ast/index.js';
+import { scanClientBundles, SUPPORTED_EXTENSIONS } from '../src/bundler/detector.js';
+import { unpeekPlugin } from '../src/bundler/unplugin.js';
+import { resolveUnpeekConfigSync } from '../src/config.js';
 import type { UnpeekConfig } from '../src/types.js';
 
 describe('Audit Remediation Verification Suite', () => {

@@ -1,5 +1,6 @@
+import { computeFnv1aHash } from '../shared/hash.js';
+
 const FNV_OFFSET_BASIS = 0x811c9dc5;
-const FNV_PRIME = 0x01000193;
 
 /**
  * Computes a 32-bit unsigned FNV-1a hash over the un-normalized source string.
@@ -7,12 +8,7 @@ const FNV_PRIME = 0x01000193;
  * or monkeypatching alters the resulting hash.
  */
 export function computeIntegrityHash(source: string, seed = 0): number {
-  let hash = (FNV_OFFSET_BASIS ^ (seed >>> 0)) >>> 0;
-  for (let i = 0; i < source.length; i++) {
-    hash ^= source.charCodeAt(i);
-    hash = Math.imul(hash, FNV_PRIME) >>> 0;
-  }
-  return hash >>> 0;
+  return computeFnv1aHash(source, (FNV_OFFSET_BASIS ^ (seed >>> 0)) >>> 0);
 }
 
 /**
@@ -20,7 +16,7 @@ export function computeIntegrityHash(source: string, seed = 0): number {
  * by comparing its un-normalized Function.prototype.toString() FNV-1a hash.
  */
 export function verifyCodeIntegrity(
-  fnOrSource: ((...args: any[]) => any) | string,
+  fnOrSource: ((...args: unknown[]) => unknown) | string,
   expectedHash: number,
   seed = 0
 ): boolean {

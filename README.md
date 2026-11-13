@@ -66,8 +66,8 @@ flowchart TD
    Cold string literals (`minStringLength >= 4`) are encrypted at build time with a period-2 polymorphic XOR stream cipher keyed by a per-build 32-bit seed that preserves LZ77/Gzip compressibility. At module initialization, the injected `const _uC` vault decodes strings once into a V8 `kConst` array slot so every subsequent read resolves in O(1) constant time via direct array indexing, while dual-entangling the XOR key with both the runtime integrity state (`String.prototype._u`) and self-verifying decoder formatting (`/\n/.test(f)`).
 3. **Self-Defending `Function.prototype.toString()` Integrity and Deterrent Modes**
    When an analyst formats a protected chunk using DevTools Pretty-Print (`{}`) or edits a branch instruction in the Sources panel, the formatted source alters `Function.prototype.toString()`. [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts) validates a seeded 32-bit FNV-1a checksum against the function source representation with zero false positives on untouched minified code. The response is governed by `deterrentMode`:
-   - `passive` (CLI `protect` default): Dispatches a tamper telemetry event (`unpeek:tamper`) to `window` with zero console muting or audible breakage, enabling covert telemetry.
-   - `gradual` (`unplugin` default): Progressively corrupts internal runtime lookups and silences `console` output, neutralizing attackers without providing an immediate crash trace to patch.
+   - `passive` (default for both CLI `protect` and `unplugin`): Dispatches a tamper telemetry event (`unpeek:tamper`) to `window` with zero console muting or audible breakage, enabling covert telemetry.
+   - `gradual` (opt-in via `--gradual` or `deterrentMode: 'gradual'`): Progressively corrupts internal runtime lookups and silences `console` output, neutralizing attackers without providing an immediate crash trace to patch.
 4. **Automatic Source Map Vault (`.unpeek-maps/`)**
    Leaving `.js.map` files in a public build directory reconstructs your original TypeScript project tree inside DevTools. [`protectProject`](packages/unpeek/src/cli/protect.ts) extracts `.map` files from your public build directory into a private `.unpeek-maps/` folder and strips `//# sourceMappingURL=` comments from every client bundle so you can upload maps to Sentry or Datadog without serving them to end users.
 
@@ -85,7 +85,7 @@ npx unpeek init
 
 This command performs three setup actions:
 1. Detects your framework (`nextjs`, `vite`, `webpack`, or `vanilla`) from `package.json` and build config files.
-2. Adds `"postbuild": "unpeek protect"` to your `package.json` scripts so every production build is automatically protected.
+2. For **Next.js >= 16.2**, wires `withUnpeek` from `unpeek/next` into `next.config.*` as a Build Adapter (so protection runs inside `onBuildComplete` without needing a `postbuild` script); for all other frameworks (including Next.js < 16.2), adds `"postbuild": "unpeek protect"` to your `package.json` scripts.
 3. Appends `.unpeek-maps/` to `.gitignore` so extracted source maps stay out of version control.
 
 ### 2. CLI Usage (`unpeek protect`)
@@ -106,7 +106,9 @@ npx unpeek protect
 | `--out-dir <path>` | Explicit client output directory override (e.g., `dist/assets`, `.next/static/chunks`) | Auto-detected from project framework |
 | `--seed <number>` | Deterministic 32-bit polymorphic build seed | Random per build |
 | `--aggressive` | Enable Tier 2 aggressive protection (Micro-VM & WASM KDF) | Disabled (Tier 1 default: <2% CPU, <15% Gzip) |
-| `--passive` | Use passive deterrent mode (tamper telemetry event without console muting) | CLI default: `passive` (`unplugin` default: `gradual`) |
+| `--passive` | Use passive deterrent mode (tamper telemetry event without console muting) | Default (`passive`) |
+| `--gradual` | Use gradual deterrent mode (silences `console` and corrupts runtime state on tamper) | Disabled |
+| `--detect-headless` | Treat `navigator.webdriver` / `HeadlessChrome` signals as tamper | Disabled |
 | `--no-maps` | Permanently delete `.map` files instead of moving them to `.unpeek-maps/` | Moves to `.unpeek-maps/` |
 | `--min-string-length <num>` | Minimum string length for O(1) `kConst` encryption vault | `4` |
 | `--private-maps-dir <dir>` | Directory to store vaulted private source maps | `.unpeek-maps` |
@@ -122,28 +124,29 @@ npx unpeek protect
 > Programmatic execution through `protectProject(options)` supports additional fine-grained options, including `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, `aggressive`, and `cwd`.
 
 > [!IMPORTANT]
-> **CommonJS Users (Dynamic `import()`):**
-> Because `unpeek` is distributed with native ECMAScript Modules (`"type": "module"`), in CommonJS environments (`.cjs` files or `require()` scripts) load `unpeek` using dynamic `import()`:
+> **Native CommonJS & ESM Dual-Package Support:**
+> `unpeek` and all subpaths (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/unplugin`, `unpeek/next`, `unpeek/config`, `unpeek/ast`, `unpeek/runtime`) natively support both ESM `import` and CommonJS `require(...)`. Bundler subpaths expose a `default` export in CJS:
 > ```javascript
-> // CommonJS (next.config.js / webpack.config.js / scripts)
-> const unpeek = (await import('unpeek/unplugin')).default;
-> const { protectProject, transformJavaScript } = await import('unpeek');
+> // CommonJS (next.config.js / webpack.config.cjs / scripts)
+> const unpeek = require('unpeek/vite');
+> const { withUnpeek } = require('unpeek/next');
+> const { protectProject, transformJavaScript } = require('unpeek');
 > ```
 
 ### 3. Universal Bundler Plugin (`unpeek/unplugin`)
 
-For in-memory chunk transformations during the bundler build lifecycle rather than a post-build CLI pass, use [`unpeek/unplugin`](packages/unpeek/src/bundler/unplugin.ts):
+For in-memory chunk transformations during the bundler build lifecycle rather than a post-build CLI pass, use [`unpeek/unplugin`](packages/unpeek/src/bundler/unplugin.ts) or the dedicated subpath (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`):
 
 #### Vite (`vite.config.ts`)
 
 ```ts
 import { defineConfig } from 'vite';
-import unpeek from 'unpeek/unplugin';
+import unpeek from 'unpeek/vite';
 
 export default defineConfig({
   plugins: [
-    unpeek.vite({
-      deterrentMode: 'gradual',
+    unpeek({
+      deterrentMode: 'passive',
     }),
   ],
 });
@@ -151,18 +154,33 @@ export default defineConfig({
 
 #### Next.js (`next.config.mjs`)
 
-Scope the plugin to client bundles (`!isServer`) so Node.js server chunks keep their native stack traces:
+For **Next.js >= 16.2**, use the Build Adapter helper `withUnpeek` from `unpeek/next` (automatically wired by `npx unpeek init`):
 
 ```js
-import unpeek from 'unpeek/unplugin';
+import { withUnpeek } from 'unpeek/next';
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {};
+
+export default withUnpeek(nextConfig);
+```
+
+> [!WARNING]
+> **Trusted Context Only (`upstreamAdapterPath`):**
+> `withUnpeek` / `createUnpeekNextAdapter` supports chaining an existing adapter via `upstreamAdapterPath` or `UNPEEK_UPSTREAM_ADAPTER_PATH`, which dynamically imports the specified module at build time. Only set `upstreamAdapterPath` or `UNPEEK_UPSTREAM_ADAPTER_PATH` in trusted project contexts.
+
+For Next.js < 16.2 Webpack builds, scope the plugin to client bundles (`!isServer`) so Node.js server chunks keep their native stack traces:
+
+```js
+import unpeek from 'unpeek/webpack';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   webpack(config, { dev, isServer }) {
     if (!dev && !isServer) {
       config.plugins.push(
-        unpeek.webpack({
-          deterrentMode: 'gradual',
+        unpeek({
+          deterrentMode: 'passive',
         })
       );
     }
@@ -173,28 +191,38 @@ const nextConfig = {
 export default nextConfig;
 ```
 
-#### Programmatic API
+#### Programmatic API & Package Exports (`2.0.0`)
+
+In `unpeek` 2.0.0, the root `unpeek` entry exposes the core high-level API (`protectProject`, `transformJavaScript`, `initProject`, `defineConfig`, `loadUnpeekConfig`, `UnpeekError`, `UnpeekErrorCode`, and public TypeScript types), while low-level primitives and bundler integrations live on dedicated subpaths (`unpeek/config`, `unpeek/ast`, `unpeek/runtime`, `unpeek/browser`, `unpeek/next`, `unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/unplugin`).
 
 ```ts
-import { transformJavaScript, protectProject } from 'unpeek';
+import { transformJavaScript, protectProject, UnpeekError } from 'unpeek';
 
-// Transform an individual JavaScript string in memory
-const result = transformJavaScript(sourceCode, {
-  seed: 0x7f3a91,
-  minStringLength: 4,
-  injectRuntimeShield: true,
-  deterrentMode: 'gradual',
-});
+try {
+  // Transform an individual JavaScript string in memory
+  const result = transformJavaScript(sourceCode, {
+    seed: 0x7f3a91,
+    minStringLength: 4,
+    injectRuntimeShield: true,
+    deterrentMode: 'passive',
+  });
 
-console.log(result.hotPathReport);
-// { totalFunctions: 12, hotFunctionsSkipped: ['renderLoop'], coldFunctionsProtected: ['signRequest'] }
+  console.log(result.hotPathReport);
+  // { totalFunctions: 12, hotFunctionsSkipped: ['renderLoop'], coldFunctionsProtected: ['signRequest'] }
 
-// Or protect an entire build directory
-const summary = await protectProject({
-  cwd: process.cwd(),
-  keepPrivateMaps: true,
-  privateMapsDir: '.unpeek-maps',
-});
+  // Or protect an entire build directory
+  const summary = await protectProject({
+    cwd: process.cwd(),
+    keepPrivateMaps: true,
+    privateMapsDir: '.unpeek-maps',
+  });
+} catch (err) {
+  if (err instanceof UnpeekError) {
+    // err.code is an UnpeekErrorCode (e.g. 'ERR_CONFIG_INVALID', 'ERR_CONFIG_LOAD', 'ERR_PARSE_FAILED')
+    console.error(err.code, err.message);
+  }
+  throw err;
+}
 ```
 
 ---
@@ -209,11 +237,11 @@ const summary = await protectProject({
 
 ### Type-Safe Configuration (`defineConfig`)
 
-Import `defineConfig` from `'unpeek'` to enable IDE autocompletion and schema validation:
+Import `defineConfig` from `'unpeek/config'` (also re-exported from `'unpeek'`) to enable IDE autocompletion and schema validation. Malformed or non-object configuration files throw an `UnpeekError` (`ERR_CONFIG_INVALID` or `ERR_CONFIG_LOAD`) instead of failing silently:
 
 ```javascript
 // unpeek.config.mjs (or unpeek.config.js)
-import { defineConfig } from 'unpeek';
+import { defineConfig } from 'unpeek/config';
 
 export default defineConfig({
   // Target framework override ('nextjs' | 'vite' | 'webpack' | 'vanilla')
@@ -225,8 +253,8 @@ export default defineConfig({
   // Explicit client output directory override (auto-detected if omitted)
   outDir: '.next/static/chunks',
 
-  // Target file extensions to protect
-  extensions: ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'],
+  // Compiled JavaScript bundle extensions to protect (raw .ts/.tsx sources are not processed by CLI protect)
+  extensions: ['.js', '.mjs', '.cjs'],
 
   // Public asset directories
   publicDirs: ['public', 'static'],

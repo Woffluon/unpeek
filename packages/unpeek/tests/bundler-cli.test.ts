@@ -5,10 +5,13 @@ import os from 'node:os';
 import {
   initProject,
   protectProject,
+  UnpeekError,
+} from '../src/index.js';
+import {
   detectTargetFramework,
   scanClientBundles,
-  unpeekPlugin,
-} from '../src/index.js';
+} from '../src/bundler/detector.js';
+import { unpeekPlugin } from '../src/bundler/unplugin.js';
 
 describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin', () => {
   let tmpDir: string;
@@ -816,5 +819,22 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
     vm.runInContext(protectedCode, vm.createContext(win));
     expect(win.__unpeek_tampered).toBe(true);
     expect(win.console.log()).toBe(0);
+  });
+
+  it('initProject throws ERR_INIT_INVALID_PACKAGE_JSON on malformed package.json without overwriting it', () => {
+    const pkgPath = path.join(tmpDir, 'package.json');
+    const malformed = '{ "name": "broken-app", ';
+    fs.writeFileSync(pkgPath, malformed, 'utf8');
+
+    let caught: unknown;
+    try {
+      initProject(tmpDir);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(UnpeekError);
+    expect((caught as UnpeekError).code).toBe('ERR_INIT_INVALID_PACKAGE_JSON');
+    expect(fs.readFileSync(pkgPath, 'utf8')).toBe(malformed);
   });
 });

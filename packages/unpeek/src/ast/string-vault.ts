@@ -1,7 +1,10 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
 import type { DeterrentMode, UnpeekConfig } from '../types.js';
+import { computeFnv1aHash } from '../shared/hash.js';
 import { derivePolymorphicIdent, generateCompactJs } from './codegen.js';
+
+export { computeFnv1aHash };
 import {
   deriveWindowKeySymbol,
   generateRuntimeShield,
@@ -132,25 +135,31 @@ export function isTailwindNoise(val: string): boolean {
   return false;
 }
 
-function isParentSvgPathProperty(parent: any): boolean {
+function isParentSvgPathProperty(
+  parent?: Omit<acorn.Node, 'start' | 'end'>
+): boolean {
   if (!parent) return false;
-  if (parent.type === 'Property') {
+  if (parent.type === 'Property' && 'key' in parent && parent.key) {
+    const key = parent.key as { type: string; name?: string; value?: unknown };
     const keyName =
-      parent.key?.type === 'Identifier'
-        ? parent.key.name
-        : parent.key?.type === 'Literal'
-          ? String(parent.key.value)
+      key.type === 'Identifier'
+        ? key.name
+        : key.type === 'Literal'
+          ? String(key.value)
           : '';
     if (keyName === 'd' || keyName === 'path') return true;
   }
-  if (parent.type === 'JSXAttribute') {
-    const attrName = parent.name?.name;
+  if (parent.type === 'JSXAttribute' && 'name' in parent && parent.name) {
+    const attrName = (parent.name as { name?: string }).name;
     if (attrName === 'd' || attrName === 'path') return true;
   }
   return false;
 }
 
-export function isSvgPathString(val: string, parent?: any): boolean {
+export function isSvgPathString(
+  val: string,
+  parent?: Omit<acorn.Node, 'start' | 'end'>
+): boolean {
   if (typeof val !== 'string' || val.length < 4) return false;
   const trimmed = val.trim();
   // An SVG path must start with M or m followed by a number/decimal point/sign
@@ -329,7 +338,7 @@ const SHADER_SIG_RE =
 export function shouldEncryptString(
   val: string,
   minLen: number,
-  parent?: any,
+  parent?: Omit<acorn.Node, 'start' | 'end'>,
   activeDirectives: Set<string> = DIRECTIVE_STRINGS,
   customReserved?: Set<string>
 ): boolean {
@@ -338,15 +347,6 @@ export function shouldEncryptString(
   if (isSvgPathString(val, parent)) return false;
   if (isTailwindNoise(val)) return false;
   return true;
-}
-
-export function computeFnv1aHash(input: string, seed = 0x811c9dc5): number {
-  let hash = seed >>> 0;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash >>> 0;
 }
 
 export interface StringVaultResult {
@@ -420,29 +420,48 @@ export function encodeStringWithSeed(
   return out;
 }
 
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  if (typeof btoa === 'function') {
+    let binary = '';
+    const CHUNK_SIZE = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK_SIZE));
+    }
+    return btoa(binary);
+  }
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes).toString('base64');
+  }
+  throw new Error('No base64 encoder available in this environment');
+}
+
 function createShaderVaultAst(
   shaderVarName: string,
   shaderPayloads: string[],
   seed: number
-): any {
+): acorn.VariableDeclaration {
   const sSeed = seed >>> 0;
   const fnCode = `(function f(B){var c=Function.prototype.toString.call(f),h=0x811c9dc5;for(var i=0;i<c.length;i++)h=Math.imul(h^c.charCodeAt(i),0x01000193)>>>0;var S=h^${sSeed},b=B.map(function(s){var n=typeof atob=="function"?atob(s):typeof Buffer<"u"?Buffer.from(s,"base64").toString("binary"):"",u=new Uint8Array(n.length);for(var i=0;i<n.length;i++)u[i]=n.charCodeAt(i);return u;}),d=typeof TextDecoder<"u"?new TextDecoder():null;function x(u,i){for(var r=(S^Math.imul(i+1,0x9e3779b1))|0,j=0;j<u.length;j++){r=(Math.imul(r^(j+1),0x45d9f3b)+0x85ebca6b)|0;u[j]^=(r>>>16)&255;}}return function(i){var u=b[i];x(u,i);try{return d?d.decode(u):String.fromCharCode.apply(null,u);}finally{x(u,i);}};})`;
-  const fnAst = (
-    acorn.parse(fnCode, { ecmaVersion: 'latest', sourceType: 'script' }) as any
-  ).body[0].expression;
+  const parsedProgram = acorn.parse(fnCode, {
+    ecmaVersion: 'latest',
+    sourceType: 'script',
+  });
+  const firstStmt = parsedProgram.body[0] as acorn.ExpressionStatement;
+  const fnAst = firstStmt.expression;
   const buildH = computeIntegrityHash(generateCompactJs(fnAst), 0);
   const S = (buildH ^ sSeed) >>> 0;
 
+  const textEncoder = new TextEncoder();
   const b64List: string[] = [];
   for (let idx = 0; idx < shaderPayloads.length; idx++) {
     const str = shaderPayloads[idx];
-    const buf = Buffer.from(str, 'utf8');
+    const bytes = textEncoder.encode(str);
     let r = (S ^ Math.imul(idx + 1, 0x9e3779b1)) | 0;
-    for (let j = 0; j < buf.length; j++) {
+    for (let j = 0; j < bytes.length; j++) {
       r = (Math.imul(r ^ (j + 1), 0x45d9f3b) + 0x85ebca6b) | 0;
-      buf[j] ^= (r >>> 16) & 255;
+      bytes[j] ^= (r >>> 16) & 255;
     }
-    b64List.push(buf.toString('base64'));
+    b64List.push(uint8ArrayToBase64(bytes));
   }
 
   return createSaltedVaultHelperAst(shaderVarName, b64List, fnAst);

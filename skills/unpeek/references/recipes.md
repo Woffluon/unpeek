@@ -14,8 +14,8 @@ Console errors such as:
 Protection was erroneously applied to server-side chunks (`.next/server/`), creating a divergence between server-rendered HTML and client bundle execution.
 
 ### Resolution
-1. **Use Default Postbuild CLI**: unpeek automatically filters out `.next/server/` and processes only `.next/static/chunks/` or `out/_next/static/chunks/`.
-2. **If using `next.config.mjs`**, ensure the plugin is guarded by `!isServer` and `!dev`:
+1. **Use Default Postbuild CLI or Next.js >= 16.2 `withUnpeek` (`unpeek/next`)**: unpeek automatically filters out `.next/server/` and processes only `.next/static/chunks/` or `out/_next/static/chunks/`.
+2. **If using `next.config.mjs` on Next.js < 16.2**, ensure the Webpack plugin is guarded by `!isServer` and `!dev`:
    ```js
    // next.config.mjs
    import unpeek from 'unpeek/webpack';
@@ -37,8 +37,8 @@ Protection was erroneously applied to server-side chunks (`.next/server/`), crea
 ### Requirement
 Detect DevTools tampering without disrupting error reporting or console logs captured by browser APM agents.
 
-### Recipe: Passive Mode + CustomEvent Listener
-Run protection with `--passive`:
+### Recipe: Passive Mode (Default) + CustomEvent Listener
+Passive mode is the default for both CLI `protect` and `unplugin` (use `--gradual` to opt into gradual console muting, or `--detect-headless` to flag headless browser automation):
 ```bash
 npx unpeek protect --passive
 ```

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { SourceMapVaultResult, UnpeekConfig } from '../types.js';
+import { UnpeekError } from '../errors.js';
 import { hasNextServerSegment, scanClientBundles } from './detector.js';
 
 export const SOURCE_MAP_COMMENT_REGEX =
@@ -97,19 +98,27 @@ function updateAllIgnoreFiles(cwd: string, vaultDir: string): void {
   }
 }
 
+export interface RelocateSourceMapsOptions {
+  /** Whether to update .gitignore/.dockerignore/.npmignore files (default: true). */
+  updateIgnoreFiles?: boolean;
+}
+
 export function relocateSourceMaps(
   outDir: string,
   cwd: string,
   keepPrivateMaps: boolean = true,
   privateMapsDir: string = '.unpeek-maps',
   stripComments: boolean = true,
-  config?: UnpeekConfig
+  config?: UnpeekConfig,
+  options?: boolean | RelocateSourceMapsOptions
 ): SourceMapVaultResult {
   const resolvedOutDir = path.resolve(outDir);
   const resolvedCwd = path.resolve(cwd);
   const effectiveVaultDirName = config?.sourcemaps?.vaultDir ?? privateMapsDir ?? '.unpeek-maps';
   const effectiveKeepPrivate = config?.sourcemaps?.keepPrivate ?? keepPrivateMaps;
   const effectiveStripComments = config?.sourcemaps?.stripComments ?? stripComments;
+  const updateIgnoreFiles =
+    typeof options === 'boolean' ? options : (options?.updateIgnoreFiles ?? true);
   const vaultDir = path.resolve(resolvedCwd, effectiveVaultDirName);
 
   const publicDirsToCheck = new Set<string>();
@@ -124,6 +133,12 @@ export function relocateSourceMaps(
   }
 
   if (effectiveKeepPrivate !== false) {
+    if (!isSubdirectoryOrSame(resolvedCwd, vaultDir)) {
+      throw new UnpeekError(
+        'ERR_SECURITY_PATH_TRAVERSAL',
+        `[unpeek] Security Error: privateMapsDir (${vaultDir}) cannot traverse outside cwd (${resolvedCwd}).`
+      );
+    }
     if (isSubdirectoryOrSame(resolvedOutDir, vaultDir)) {
       throw new Error(
         `[unpeek] Security Error: privateMapsDir cannot be located inside outDir (${resolvedOutDir}). This would expose private source maps to the web server.`
@@ -197,7 +212,7 @@ export function relocateSourceMaps(
 
   walkForMaps(resolvedOutDir);
 
-  if (effectiveKeepPrivate !== false && movedMapsCount > 0) {
+  if (updateIgnoreFiles && effectiveKeepPrivate !== false && movedMapsCount > 0) {
     updateAllIgnoreFiles(resolvedCwd, vaultDir);
   }
 

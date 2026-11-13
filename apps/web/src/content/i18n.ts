@@ -196,7 +196,7 @@ export function validateLicense($k0){
 export const DICTIONARY: Record<Locale, Dictionary> = {
   en: {
     meta: {
-      version: "v1.15.1",
+      version: "v2.0.0",
       license: "MIT License",
     },
     nav: {
@@ -505,7 +505,7 @@ const nextConfig = {
     if (!dev && !isServer) {
       config.plugins.push(
         unpeek.webpack({
-          deterrentMode: "gradual",
+          deterrentMode: "passive",
         })
       );
     }
@@ -527,18 +527,18 @@ export default nextConfig;`,
                 label: "vite.config.ts: Native Vite Plugin Integration",
                 language: "typescript",
                 code: `import { defineConfig } from "vite";
-import { vitePlugin } from "unpeek/vite";
+import unpeek from "unpeek/vite";
 
 export default defineConfig({
   build: {
     sourcemap: true, // Extracted to .unpeek-maps/ during postbuild
   },
   plugins: [
-    vitePlugin({
+    unpeek({
       seed: 0x9fa21b,
       minStringLength: 4,
       injectRuntimeShield: true,
-      deterrentMode: "gradual",
+      deterrentMode: "passive",
     }),
   ],
 });`,
@@ -732,7 +732,9 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
   Options:
     --out-dir <dir>                explicit client output directory
     --seed <number>                deterministic polymorphic seed
-    --passive                      passive deterrent mode instead of gradual
+    --passive                      passive deterrent mode (default: marks tamper, keeps console)
+    --gradual                      gradual deterrent mode (silences console on tamper)
+    --detect-headless              treat navigator.webdriver / HeadlessChrome as tamper
     --no-maps                      delete .map files instead of vaulting them
     --min-string-length <num>      minimum string length for the vault (default: 4)
     --private-maps-dir <dir>       vault directory (default: .unpeek-maps)
@@ -759,6 +761,7 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
                 code: `import {
   protectProject,
   transformJavaScript,
+  UnpeekError,
   type ProtectOptions,
   type ProtectSummary,
   type TransformOptions,
@@ -770,7 +773,7 @@ const result: TransformResult = transformJavaScript(sourceCode, {
   seed: 0x10b981,
   minStringLength: 4,
   injectRuntimeShield: true,
-  deterrentMode: "gradual",
+  deterrentMode: "passive",
   aggressive: true,
 });
 
@@ -782,7 +785,7 @@ const summary: ProtectSummary = await protectProject({
   cwd: process.cwd(),
   keepPrivateMaps: true,
   privateMapsDir: ".unpeek-maps",
-  deterrentMode: "gradual",
+  deterrentMode: "passive",
   aggressive: false,
 });`,
               },
@@ -999,7 +1002,7 @@ unpeek protect --no-shield`,
   },
   tr: {
     meta: {
-      version: "v1.15.1",
+      version: "v2.0.0",
       license: "MIT Lisansı",
     },
     nav: {
@@ -1308,7 +1311,7 @@ const nextConfig = {
     if (!dev && !isServer) {
       config.plugins.push(
         unpeek.webpack({
-          deterrentMode: "gradual",
+          deterrentMode: "passive",
         })
       );
     }
@@ -1330,18 +1333,18 @@ export default nextConfig;`,
                 label: "vite.config.ts: Doğrudan Vite Eklenti Entegrasyonu",
                 language: "typescript",
                 code: `import { defineConfig } from "vite";
-import { vitePlugin } from "unpeek/vite";
+import unpeek from "unpeek/vite";
 
 export default defineConfig({
   build: {
     sourcemap: true, // Postbuild aşamasında .unpeek-maps/ kasasına taşınır
   },
   plugins: [
-    vitePlugin({
+    unpeek({
       seed: 0x9fa21b,
       minStringLength: 4,
       injectRuntimeShield: true,
-      deterrentMode: "gradual",
+      deterrentMode: "passive",
     }),
   ],
 });`,
@@ -1535,7 +1538,9 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
   Options:
     --out-dir <dir>                explicit client output directory
     --seed <number>                deterministic polymorphic seed
-    --passive                      passive deterrent mode instead of gradual
+    --passive                      passive deterrent mode (default: marks tamper, keeps console)
+    --gradual                      gradual deterrent mode (silences console on tamper)
+    --detect-headless              treat navigator.webdriver / HeadlessChrome as tamper
     --no-maps                      delete .map files instead of vaulting them
     --min-string-length <num>      minimum string length for the vault (default: 4)
     --private-maps-dir <dir>       vault directory (default: .unpeek-maps)
@@ -1562,6 +1567,7 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
                 code: `import {
   protectProject,
   transformJavaScript,
+  UnpeekError,
   type ProtectOptions,
   type ProtectSummary,
   type TransformOptions,
@@ -1573,7 +1579,7 @@ const result: TransformResult = transformJavaScript(sourceCode, {
   seed: 0x10b981,
   minStringLength: 4,
   injectRuntimeShield: true,
-  deterrentMode: "gradual",
+  deterrentMode: "passive",
   aggressive: true,
 });
 
@@ -1585,7 +1591,7 @@ const summary: ProtectSummary = await protectProject({
   cwd: process.cwd(),
   keepPrivateMaps: true,
   privateMapsDir: ".unpeek-maps",
-  deterrentMode: "gradual",
+  deterrentMode: "passive",
   aggressive: false,
 });`,
               },

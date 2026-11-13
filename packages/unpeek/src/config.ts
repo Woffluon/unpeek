@@ -2,6 +2,7 @@ import fs, { existsSync, readFileSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { UnpeekError } from './errors.js';
 import type { UnpeekConfig } from './types.js';
 
 export const CONFIG_CANDIDATES = [
@@ -63,6 +64,10 @@ function mergeStringArrays(a?: string[], b?: string[]): string[] {
   return Array.from(new Set([...(a ?? []), ...(b ?? [])]));
 }
 
+function isRecord(val: unknown): val is Record<string, unknown> {
+  return typeof val === 'object' && val !== null && !Array.isArray(val);
+}
+
 function toRegExp(val: unknown): RegExp | undefined {
   if (!val) return undefined;
   if (val instanceof RegExp) return val;
@@ -82,36 +87,36 @@ function toRegExpArray(val: unknown): RegExp[] | undefined {
   return result;
 }
 
-export function normalizeConfig(raw: Record<string, any>): UnpeekConfig {
-  if (!raw || typeof raw !== 'object') {
+export function normalizeConfig(raw: Record<string, unknown>): UnpeekConfig {
+  if (!isRecord(raw)) {
     return {};
   }
 
-  const result: UnpeekConfig = { ...raw };
+  const result: UnpeekConfig = { ...(raw as UnpeekConfig) };
 
-  if (raw.hotPath && typeof raw.hotPath === 'object') {
+  if (isRecord(raw.hotPath)) {
     result.hotPath = {
-      ...raw.hotPath,
+      ...(raw.hotPath as UnpeekConfig['hotPath']),
       hookPattern: toRegExp(raw.hotPath.hookPattern),
       eventHandlerRegex: toRegExp(raw.hotPath.eventHandlerRegex),
     };
   }
 
-  if (raw.vault && typeof raw.vault === 'object') {
+  if (isRecord(raw.vault)) {
     result.vault = {
-      ...raw.vault,
-      semanticAnchors: raw.vault.semanticAnchors
+      ...(raw.vault as UnpeekConfig['vault']),
+      semanticAnchors: isRecord(raw.vault.semanticAnchors)
         ? {
-            ...raw.vault.semanticAnchors,
+            ...(raw.vault.semanticAnchors as NonNullable<UnpeekConfig['vault']>['semanticAnchors']),
             patterns: toRegExpArray(raw.vault.semanticAnchors.patterns),
           }
         : undefined,
     };
   }
 
-  if (raw.mangler && typeof raw.mangler === 'object') {
+  if (isRecord(raw.mangler)) {
     result.mangler = {
-      ...raw.mangler,
+      ...(raw.mangler as UnpeekConfig['mangler']),
       excludePatterns: toRegExpArray(raw.mangler.excludePatterns),
     };
   }
@@ -227,6 +232,60 @@ export function findConfigFile(cwd: string = process.cwd()): string | null {
   return null;
 }
 
+function formatErr(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function unwrapDefaultExport(raw: unknown): unknown {
+  if (
+    isRecord(raw) &&
+    'default' in raw &&
+    !('framework' in raw) &&
+    !('vault' in raw) &&
+    !('hotPath' in raw) &&
+    !('shield' in raw)
+  ) {
+    return raw.default;
+  }
+  return raw;
+}
+
+function validateAndNormalizeConfig(raw: unknown, configPath: string): UnpeekConfig {
+  if (raw === undefined) {
+    return {};
+  }
+  if (!isRecord(raw)) {
+    throw new UnpeekError(
+      'ERR_CONFIG_INVALID',
+      `Configuration at "${configPath}" must export or contain a JSON object.`,
+    );
+  }
+  try {
+    return normalizeConfig(raw);
+  } catch (err: unknown) {
+    if (err instanceof UnpeekError) throw err;
+    throw new UnpeekError(
+      'ERR_CONFIG_INVALID',
+      `Invalid configuration at "${configPath}": ${formatErr(err)}`,
+      { cause: err },
+    );
+  }
+}
+
+function parseJsonConfig(content: string, configPath: string): UnpeekConfig {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (err: unknown) {
+    throw new UnpeekError(
+      'ERR_CONFIG_INVALID',
+      `Failed to parse JSON configuration at "${configPath}": ${formatErr(err)}`,
+      { cause: err },
+    );
+  }
+  return validateAndNormalizeConfig(parsed, configPath);
+}
+
 export async function loadUnpeekConfig(
   cwd: string = process.cwd(),
   explicitConfig?: UnpeekConfig,
@@ -238,35 +297,45 @@ export async function loadUnpeekConfig(
   if (configPath) {
     const ext = extname(configPath).toLowerCase();
     if (ext === '.json') {
-      const content = await fs.promises.readFile(configPath, 'utf8');
-      parsedConfig = normalizeConfig(JSON.parse(content));
+      let content: string;
+      try {
+        content = await fs.promises.readFile(configPath, 'utf8');
+      } catch (err: unknown) {
+        throw new UnpeekError(
+          'ERR_CONFIG_LOAD',
+          `Failed to read configuration at "${configPath}": ${formatErr(err)}`,
+          { cause: err },
+        );
+      }
+      parsedConfig = parseJsonConfig(content, configPath);
     } else {
+      let raw: unknown;
       try {
         const fileUrl = pathToFileURL(configPath).href;
-        const mod = await import(fileUrl);
-        let raw = mod.default ?? mod;
+        const mod: unknown = await import(fileUrl);
+        raw = isRecord(mod) && 'default' in mod ? mod.default : mod;
         if (typeof raw === 'function') {
-          raw = await raw();
+          raw = await (raw as () => unknown)();
         }
-        if (raw && typeof raw === 'object' && 'default' in raw && !raw.framework && !raw.vault && !raw.hotPath && !raw.shield) {
-          raw = raw.default;
-        }
-        parsedConfig = normalizeConfig(raw ?? {});
-      } catch (importErr) {
+        raw = unwrapDefaultExport(raw);
+      } catch (importErr: unknown) {
         try {
           const req = createRequire(configPath);
-          let raw = req(configPath);
-          if (raw && typeof raw === 'object' && 'default' in raw && !raw.framework && !raw.vault && !raw.hotPath && !raw.shield) {
-            raw = raw.default;
+          let cjsRaw: unknown = req(configPath);
+          cjsRaw = unwrapDefaultExport(cjsRaw);
+          if (typeof cjsRaw === 'function') {
+            cjsRaw = await (cjsRaw as () => unknown)();
           }
-          if (typeof raw === 'function') {
-            raw = await raw();
-          }
-          parsedConfig = normalizeConfig(raw ?? {});
+          raw = cjsRaw;
         } catch {
-          throw importErr;
+          throw new UnpeekError(
+            'ERR_CONFIG_LOAD',
+            `Failed to load configuration at "${configPath}": ${formatErr(importErr)}`,
+            { cause: importErr },
+          );
         }
       }
+      parsedConfig = validateAndNormalizeConfig(raw ?? {}, configPath);
     }
   }
 
@@ -285,32 +354,41 @@ export function resolveUnpeekConfigSync(
   if (configPath) {
     const ext = extname(configPath).toLowerCase();
     if (ext === '.json') {
+      let content: string;
       try {
-        const content = readFileSync(configPath, 'utf8');
-        parsedConfig = normalizeConfig(JSON.parse(content));
-      } catch (err) {
-        console.warn(`[unpeek] Failed to parse JSON configuration at "${configPath}":`, err);
+        content = readFileSync(configPath, 'utf8');
+      } catch (err: unknown) {
+        throw new UnpeekError(
+          'ERR_CONFIG_LOAD',
+          `Failed to read configuration at "${configPath}": ${formatErr(err)}`,
+          { cause: err },
+        );
       }
+      parsedConfig = parseJsonConfig(content, configPath);
     } else {
+      let raw: unknown;
       try {
         const req = createRequire(configPath);
-        let raw = req(configPath);
-        if (raw && typeof raw === 'object' && 'default' in raw && !raw.framework && !raw.vault && !raw.hotPath && !raw.shield) {
-          raw = raw.default;
-        }
+        raw = unwrapDefaultExport(req(configPath));
         if (typeof raw === 'function') {
-          raw = raw();
+          raw = (raw as () => unknown)();
         }
-        parsedConfig = normalizeConfig(raw ?? {});
-      } catch (err: any) {
-        if (err?.code === 'ERR_REQUIRE_ESM') {
-          console.warn(
-            `[unpeek] Synchronous loading of ESM configuration "${configPath}" is not supported by Node.js require(). Use loadUnpeekConfig() or CommonJS/JSON config format instead.`
+      } catch (err: unknown) {
+        const errCode = isRecord(err) ? err.code : undefined;
+        if (errCode === 'ERR_REQUIRE_ESM') {
+          throw new UnpeekError(
+            'ERR_CONFIG_LOAD',
+            `Synchronous loading of ESM configuration "${configPath}" is not supported by Node.js require(). Use loadUnpeekConfig() or CommonJS/JSON config format instead.`,
+            { cause: err },
           );
-        } else {
-          console.warn(`[unpeek] Failed to load configuration at "${configPath}":`, err);
         }
+        throw new UnpeekError(
+          'ERR_CONFIG_LOAD',
+          `Failed to load configuration at "${configPath}": ${formatErr(err)}`,
+          { cause: err },
+        );
       }
+      parsedConfig = validateAndNormalizeConfig(raw ?? {}, configPath);
     }
   }
 

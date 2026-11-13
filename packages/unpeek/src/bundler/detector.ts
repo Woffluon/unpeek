@@ -84,6 +84,20 @@ export function hasNextServerSegment(
 
 export function detectTargetFramework(
   cwd: string,
+  explicitOutDir?: string,
+  explicitConfig?: UnpeekConfig
+): { framework: DetectedFramework; outDir: string };
+/**
+ * @deprecated Passing `UnpeekConfig` as the second argument (`explicitOutDir`) is deprecated.
+ * Pass `explicitOutDir?: string` as the second argument and `explicitConfig?: UnpeekConfig` as the third.
+ */
+export function detectTargetFramework(
+  cwd: string,
+  explicitOutDir?: string | UnpeekConfig,
+  explicitConfig?: UnpeekConfig
+): { framework: DetectedFramework; outDir: string };
+export function detectTargetFramework(
+  cwd: string,
   explicitOutDir?: string | UnpeekConfig,
   explicitConfig?: UnpeekConfig
 ): { framework: DetectedFramework; outDir: string } {

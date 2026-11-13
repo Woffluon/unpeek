@@ -7,6 +7,7 @@ import {
   createUnpeekNextAdapter,
   withUnpeek,
   getUnpeekAdapterPath,
+  readUnpeekNextOptionsFromEnv,
 } from '../src/next/index.js';
 import { initProject, isNext16OrAbove } from '../src/cli/init.js';
 
@@ -20,7 +21,7 @@ describe('Next.js 16+ Build Adapter & onBuildComplete Lifecycle', () => {
   afterEach(() => {
     delete process.env.UNPEEK_UPSTREAM_ADAPTER_PATH;
     delete process.env.NEXT_ADAPTER_PATH;
-    delete (globalThis as any).__unpeekNextOptions;
+    delete process.env.UNPEEK_NEXT_OPTIONS;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -271,5 +272,25 @@ describe('Next.js 16+ Build Adapter & onBuildComplete Lifecycle', () => {
     const withUnpeekMod = await import('../src/next/with-unpeek.js');
     expect(typeof withUnpeekMod.withUnpeek).toBe('function');
     expect(typeof withUnpeekMod.createUnpeekNextAdapter).toBe('function');
+  });
+
+  it('passes Next.js options via UNPEEK_NEXT_OPTIONS env JSON bridge without globalThis state', () => {
+    const cfg = withUnpeek(
+      { reactStrictMode: true },
+      { seed: 4242, deterrentMode: 'gradual', keepPrivateMaps: false }
+    );
+    expect(cfg.reactStrictMode).toBe(true);
+    expect('__unpeekNextOptions' in globalThis).toBe(false);
+    expect(process.env.UNPEEK_NEXT_OPTIONS).toBeDefined();
+
+    const parsed = readUnpeekNextOptionsFromEnv();
+    expect(parsed?.seed).toBe(4242);
+    expect(parsed?.deterrentMode).toBe('gradual');
+    expect(parsed?.keepPrivateMaps).toBe(false);
+
+    // Calling withUnpeek without options clears stale UNPEEK_NEXT_OPTIONS
+    withUnpeek({ reactStrictMode: false });
+    expect(process.env.UNPEEK_NEXT_OPTIONS).toBeUndefined();
+    expect(readUnpeekNextOptionsFromEnv()).toBeUndefined();
   });
 });

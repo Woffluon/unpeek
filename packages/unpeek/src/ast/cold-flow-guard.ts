@@ -1,7 +1,7 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
 
-function createDecoyObjectExpression(model: number): any {
+function createDecoyObjectExpression(model: number): acorn.ObjectExpression {
   const m = Math.abs(model) % 3;
   if (m === 0) {
     // Model 0: Sahte yetkilendirme baypası (/api/v2/auth/admin-bypass, superadmin_token, elevate)
@@ -40,7 +40,7 @@ function createDecoyObjectExpression(model: number): any {
           shorthand: false,
         },
       ],
-    };
+    } as unknown as acorn.ObjectExpression;
   }
 
   if (m === 1) {
@@ -93,7 +93,7 @@ function createDecoyObjectExpression(model: number): any {
           shorthand: false,
         },
       ],
-    };
+    } as unknown as acorn.ObjectExpression;
   }
 
   // Model 2: Sahte telemetri hata ayıklama ve süpervizör anahtarı (debug_supervisor_override, mfa_bypassed: true)
@@ -145,7 +145,7 @@ function createDecoyObjectExpression(model: number): any {
         shorthand: false,
       },
     ],
-  };
+  } as unknown as acorn.ObjectExpression;
 }
 
 function createDecoyConsequent(fnIndex: number): any {
@@ -186,7 +186,10 @@ function createSharedDecoyConsequent(decoyIdent: string, fnIndex: number): any {
   };
 }
 
-export function createSharedDecoyDeclaration(decoyIdent = '_d', maxModels = 3): any {
+export function createSharedDecoyDeclaration(
+  decoyIdent = '_d',
+  maxModels = 3
+): acorn.VariableDeclaration {
   const count = Math.max(1, Math.min(3, maxModels));
   const indices: number[] = [];
   for (let i = 0; i < count; i++) indices.push(i);
@@ -211,7 +214,7 @@ export function createSharedDecoyDeclaration(decoyIdent = '_d', maxModels = 3): 
         },
       },
     ],
-  };
+  } as unknown as acorn.VariableDeclaration;
 }
 
 function cloneNode<T>(node: T): T {
@@ -260,10 +263,10 @@ function makeLiteral(value: number): any {
 export function createSotaMbaPredicate(
   seed: number,
   fnIndex = 0,
-  paramNode?: any,
+  paramNode?: string | acorn.Pattern,
   decoyIdent?: string,
   isArrowFn = false
-): any {
+): acorn.IfStatement {
   // 32-bit non-linear Mixed Boolean-Arithmetic (MBA) opaque invariants bound to
   // a live runtime integer (never a static constant like +!String):
   // - If function has a parameter: (paramName | 0)
@@ -411,7 +414,7 @@ export function createSotaMbaPredicate(
     },
     consequent,
     alternate: null,
-  };
+  } as unknown as acorn.IfStatement;
 }
 
 export const createOpaqueGuardStatement = createSotaMbaPredicate;
@@ -485,9 +488,9 @@ export function applyColdFlowGuard(
     if (hotExemptNodes) {
       hotExemptNodes.add(sharedDecoyDecl);
       for (const decl of sharedDecoyDecl.declarations || []) {
-        if (decl.init?.elements) {
+        if (decl.init?.type === 'ArrayExpression' && decl.init.elements) {
           for (const el of decl.init.elements) {
-            hotExemptNodes.add(el);
+            if (el) hotExemptNodes.add(el);
           }
         }
       }

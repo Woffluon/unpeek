@@ -4,7 +4,6 @@ packages:
 allowBuilds:
   esbuild: true
   sharp: true
-verifyDepsBeforeRun: false
 overrides:
   tinypool: ">=2.1.2"
   glob: ">=14.0.2"

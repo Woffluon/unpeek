@@ -13,8 +13,8 @@
 Sıfır yapılandırma gerektiren, çağrı grafiği (call-graph) farkındalıklı, <%2 CPU ek yükü ve <%15 Gzip bütçesine sahip istemci tarafı JavaScript koruma ve çalışma zamanı (runtime) müdahale önleme aracı.
 
 [![Lisans: MIT](https://img.shields.io/badge/Lisans-MIT-111111.svg?style=flat-square)](LICENSE)
-[![Sıcak Yol CPU](https://img.shields.io/badge/S%C4%B1cak%20Yol%20CPU-%3C2%25-FF3300.svg?style=flat-square)](./benchmarks/overhead.bench.ts)
-[![Gzip Artışı](https://img.shields.io/badge/Gzip%20Art%C4%B1%C5%9F%C4%B1-%3C15%25-111111.svg?style=flat-square)](./benchmarks/overhead.bench.ts)
+[![Sıcak Yol CPU](https://img.shields.io/badge/S%C4%B1cak%20Yol%20CPU-%3C2%25-FF3300.svg?style=flat-square)](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/benchmarks/overhead.bench.ts)
+[![Gzip Artışı](https://img.shields.io/badge/Gzip%20Art%C4%B1%C5%9F%C4%B1-%3C15%25-111111.svg?style=flat-square)](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/benchmarks/overhead.bench.ts)
 [![Canlı Demo](https://img.shields.io/badge/Showcase-Canl%C4%B1%20Demo-FF3300.svg?style=flat-square)](https://woffluon.github.io/unpeek)
 [![Dokümantasyon](https://img.shields.io/badge/Docs-Detayl%C4%B1%20Referans-111111.svg?style=flat-square)](https://woffluon.github.io/unpeek/docs)
 
@@ -61,15 +61,15 @@ flowchart TD
 ```
 
 1. **Çağrı Grafiği (Call-Graph) Hot-Path Muafiyeti (`<%2` CPU Bütçesi)**
-   [`detectHotPaths`](./src/ast/index.ts), tek bir AST düğümünü değiştirmeden önce dosyanın çağrı grafiğini çift yönlü tarar. Döngü içeren fonksiyonlar (`for`, `while`, `do-while`, `for-of`), dizi yüksek mertebe geri çağrıları (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` zamanlayıcıları, React/UI bileşenleri (`useState`, `useEffect`, `createElement`) ve sıcak döngülerden çağrılan tüm yardımcı fonksiyonlar sıcak yol (hot path) olarak işaretlenir. `unpeek` sıcak döngüleri ve yardımcılarını hem opak kontrol akışı korumalarından hem de metin kasası dönüşümünden muaf tutar; korumayı yalnızca soğuk fonksiyonlara (lisans doğrulama, istek imzalama, yetki kontrolü gibi) uygular. Sıcak döngülerdeki V8 JIT optimizasyonu doğal hızında çalışmayı sürdürür.
+   [`detectHotPaths`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/ast/index.ts), tek bir AST düğümünü değiştirmeden önce dosyanın çağrı grafiğini çift yönlü tarar. Döngü içeren fonksiyonlar (`for`, `while`, `do-while`, `for-of`), dizi yüksek mertebe geri çağrıları (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` zamanlayıcıları, React/UI bileşenleri (`useState`, `useEffect`, `createElement`) ve sıcak döngülerden çağrılan tüm yardımcı fonksiyonlar sıcak yol (hot path) olarak işaretlenir. `unpeek` sıcak döngüleri ve yardımcılarını hem opak kontrol akışı korumalarından hem de metin kasası dönüşümünden muaf tutar; korumayı yalnızca soğuk fonksiyonlara (lisans doğrulama, istek imzalama, yetki kontrolü gibi) uygular. Sıcak döngülerdeki V8 JIT optimizasyonu doğal hızında çalışmayı sürdürür.
 2. **O(1) Sabit-Dizi Metin Kasası ve Kalkan Dolanıklığı (`<%15` Gzip Bütçesi)**
    Soğuk metin sabitleri (`minStringLength >= 4`), derleme zamanında LZ77/Gzip sıkıştırılabilirliğini koruyan periyot-2 polimorfik bir XOR akış şifresiyle kodlanır. Modül başlangıcında enjekte edilen `const _uC` kasası metinleri tek seferde V8 `kConst` sabit dizi hücrelerine çözer ve XOR anahtarını hem çalışma zamanı bütünlük kalkanına (`String.prototype._u`) hem de çözücü fonksiyonun kendi biçimlendirme kontrolüne (`/\n/.test(f)`) ikili olarak bağlar. Sonraki tüm okumalar doğrudan dizi indeksleme ile O(1) sürede tamamlanır.
 3. **Öz-Savunmalı `Function.prototype.toString()` Bütünlük Kontrolü ve Caydırıcı Modlar (Deterrent Modes)**
-   Bir analist korumalı bir dosyayı DevTools Pretty-Print (`{}`) ile biçimlendirdiğinde veya Sources panelinde bir koşulu değiştirdiğinde, biçimlendirilen kod `Function.prototype.toString()` çıktısını değiştirir. [`verifyCodeIntegrity`](./src/runtime/index.ts), dokunulmamış küçültülmüş kodda sıfır yanlış pozitif oranıyla 32-bit FNV-1a özetini (checksum) doğrular. Verilen tepki `deterrentMode` seçeneğiyle yönetilir:
-   - `passive` (CLI `protect` varsayılanı): Konsol çıktısını susturmadan veya uygulamayı çökertmeden `window` nesnesine bir telemetri olayı (`unpeek:tamper` event) iletir; tersine mühendislik girişimlerinin sessizce izlenmesini sağlar.
-   - `gradual` (`unplugin` varsayılanı): İç çalışma zamanı çözümlemelerini kademeli olarak bozar ve `console` çıktılarını susturur; saldırganların doğrudan yamayabileceği ani bir hata yığın izi (stack trace) üretmeden kodu işlevsizleştirir.
+   Bir analist korumalı bir dosyayı DevTools Pretty-Print (`{}`) ile biçimlendirdiğinde veya Sources panelinde bir koşulu değiştirdiğinde, biçimlendirilen kod `Function.prototype.toString()` çıktısını değiştirir. [`verifyCodeIntegrity`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/runtime/index.ts), dokunulmamış küçültülmüş kodda sıfır yanlış pozitif oranıyla 32-bit FNV-1a özetini (checksum) doğrular. Verilen tepki `deterrentMode` seçeneğiyle yönetilir:
+   - `passive` (hem CLI `protect` hem de `unplugin` varsayılanı): Konsol çıktısını susturmadan veya uygulamayı çökertmeden `window` nesnesine bir telemetri olayı (`unpeek:tamper` event) iletir; tersine mühendislik girişimlerinin sessizce izlenmesini sağlar.
+   - `gradual` (`--gradual` veya `deterrentMode: 'gradual'` ile seçime bağlı): İç çalışma zamanı çözümlemelerini kademeli olarak bozar ve `console` çıktılarını susturur; saldırganların doğrudan yamayabileceği ani bir hata yığın izi (stack trace) üretmeden kodu işlevsizleştirir.
 4. **Otomatik Source Map Kasası (`.unpeek-maps/`)**
-   Üretim çıktısında `.js.map` dosyalarını bırakmak, orijinal TypeScript proje ağacınızın DevTools içinde birebir yeniden oluşturulmasına yol açar. [`protectProject`](./src/cli/protect.ts), `.map` dosyalarını genel çıktı dizininden özel `.unpeek-maps/` klasörüne taşır ve tüm istemci paketlerinden `//# sourceMappingURL=` yorumlarını temizler. Böylece haritaları son kullanıcılara sunmadan Sentry veya Datadog gibi platformlara yükleyebilirsiniz.
+   Üretim çıktısında `.js.map` dosyalarını bırakmak, orijinal TypeScript proje ağacınızın DevTools içinde birebir yeniden oluşturulmasına yol açar. [`protectProject`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/core/protect.ts), `.map` dosyalarını genel çıktı dizininden özel `.unpeek-maps/` klasörüne taşır ve tüm istemci paketlerinden `//# sourceMappingURL=` yorumlarını temizler. Böylece haritaları son kullanıcılara sunmadan Sentry veya Datadog gibi platformlara yükleyebilirsiniz.
 
 ---
 
@@ -85,7 +85,7 @@ npx unpeek init
 
 Bu komut üç hazırlık adımını tamamlar:
 1. `package.json` ve yapılandırma dosyalarından çatınızı (`nextjs`, `vite`, `webpack` veya `vanilla`) otomatik tespit eder.
-2. Her üretim derlemesinin otomatik olarak korunması için `package.json` betiklerine `"postbuild": "unpeek protect"` satırını ekler.
+2. **Next.js >= 16.2** projelerinde `next.config.*` dosyasına `unpeek/next` içinden `withUnpeek` Build Adapter sarmalayıcısını otomatik bağlar (koruma `postbuild` betiği olmadan `onBuildComplete` içinde çalışır); diğer tüm çatılarda (Next.js < 16.2 dahil) `package.json` betiklerine `"postbuild": "unpeek protect"` satırını ekler.
 3. Çıkarılan kaynak haritalarının (source maps) git geçmişine girmemesi için `.gitignore` dosyasına `.unpeek-maps/` dizinini ekler.
 
 ### 2. CLI Kullanımı (`unpeek protect`)
@@ -106,7 +106,9 @@ npx unpeek protect
 | `--out-dir <yol>` | İstemci çıktı klasörünü açıkça belirtir (ör. `dist/assets`, `.next/static/chunks`) | Proje framework'ünden otomatik tespit |
 | `--seed <sayı>` | Deterministik 32-bit polimorfik derleme tohumu (seed) | Derleme başına rastgele |
 | `--aggressive` | Katman 2 (Tier 2) agresif korumayı etkinleştirir (Micro-VM ve WASM KDF) | Varsayılan: kapalı (Tier 1 varsayılanı: <%2 CPU, <%15 Gzip) |
-| `--passive` | Pasif caydırıcı modunu kullanır (konsol sessize alma olmadan yalnızca telemetri olayı) | CLI varsayılanı: `passive` (`unplugin` varsayılanı: `gradual`) |
+| `--passive` | Pasif caydırıcı modunu kullanır (konsol sessize alma olmadan yalnızca telemetri olayı) | Varsayılan (`passive`) |
+| `--gradual` | Kademeli caydırıcı modunu kullanır (kurcalamada `console` çıktılarını susturur ve çalışma zamanını bozar) | Kapalı |
+| `--detect-headless` | `navigator.webdriver` / `HeadlessChrome` sinyallerini kurcalama olarak işaretler | Kapalı |
 | `--no-maps` | `.map` dosyalarını `.unpeek-maps/` klasörüne taşımak yerine kalıcı olarak sil | `.unpeek-maps/` içine taşır |
 | `--min-string-length <sayı>` | O(1) `kConst` şifreleme kasasına alınacak minimum metin uzunluğu | `4` |
 | `--private-maps-dir <dizin>` | Kaynak haritalarının taşınacağı özel kasa klasörü | `.unpeek-maps` |
@@ -122,28 +124,29 @@ npx unpeek protect
 > `protectProject(options)` üzerinden programatik kullanım; `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, `aggressive` ve `cwd` gibi ek yapılandırma seçeneklerini destekler.
 
 > [!IMPORTANT]
-> **CommonJS Kullanıcıları İçin Dinamik `import()` Uyarısı:**
-> `unpeek` varsayılan olarak yerel ECMAScript Modülleri (`"type": "module"`) ile dağıtılmaktadır. CommonJS kullanan projelerde (`require()` veya `.cjs` yapılandırma dosyaları) `unpeek` modüllerini dinamik `import()` ile yükleyiniz:
+> **Yerel CommonJS & ESM Çift-Paket Desteği:**
+> `unpeek` ve tüm alt yolları (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/unplugin`, `unpeek/next`, `unpeek/config`, `unpeek/ast`, `unpeek/runtime`) hem ESM `import` hem de CommonJS `require(...)` sözdizimini yerel olarak destekler. Paketleyici alt yolları CJS içinde doğrudan `default` dışa aktarımını sunar:
 > ```javascript
-> // CommonJS (next.config.js / webpack.config.js / betikler)
-> const unpeek = (await import('unpeek/unplugin')).default;
-> const { protectProject, transformJavaScript } = await import('unpeek');
+> // CommonJS (next.config.js / webpack.config.cjs / betikler)
+> const unpeek = require('unpeek/vite');
+> const { withUnpeek } = require('unpeek/next');
+> const { protectProject, transformJavaScript } = require('unpeek');
 > ```
 
 ### 3. Evrensel Paketleyici Eklentisi (`unpeek/unplugin`)
 
-Derleme sonrası CLI adımı yerine paketleyicinin `renderChunk` yaşam döngüsü sırasında bellek içi dönüşüm yapmak isterseniz [`unpeek/unplugin`](./src/bundler/unplugin.ts) modülünü kullanabilirsiniz:
+Derleme sonrası CLI adımı yerine paketleyicinin `renderChunk` yaşam döngüsü sırasında bellek içi dönüşüm yapmak isterseniz [`unpeek/unplugin`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/bundler/unplugin.ts) modülünü veya doğrudan ilgili alt yolu (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`) kullanabilirsiniz:
 
 #### Vite (`vite.config.ts`)
 
 ```ts
 import { defineConfig } from 'vite';
-import unpeek from 'unpeek/unplugin';
+import unpeek from 'unpeek/vite';
 
 export default defineConfig({
   plugins: [
-    unpeek.vite({
-      deterrentMode: 'gradual',
+    unpeek({
+      deterrentMode: 'passive',
     }),
   ],
 });
@@ -151,18 +154,33 @@ export default defineConfig({
 
 #### Next.js (`next.config.mjs`)
 
-Node.js sunucu paketlerinin özgün yığın izlerini (stack traces) koruması için eklentiyi istemci paketleriyle (`!isServer`) sınırlandırın:
+**Next.js >= 16.2** için `unpeek/next` alt yolundan `withUnpeek` Build Adapter yardımcısını kullanın (`npx unpeek init` tarafından otomatik bağlanır):
 
 ```js
-import unpeek from 'unpeek/unplugin';
+import { withUnpeek } from 'unpeek/next';
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {};
+
+export default withUnpeek(nextConfig);
+```
+
+> [!WARNING]
+> **Yalnızca Güvenilir Ortamlarda Kullanın (`upstreamAdapterPath`):**
+> `withUnpeek` / `createUnpeekNextAdapter`, `upstreamAdapterPath` veya `UNPEEK_UPSTREAM_ADAPTER_PATH` üzerinden mevcut bir adaptörü zincirlemeyi destekler ve bu modülü derleme zamanında dinamik olarak içe aktarır. `upstreamAdapterPath` veya `UNPEEK_UPSTREAM_ADAPTER_PATH` değerini yalnızca güvenilir proje bağlamlarında ayarlayın.
+
+Next.js < 16.2 Webpack derlemelerinde Node.js sunucu paketlerinin özgün yığın izlerini (stack traces) koruması için eklentiyi istemci paketleriyle (`!isServer`) sınırlandırın:
+
+```js
+import unpeek from 'unpeek/webpack';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   webpack(config, { dev, isServer }) {
     if (!dev && !isServer) {
       config.plugins.push(
-        unpeek.webpack({
-          deterrentMode: 'gradual',
+        unpeek({
+          deterrentMode: 'passive',
         })
       );
     }
@@ -173,28 +191,38 @@ const nextConfig = {
 export default nextConfig;
 ```
 
-#### Programatik API
+#### Programatik API ve Paket Dışa Aktarımları (`2.0.0`)
+
+`unpeek` 2.0.0 sürümünde kök `unpeek` giriş noktası temel üst düzey API'yi (`protectProject`, `transformJavaScript`, `initProject`, `defineConfig`, `loadUnpeekConfig`, `UnpeekError`, `UnpeekErrorCode` ve genel TypeScript tipleri) sunar; alt seviye yardımcılar ve paketleyici bağdaştırıcıları ise özel alt yollarda (`unpeek/config`, `unpeek/ast`, `unpeek/runtime`, `unpeek/browser`, `unpeek/next`, `unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/unplugin`) yer alır.
 
 ```ts
-import { transformJavaScript, protectProject } from 'unpeek';
+import { transformJavaScript, protectProject, UnpeekError } from 'unpeek';
 
-// Tek bir JavaScript kod dizesini bellek içinde dönüştürün
-const result = transformJavaScript(sourceCode, {
-  seed: 0x7f3a91,
-  minStringLength: 4,
-  injectRuntimeShield: true,
-  deterrentMode: 'gradual',
-});
+try {
+  // Tek bir JavaScript kod dizesini bellek içinde dönüştürün
+  const result = transformJavaScript(sourceCode, {
+    seed: 0x7f3a91,
+    minStringLength: 4,
+    injectRuntimeShield: true,
+    deterrentMode: 'passive',
+  });
 
-console.log(result.hotPathReport);
-// { totalFunctions: 12, hotFunctionsSkipped: ['renderLoop'], coldFunctionsProtected: ['signRequest'] }
+  console.log(result.hotPathReport);
+  // { totalFunctions: 12, hotFunctionsSkipped: ['renderLoop'], coldFunctionsProtected: ['signRequest'] }
 
-// Veya tüm derleme dizinini koruyun
-const summary = await protectProject({
-  cwd: process.cwd(),
-  keepPrivateMaps: true,
-  privateMapsDir: '.unpeek-maps',
-});
+  // Veya tüm derleme dizinini koruyun
+  const summary = await protectProject({
+    cwd: process.cwd(),
+    keepPrivateMaps: true,
+    privateMapsDir: '.unpeek-maps',
+  });
+} catch (err) {
+  if (err instanceof UnpeekError) {
+    // err.code bir UnpeekErrorCode değeridir (ör. 'ERR_CONFIG_INVALID', 'ERR_CONFIG_LOAD', 'ERR_PARSE_FAILED')
+    console.error(err.code, err.message);
+  }
+  throw err;
+}
 ```
 
 ---
@@ -209,11 +237,11 @@ const summary = await protectProject({
 
 ### Tip Güvenli Yapılandırma (`defineConfig`)
 
-IDE otomatik tamamlama ve TypeScript tip doğrulamasını etkinleştirmek için `'unpeek'` üzerinden `defineConfig` yardımcısını içe aktarın:
+IDE otomatik tamamlama ve TypeScript tip doğrulamasını etkinleştirmek için `'unpeek/config'` üzerinden (ayrıca `'unpeek'` kökünden de dışa aktarılır) `defineConfig` yardımcısını içe aktarın. Hatalı biçimlendirilmiş veya nesne olmayan yapılandırma dosyaları sessizce yoksayılmak yerine `UnpeekError` (`ERR_CONFIG_INVALID` veya `ERR_CONFIG_LOAD`) fırlatır:
 
 ```javascript
 // unpeek.config.mjs (veya unpeek.config.js)
-import { defineConfig } from 'unpeek';
+import { defineConfig } from 'unpeek/config';
 
 export default defineConfig({
   // Hedef çatı geçersiz kılma ('nextjs' | 'vite' | 'webpack' | 'vanilla')
@@ -225,8 +253,8 @@ export default defineConfig({
   // İstemci çıktı dizini geçersiz kılma (belirtilmezse çatıdan otomatik algılanır)
   outDir: '.next/static/chunks',
 
-  // Korumaya dahil edilecek dosya uzantıları
-  extensions: ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'],
+  // Korumaya dahil edilecek derlenmiş JavaScript uzantıları (ham .ts/.tsx kaynakları CLI protect tarafından işlenmez)
+  extensions: ['.js', '.mjs', '.cjs'],
 
   // Genel statik varlık dizinleri
   publicDirs: ['public', 'static'],
@@ -451,7 +479,7 @@ powershell -File scripts/validate-version.ps1 -Message "fix: description"
 powershell -File scripts/stage-release.ps1
 ```
 
-### Benchmark Çıktı Referansı ([`./benchmarks/overhead.bench.ts`](./benchmarks/overhead.bench.ts))
+### Benchmark Çıktı Referansı ([`packages/unpeek/benchmarks/overhead.bench.ts`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/benchmarks/overhead.bench.ts))
 
 - **Derleme / Dönüşüm Süresi:** `< 3000 ms`
 - **Gzip Boyut Artışı:** `< %15` (üretim uygulama paketlerinde)

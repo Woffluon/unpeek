@@ -14,7 +14,9 @@ npx unpeek init
 
 ### What `unpeek init` Does
 1. **Detects Framework**: Automatically identifies Next.js, Vite, Webpack, or Vanilla JS.
-2. **Configures Postbuild Hook**: Updates `package.json`:
+2. **Wires Build Protection**:
+   - **Next.js >= 16.2**: Wraps `next.config.*` with `withUnpeek` from `unpeek/next` so protection runs automatically via the Next.js Build Adapter.
+   - **All other frameworks (including Next.js < 16.2)**: Updates `package.json`:
    ```json
    {
      "scripts": {
@@ -40,11 +42,11 @@ While unpeek works zero-config out of the box, you can define persistent setting
 4. `unpeek.config.json`
 
 ### Creating a Configuration File
-Use the `defineConfig` helper from `unpeek` for full TypeScript type hints:
+Use the `defineConfig` helper from `unpeek/config` (also re-exported from `unpeek`) for full TypeScript type hints. Malformed or non-object config files throw `UnpeekError`:
 
 ```js
 // unpeek.config.js
-import { defineConfig } from 'unpeek';
+import { defineConfig } from 'unpeek/config';
 
 export default defineConfig({
   target: 'browser',
@@ -99,7 +101,9 @@ unpeek provides two distinct defense tiers depending on security and performance
 | :--- | :--- | :--- | :--- |
 | `--out-dir <dir>` | `string` | Auto-detected | Explicit client output directory override. |
 | `--seed <number>` | `number` | Random per build | Deterministic polymorphic seed for reproducible CI builds. |
-| `--passive` | `boolean` | `false` | Passive deterrent mode (telemetry event only; does not mute console). |
+| `--passive` | `boolean` | `true` (default) | Passive deterrent mode (telemetry event only; does not mute console). |
+| `--gradual` | `boolean` | `false` | Gradual deterrent mode (silences console and corrupts runtime state on tamper). |
+| `--detect-headless` | `boolean` | `false` | Treat `navigator.webdriver` / `HeadlessChrome` signals as tamper. |
 | `--no-maps` | `boolean` | `false` | Permanently deletes `.map` files instead of moving them to vault. |
 | `--private-maps-dir <dir>` | `string` | `.unpeek-maps` | Target directory for extracted production source maps. |
 | `--min-string-length <num>` | `number` | `4` | Minimum string literal character length for string vault encryption. |
