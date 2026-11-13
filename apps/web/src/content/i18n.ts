@@ -196,7 +196,7 @@ export function validateLicense($k0){
 export const DICTIONARY: Record<Locale, Dictionary> = {
   en: {
     meta: {
-      version: "v2.0.0",
+      version: "v3.0.0",
       license: "MIT License",
     },
     nav: {
@@ -546,9 +546,9 @@ export default defineConfig({
             ],
           },
           {
-            title: "Webpack & Vanilla JS Targets",
+            title: "Webpack, Rspack & Vanilla JS Targets",
             body: [
-              "For Webpack 5 builds, import `unpeek` from `unpeek/unplugin` (or `webpackPlugin` from `unpeek/webpack`) or pass `--out-dir build/static/js` to the CLI. For Vanilla JS projects, point `--out-dir` to your public asset folder.",
+              "For Webpack 5 or Rspack builds, import `unpeek` from `unpeek/unplugin` (or `unpeek/webpack`, `unpeek/rspack`) or pass `--out-dir build/static/js` to the CLI. For Vanilla JS projects, point `--out-dir` to your public asset folder.",
             ],
             codeBlocks: [
               {
@@ -714,7 +714,7 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
           {
             title: "CLI Commands & Defense Tiers (Tier 1 vs Tier 2)",
             body: [
-              "The `unpeek` binary supports `init` and `protect` commands across two distinct defense tiers:",
+              "The `unpeek` binary supports `init`, `protect`, `check`, and `symbolicate` commands across two distinct defense tiers:",
               "Tier 1 (Default): Zero-config call-graph aware protection with <2% runtime CPU overhead and <15% Gzip size delta, applying 92-character involutory string vaulting and non-linear MBA cold-flow guards.",
               "Tier 2 (--aggressive): Maximum tamper-resistance compiling selected cold functions to a <1.2 KB 24-opcode Bytecode Micro-VM backed by inline WebAssembly KDF and call-site salted decoders for zero plaintext exposure.",
             ],
@@ -722,14 +722,19 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
               {
                 label: "CLI Reference",
                 language: "bash",
-                code: `  ▛▀▀▜  unpeek 1.12.0
+                code: `  ▛▀▀▜  unpeek 3.0.0
   ▙▄▄▟  client bundle protection
 
   Usage:
-    unpeek init [--dry-run]        wire postbuild and the .unpeek-maps/ vault
-    unpeek protect [options]       protect client bundles in place (Tier 1 default: <2% CPU, <15% Gzip)
+    unpeek init [--dry-run] [--profile <name>]   wire postbuild and the .unpeek-maps/ vault
+    unpeek protect [options]                     protect client bundles in place (Tier 1 default: <2% CPU, <15% Gzip)
+    unpeek check [options]                       read-only CI gate for leaks, ignores, budget, and CSP
+    unpeek symbolicate [options]                 resolve stack traces locally using .unpeek-maps/
 
-  Options:
+  Options (protect):
+    --profile <name>               preset profile: minimal | recommended | strict
+    --dry-run                      compute transform & Gzip delta in memory without writing files
+    --max-gzip-delta <num>         fail if Gzip delta exceeds percentage
     --out-dir <dir>                explicit client output directory
     --seed <number>                deterministic polymorphic seed
     --passive                      passive deterrent mode (default: marks tamper, keeps console)
@@ -752,20 +757,25 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
           {
             title: "Programmatic Node.js API & TypeScript Types",
             body: [
-              "Import `protectProject`, `transformJavaScript`, or bundler plugins directly from `unpeek` to build custom compilation pipelines.",
+              "Import `protectProject`, `transformJavaScript`, `checkProject`, `symbolicateStackTrace`, `PRESETS`, `isUnpeekError`, or bundler plugins directly from `unpeek` to build custom compilation pipelines.",
             ],
             codeBlocks: [
               {
                 label: "TypeScript: Programmatic Usage & Exported Interfaces",
                 language: "typescript",
                 code: `import {
+  PRESETS,
   protectProject,
   transformJavaScript,
-  UnpeekError,
+  checkProject,
+  symbolicateStackTrace,
+  isUnpeekError,
   type ProtectOptions,
   type ProtectSummary,
   type TransformOptions,
   type TransformResult,
+  type UnpeekDiagnostic,
+  type UnpeekProfile,
 } from "unpeek";
 
 // 1. Transform a single JavaScript module in memory
@@ -775,6 +785,7 @@ const result: TransformResult = transformJavaScript(sourceCode, {
   injectRuntimeShield: true,
   deterrentMode: "passive",
   aggressive: true,
+  scrubPaths: true,
 });
 
 console.log(result.hotPathReport.hotFunctionsSkipped);
@@ -783,6 +794,7 @@ console.log(result.encryptedStringsCount, result.virtualizedFunctionsCount);
 // 2. Protect an entire framework build directory
 const summary: ProtectSummary = await protectProject({
   cwd: process.cwd(),
+  profile: "recommended",
   keepPrivateMaps: true,
   privateMapsDir: ".unpeek-maps",
   deterrentMode: "passive",
@@ -794,14 +806,15 @@ const summary: ProtectSummary = await protectProject({
           {
             title: "Configuration Schema & Options (UnpeekConfig)",
             body: [
-              "The `UnpeekConfig` interface governs build heuristics, string encryption boundaries, symbol mangling rules, and source map storage. Configurations are resolved in hierarchical precedence: CLI flags > programmatic options > discovered config file > default config.",
+              "The `UnpeekConfig` interface governs build heuristics, string encryption boundaries, symbol mangling rules, and source map storage. Configurations are resolved in hierarchical precedence: CLI flags > programmatic options > discovered config file > preset profile (`PRESETS`).",
               "Config files are automatically discovered across `unpeek.config.js`, `unpeek.config.mjs`, `unpeek.config.cjs`, and `unpeek.config.json` (or `unpeek.config.ts` with TypeScript loaders).",
             ],
             bullets: [
               "`hotPath`: Configure `customAnimationCalls` (e.g. `['requestAnimationFrame', 'useFrame']`), `customHooks` (e.g. `['useSpring', 'useGesture']`), `arrayHofMethods`, `hocWrappers`, and `maxPipelineCallers` (default `2`) for transitive exemption.",
-              "`vault`: Configure `minStringLength` (default `4`), `cssFramework` (`'tailwind'` | `'unocss'` | `'none'`), `customDirectives`, `reservedProps`, `semanticAnchors`, and `polymorphicDecoys` (default `true`).",
+              "`vault`: Configure `minStringLength` (default `4`), `cssFramework` (`'tailwind'` | `'unocss'` | `'none'`), `customDirectives`, `reservedProps`, `semanticAnchors`, `polymorphicDecoys` (default `true`), and `fragmented` / `fragmentCount`.",
               "`mangler`: Specify `reservedIdentifiers` (e.g. `['__NEXT_DATA__', 'process']`), `excludePrefixes`, and `excludePatterns` (RegExp array) to prevent mangling critical runtime globals.",
               "`sourcemaps`: Set `keepPrivate` (default `true`), `vaultDir` (default `'.unpeek-maps'`), and `stripComments` (default `true`) for private symbol management.",
+              "`scrubPaths`: Strip local filesystem paths and residual dev metadata (CWE-540).",
               "`next` / `vite`: Specify `next.distDir` for custom Next.js output directories, or `vite.outDir` / `vite.assetsDir` for custom Vite distributions.",
             ],
             codeBlocks: [
@@ -1002,7 +1015,7 @@ unpeek protect --no-shield`,
   },
   tr: {
     meta: {
-      version: "v2.0.0",
+      version: "v3.0.0",
       license: "MIT Lisansı",
     },
     nav: {
@@ -1352,9 +1365,9 @@ export default defineConfig({
             ],
           },
           {
-            title: "Webpack & Vanilla JS Hedefleri",
+            title: "Webpack, Rspack & Vanilla JS Hedefleri",
             body: [
-              "Webpack 5 projelerinde `unpeek/unplugin` (veya `unpeek/webpack`) üzerinden eklentiyi içe aktarabilir ya da CLI'a `--out-dir build/static/js` parametresi geçebilirsiniz. Vanilla JS projelerinde `--out-dir` ile statik JS klasörünüzü belirtmeniz yeterlidir.",
+              "Webpack 5 veya Rspack projelerinde `unpeek/unplugin` (veya `unpeek/webpack`, `unpeek/rspack`) üzerinden eklentiyi içe aktarabilir ya da CLI'a `--out-dir build/static/js` parametresi geçebilirsiniz. Vanilla JS projelerinde `--out-dir` ile statik JS klasörünüzü belirtmeniz yeterlidir.",
             ],
             codeBlocks: [
               {
@@ -1520,7 +1533,7 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
           {
             title: "CLI Komutları & Savunma Kademeleri (Tier 1 vs Tier 2)",
             body: [
-              "`unpeek` komut satırı aracı hem yerel geliştirme hem de tekrarlanabilir CI derlemeleri için iki ayrı savunma kademesi sunar:",
+              "`unpeek` komut satırı aracı `init`, `protect`, `check` ve `symbolicate` komutlarını iki ayrı savunma kademesiyle sunar:",
               "Katman 1 (Varsayılan): <%2 çalışma zamanı CPU ek yükü ve <%15 Gzip boyutu delta bütçesiyle çağrı grafiği duyarlı muafiyet, 92-karakter involutory string kasası ve non-lineer MBA soğuk akış koruması.",
               "Katman 2 (--aggressive): Seçili soğuk fonksiyonları <1.2 KB 24-komutlu Bytecode Micro-VM'e derleyen, satıriçi WebAssembly KDF ve çağrı noktası tuzlu tembel kasayla sıfır düz metin maruziyeti sağlayan üst düzey koruma profili.",
             ],
@@ -1528,14 +1541,19 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
               {
                 label: "CLI Referansı",
                 language: "bash",
-                code: `  ▛▀▀▜  unpeek 1.12.0
+                code: `  ▛▀▀▜  unpeek 3.0.0
   ▙▄▄▟  client bundle protection
 
   Usage:
-    unpeek init [--dry-run]        wire postbuild and the .unpeek-maps/ vault
-    unpeek protect [options]       protect client bundles in place (Tier 1 default: <2% CPU, <15% Gzip)
+    unpeek init [--dry-run] [--profile <name>]   wire postbuild and the .unpeek-maps/ vault
+    unpeek protect [options]                     protect client bundles in place (Tier 1 default: <2% CPU, <15% Gzip)
+    unpeek check [options]                       read-only CI gate for leaks, ignores, budget, and CSP
+    unpeek symbolicate [options]                 resolve stack traces locally using .unpeek-maps/
 
-  Options:
+  Options (protect):
+    --profile <name>               preset profile: minimal | recommended | strict
+    --dry-run                      compute transform & Gzip delta in memory without writing files
+    --max-gzip-delta <num>         fail if Gzip delta exceeds percentage
     --out-dir <dir>                explicit client output directory
     --seed <number>                deterministic polymorphic seed
     --passive                      passive deterrent mode (default: marks tamper, keeps console)
@@ -1558,20 +1576,25 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
           {
             title: "Programatik Node.js API & TypeScript Tipleri",
             body: [
-              "Özel derleme hatları oluşturmak için `protectProject`, `transformJavaScript` veya bundler eklentilerini doğrudan `unpeek` paketinden içe aktarabilirsiniz.",
+              "Özel derleme hatları oluşturmak için `protectProject`, `transformJavaScript`, `checkProject`, `symbolicateStackTrace`, `PRESETS`, `isUnpeekError` veya bundler eklentilerini doğrudan `unpeek` paketinden içe aktarabilirsiniz.",
             ],
             codeBlocks: [
               {
                 label: "TypeScript: Programatik Kullanım & Arayüzler",
                 language: "typescript",
                 code: `import {
+  PRESETS,
   protectProject,
   transformJavaScript,
-  UnpeekError,
+  checkProject,
+  symbolicateStackTrace,
+  isUnpeekError,
   type ProtectOptions,
   type ProtectSummary,
   type TransformOptions,
   type TransformResult,
+  type UnpeekDiagnostic,
+  type UnpeekProfile,
 } from "unpeek";
 
 // 1. Tek bir JavaScript modülünü bellek içinde dönüştürme
@@ -1581,6 +1604,7 @@ const result: TransformResult = transformJavaScript(sourceCode, {
   injectRuntimeShield: true,
   deterrentMode: "passive",
   aggressive: true,
+  scrubPaths: true,
 });
 
 console.log(result.hotPathReport.hotFunctionsSkipped);
@@ -1589,6 +1613,7 @@ console.log(result.encryptedStringsCount, result.virtualizedFunctionsCount);
 // 2. Tüm framework çıktı dizinini koruma
 const summary: ProtectSummary = await protectProject({
   cwd: process.cwd(),
+  profile: "recommended",
   keepPrivateMaps: true,
   privateMapsDir: ".unpeek-maps",
   deterrentMode: "passive",
@@ -1600,14 +1625,15 @@ const summary: ProtectSummary = await protectProject({
           {
             title: "Yapılandırma Şeması & Seçenekleri (UnpeekConfig)",
             body: [
-              "`UnpeekConfig` arayüzü; sıcak yol (hot-path) sezgileri, metin kasası (string vault) sınırları, sembol karmaşıklaştırma (mangler) kuralları ve kaynak haritası (source map) depolamasını yönetir. Ayarlar hiyerarşik öncelik sırasına göre çözümlenir: CLI bayrakları > programatik seçenekler > keşfedilen yapılandırma dosyası > varsayılan ayarlar.",
+              "`UnpeekConfig` arayüzü; sıcak yol (hot-path) sezgileri, metin kasası (string vault) sınırları, sembol karmaşıklaştırma (mangler) kuralları ve kaynak haritası (source map) depolamasını yönetir. Ayarlar hiyerarşik öncelik sırasına göre çözümlenir: CLI bayrakları > programatik seçenekler > keşfedilen yapılandırma dosyası > hazır profil (`PRESETS`).",
               "Yapılandırma dosyaları `unpeek.config.js`, `unpeek.config.mjs`, `unpeek.config.cjs` ve `unpeek.config.json` (veya TypeScript yükleyicileriyle `unpeek.config.ts`) isimleriyle proje kökünde otomatik olarak aranır.",
             ],
             bullets: [
               "`hotPath`: Geçişken muafiyet için `customAnimationCalls` (ör. `['requestAnimationFrame', 'useFrame']`), `customHooks` (ör. `['useSpring', 'useGesture']`), `arrayHofMethods`, `hocWrappers` ve `maxPipelineCallers` (varsayılan `2`) seçeneklerini belirler.",
-              "`vault`: `minStringLength` (varsayılan `4`), `cssFramework` (`'tailwind'` | `'unocss'` | `'none'`), `customDirectives`, `reservedProps`, `semanticAnchors` ve `polymorphicDecoys` (varsayılan `true`) kurallarını yapılandırır.",
+              "`vault`: `minStringLength` (varsayılan `4`), `cssFramework` (`'tailwind'` | `'unocss'` | `'none'`), `customDirectives`, `reservedProps`, `semanticAnchors`, `polymorphicDecoys` (varsayılan `true`) ve `fragmented` / `fragmentCount` kurallarını yapılandırır.",
               "`mangler`: Kritik çalışma zamanı global değişkenlerinin bozulmaması için `reservedIdentifiers` (ör. `['__NEXT_DATA__', 'process']`), `excludePrefixes` ve `excludePatterns` (RegExp dizisi) tanımlar.",
               "`sourcemaps`: Özel sembol yönetimi için `keepPrivate` (varsayılan `true`), `vaultDir` (varsayılan `'.unpeek-maps'`) ve `stripComments` (varsayılan `true`) değerlerini belirler.",
+              "`scrubPaths`: Yerel dosya sistemi yollarını ve artık geliştirme meta verilerini temizler (CWE-540).",
               "`next` / `vite`: Özel Next.js çıktı dizinleri için `next.distDir`, özel Vite dağıtımları için `vite.outDir` / `vite.assetsDir` geçersiz kılmalarını tanımlar.",
             ],
             codeBlocks: [

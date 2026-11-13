@@ -37,67 +37,35 @@ const result = initProject(process.cwd(), { dryRun: false });
 console.log(result.message);
 ```
 
+### `checkProject(options?: CheckOptions): Promise<CheckResult>`
+Read-only CI gate that checks for leaked `.map` files, `sourceMappingURL` comments, missing ignore entries, Gzip budget, and `eval()`/`new Function()` usage.
+
+### `symbolicateStackTrace(options: SymbolicateOptions): SymbolicateResult`
+Resolves a minified stack trace locally using source maps stored in `.unpeek-maps/`.
+
+### `isUnpeekError(err: unknown): err is UnpeekError`
+Cross-realm type guard for `UnpeekError` instances.
+
 ---
 
 ## 2. Configuration Functions
 
-### `defineConfig(config: UnpeekConfig): UnpeekConfig`
-Type helper providing IDE auto-completion and static verification for `unpeek.config.js`, `unpeek.config.mjs`, or `unpeek.config.cjs`. Re-exported from `unpeek` and `unpeek/config`.
+### `defineConfig<const T extends UnpeekConfig>(config: T): T`
+Type helper providing `const` literal inference, IDE auto-completion, and static verification for `unpeek.config.js`, `unpeek.config.mjs`, or `unpeek.config.cjs`. Re-exported from `unpeek` and `unpeek/config`.
 
-```ts
-// unpeek.config.js
-import { defineConfig } from 'unpeek/config';
-
-export default defineConfig({
-  target: 'browser',
-  vault: {
-    minStringLength: 4,
-    cssFramework: 'tailwind',
-  },
-  sourcemaps: {
-    keepPrivate: true,
-    vaultDir: '.unpeek-maps',
-  },
-});
-```
-
-### `findConfigFile(cwd?: string): string | null`
-Searches `cwd` (default: `process.cwd()`) for configuration candidates in order:
-1. `unpeek.config.js`
-2. `unpeek.config.mjs`
-3. `unpeek.config.cjs`
-4. `unpeek.config.json`
-
-Returns the absolute path to the configuration file, or `null` if none exists.
-
-```ts
-import { findConfigFile } from 'unpeek/config';
-
-const configPath = findConfigFile(process.cwd());
-// => '/workspace/unpeek.config.js' or null
-```
+### `PRESETS: Record<UnpeekProfile, UnpeekConfig>`
+Built-in protection profiles (`'minimal'`, `'recommended'`, `'strict'`).
 
 ### `loadUnpeekConfig(cwd?: string, explicitConfig?: UnpeekConfig): Promise<UnpeekConfig>`
-Asynchronously locates, parses, normalizes regexes, and merges project configuration with `DEFAULT_CONFIG` and optional explicit overrides. Supports ESM modules, CommonJS, and JSON. Throws `UnpeekError` (`ERR_CONFIG_INVALID` or `ERR_CONFIG_LOAD`) on malformed or non-object config files.
+Asynchronously locates, parses, normalizes regexes, and merges project configuration with `PRESETS` and optional explicit overrides. Throws `UnpeekError` (`ERR_CONFIG_INVALID` or `ERR_CONFIG_LOAD`) on malformed or non-object config files.
 
 ```ts
-import { loadUnpeekConfig } from 'unpeek';
+import { PRESETS, defineConfig, loadUnpeekConfig } from 'unpeek';
 
 const resolvedConfig = await loadUnpeekConfig(process.cwd(), {
-  vault: { minStringLength: 6 },
-});
-```
-
-### `mergeUnpeekConfig(base: UnpeekConfig, override?: UnpeekConfig): UnpeekConfig`
-Performs a deep merge between two `UnpeekConfig` objects. Combines string arrays, merges nested objects (`hotPath`, `vault`, `mangler`, `sourcemaps`, `filter`, `next`, `vite`), and preserves regex instances.
-
-```ts
-import { DEFAULT_CONFIG, mergeUnpeekConfig } from 'unpeek/config';
-
-const customConfig = mergeUnpeekConfig(DEFAULT_CONFIG, {
-  hotPath: {
-    customHooks: ['useRenderTick'],
-  },
+  ...PRESETS.recommended,
+  scrubPaths: true,
+  vault: { minStringLength: 6, fragmented: true, fragmentCount: 4 },
 });
 ```
 
@@ -193,6 +161,8 @@ export interface VaultConfig {
   cssFramework?: 'tailwind' | 'unocss' | 'none'; // default: 'tailwind'
   semanticAnchors?: SemanticAnchorsConfig;
   polymorphicDecoys?: boolean;     // default: true
+  fragmented?: boolean;
+  fragmentCount?: number;
 }
 ```
 
@@ -254,6 +224,14 @@ export interface ProtectOptions {
   minStringLength?: number;
   /** Enable Layer 2 aggressive protection (Bytecode Micro-VM, Inline WASM KDF, Call-Site Salted Vault) */
   aggressive?: boolean;
+  /** Protection preset profile */
+  profile?: UnpeekProfile;
+  /** Compute summary and Gzip delta in memory without writing files */
+  dryRun?: boolean;
+  /** Fail with ERR_BUDGET_EXCEEDED if gzipDeltaPercent exceeds this percentage */
+  maxGzipDelta?: number;
+  /** Scrub local filesystem paths and residual dev metadata (CWE-540) */
+  scrubPaths?: boolean;
   /** Optional Unpeek configuration */
   config?: UnpeekConfig;
 }
@@ -269,9 +247,15 @@ export interface TransformOptions {
   deterrentMode?: DeterrentMode;
   /** Enable Layer 2 aggressive protection */
   aggressive?: boolean;
+  /** Throw UnpeekError on JavaScript parse failures instead of returning input unchanged */
+  strict?: boolean;
+  /** Scrub local filesystem paths and residual dev metadata (CWE-540) */
+  scrubPaths?: boolean;
   /** Optional Unpeek configuration */
   config?: UnpeekConfig;
 }
+
+export type TransformSkippedReason = 'empty' | 'already-protected' | 'parse-error';
 
 export interface TransformResult {
   code: string;
@@ -280,14 +264,22 @@ export interface TransformResult {
   hotPathReport: HotPathReport;
   integrityToken: number;
   virtualizedFunctionsCount?: number;
-  shaderBuffersCount?: number;
+  skippedReason?: TransformSkippedReason;
+  debugId?: string;
 }
 ```
 
-### `ProtectSummary`
+### `ProtectSummary` & `UnpeekDiagnostic`
 ```ts
+export interface UnpeekDiagnostic {
+  code: 'DOCKERIGNORE_MISSING' | 'PARSE_FALLBACK' | 'ALREADY_PROTECTED' | 'EMPTY_INPUT';
+  severity: 'info' | 'warning';
+  message: string;
+  file?: string;
+}
+
 export interface ProtectSummary {
-  framework: DetectedFramework; // 'nextjs' | 'vite' | 'webpack' | 'vanilla'
+  framework: UnpeekFramework; // 'nextjs' | 'vite' | 'webpack' | 'vanilla'
   outDir: string;
   processedFiles: number;
   movedSourceMaps: number;
@@ -301,8 +293,15 @@ export interface ProtectSummary {
   totalEncryptedStrings: number;
   totalMangledSymbols: number;
   elapsedMs: number;
+  seed?: number;
+  tier?: 'Tier 1' | 'Tier 2';
   aggressive?: boolean;
   dockerIgnoreMissing?: boolean;
+  dryRun?: boolean;
+  profile?: UnpeekProfile;
+  budgetExceeded?: boolean;
+  debugIdsPreserved?: number;
+  diagnostics?: readonly UnpeekDiagnostic[];
 }
 ```
 
@@ -312,14 +311,14 @@ export interface InitResult {
   updatedPackageJson: boolean;
   updatedGitignore: boolean;
   updatedNextConfig?: boolean;
-  framework?: string;
+  framework?: UnpeekFramework;
   isNext162Plus?: boolean;
   message: string;
 }
 ```
 
 ### `UnpeekError` & `UnpeekErrorCode`
-Structured error class exported from `unpeek` for deterministic error handling across config loading, CLI validation, AST parsing, and Next.js adapter chaining:
+Structured error class exported from `unpeek` for deterministic error handling across config loading, CLI validation, AST parsing, budget checks, and Next.js adapter chaining:
 ```ts
 export type UnpeekErrorCode =
   | 'ERR_CONFIG_INVALID'
@@ -328,12 +327,15 @@ export type UnpeekErrorCode =
   | 'ERR_SECURITY_PATH_TRAVERSAL'
   | 'ERR_CLI_INVALID_ARGS'
   | 'ERR_PARSE_FAILED'
-  | 'ERR_NEXT_ADAPTER';
+  | 'ERR_NEXT_ADAPTER'
+  | 'ERR_BUDGET_EXCEEDED';
 
 export declare class UnpeekError extends Error {
   readonly code: UnpeekErrorCode;
   constructor(code: UnpeekErrorCode, message: string, options?: { cause?: unknown });
 }
+
+export declare function isUnpeekError(err: unknown): err is UnpeekError;
 ```
 
 ### `SourceMapVaultResult`

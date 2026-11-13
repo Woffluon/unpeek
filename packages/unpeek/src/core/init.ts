@@ -1,20 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { detectTargetFramework } from '../bundler/detector.js';
-import { UnpeekError } from '../errors.js';
+import type { InitOptions, InitResult } from './types.js';
+import { detectTargetFramework } from './detector.js';
+import { UnpeekError } from '../shared/errors.js';
+import { isNext16OrAbove } from '../internal/next.js';
 
-export interface InitOptions {
-  dryRun?: boolean;
-}
-
-export interface InitResult {
-  updatedPackageJson: boolean;
-  updatedGitignore: boolean;
-  updatedNextConfig?: boolean;
-  framework?: string;
-  isNext162Plus?: boolean;
-  message: string;
-}
+export type { InitOptions, InitResult };
 
 function isPlainObject(val: unknown): val is Record<string, unknown> {
   return typeof val === 'object' && val !== null && !Array.isArray(val);
@@ -26,18 +17,6 @@ function detectIndentation(rawJson: string): string | number {
   const indent = match[0];
   if (indent.includes('\t')) return '\t';
   return indent.length;
-}
-
-export function isNext16OrAbove(versionStr?: string): boolean {
-  if (!versionStr) return false;
-  const clean = versionStr.replace(/^[^\d]*/, '');
-  const match = clean.match(/^(\d+)\.(\d+)/);
-  if (!match) return false;
-  const major = parseInt(match[1], 10);
-  const minor = parseInt(match[2], 10);
-  if (major > 16) return true;
-  if (major === 16 && minor >= 2) return true;
-  return false;
 }
 
 const NEXT_CONFIG_FILES = ['next.config.ts', 'next.config.mjs', 'next.config.js', 'next.config.cjs'];

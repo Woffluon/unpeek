@@ -62,7 +62,7 @@ export default defineConfig({
 This guarantees unpeek locates client chunks under `<distDir>/static/chunks` while keeping `<distDir>/server` and SSR assets strictly untouched.
 
 ### Option B: Next.js >= 16.2 Build Adapter (`unpeek/next`)
-For Next.js >= 16.2 (including Turbopack), wrap your config with `withUnpeek` from `unpeek/next` (automatically wired by `npx unpeek init`):
+For Next.js >= 16.2 (including Turbopack), wrap your config with `withUnpeek` from `unpeek/next` (automatically wired by `npx unpeek init`). `withUnpeek` is `phase`-aware when wrapping a Next.js config function (skipping non-production phases like `phase-development-server`) and uses a `RegExp`-safe `UNPEEK_NEXT_OPTIONS` bridge for worker-process serialization:
 ```js
 // next.config.mjs (or CommonJS: const { withUnpeek } = require('unpeek/next');)
 import { withUnpeek } from 'unpeek/next';
@@ -143,8 +143,8 @@ export default defineConfig({
 
 ## 4. Webpack & Rspack Integration
 
-### Subpath Import (`unpeek/webpack`)
-`unpeek` and all subpaths natively support both ESM `import` and CommonJS `require(...)` (with `default` export for bundler subpaths):
+### Subpath Import (`unpeek/webpack` & `unpeek/rspack`)
+`unpeek` and all subpaths natively support both ESM `import` and CommonJS `require(...)` (with `default` export for bundler subpaths). Use `unpeek/rspack` for Rspack builds, or `unpeek/webpack` for Webpack 5. Note that bundler plugins expect `UnpeekConfig` overrides nested under `options.config` (inline top-level `UnpeekConfig` duck-typing was removed in v3.0.0):
 ```js
 // webpack.config.js
 const unpeek = require('unpeek/webpack');

@@ -101,8 +101,13 @@ npx unpeek protect
 
 | Komut / Bayrak | Açıklama | Varsayılan |
 | :--- | :--- | :--- |
-| `init [--dry-run]` | Proje çerçevesini otomatik algılar, `postbuild` kancasını ve `.unpeek-maps/` kasasını yapılandırır | |
+| `init [--dry-run] [--profile <ad>]` | Proje çerçevesini otomatik algılar, `postbuild` kancasını ve `.unpeek-maps/` kasasını yapılandırır | |
 | `protect` | Üretim istemci paketlerini yerinde korur (varsayılan komut) | |
+| `check` | Sızan `.map` dosyaları, `sourceMappingURL` yorumları, yoksayma kuralları, Gzip bütçesi ve `eval()` için salt okunur CI kapısı | |
+| `symbolicate` | `.unpeek-maps/` kullanarak üretim yığın izlerini (stack traces) yerelde çözümler (`--maps-dir`, `--trace`, `--file`) | |
+| `--profile <ad>` | Hazır koruma profili: `minimal`, `recommended` veya `strict` | |
+| `--dry-run` | Dosyalara yazmadan bellek içinde dönüşüm ve Gzip farkını hesaplar | Kapalı |
+| `--max-gzip-delta <sayı>` | Gzip artışı belirtilen yüzdeyi aşarsa hata verir (`protect` / `check`) | `15` (`check` için) |
 | `--out-dir <yol>` | İstemci çıktı klasörünü açıkça belirtir (ör. `dist/assets`, `.next/static/chunks`) | Proje framework'ünden otomatik tespit |
 | `--seed <sayı>` | Deterministik 32-bit polimorfik derleme tohumu (seed) | Derleme başına rastgele |
 | `--aggressive` | Katman 2 (Tier 2) agresif korumayı etkinleştirir (Micro-VM ve WASM KDF) | Varsayılan: kapalı (Tier 1 varsayılanı: <%2 CPU, <%15 Gzip) |
@@ -125,7 +130,7 @@ npx unpeek protect
 
 > [!IMPORTANT]
 > **Yerel CommonJS & ESM Çift-Paket Desteği:**
-> `unpeek` ve tüm alt yolları (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/unplugin`, `unpeek/next`, `unpeek/config`, `unpeek/ast`, `unpeek/runtime`) hem ESM `import` hem de CommonJS `require(...)` sözdizimini yerel olarak destekler. Paketleyici alt yolları CJS içinde doğrudan `default` dışa aktarımını sunar:
+> `unpeek` ve tüm alt yolları (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/rspack`, `unpeek/unplugin`, `unpeek/next`, `unpeek/config`, `unpeek/browser`, `unpeek/package.json`) hem ESM `import` hem de CommonJS `require(...)` sözdizimini yerel olarak destekler. Paketleyici alt yolları CJS içinde doğrudan `default` dışa aktarımını sunar:
 > ```javascript
 > // CommonJS (next.config.js / webpack.config.cjs / betikler)
 > const unpeek = require('unpeek/vite');
@@ -135,7 +140,7 @@ npx unpeek protect
 
 ### 3. Evrensel Paketleyici Eklentisi (`unpeek/unplugin`)
 
-Derleme sonrası CLI adımı yerine paketleyicinin `renderChunk` yaşam döngüsü sırasında bellek içi dönüşüm yapmak isterseniz [`unpeek/unplugin`](packages/unpeek/src/bundler/unplugin.ts) modülünü veya doğrudan ilgili alt yolu (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`) kullanabilirsiniz:
+Derleme sonrası CLI adımı yerine paketleyicinin `renderChunk` yaşam döngüsü sırasında bellek içi dönüşüm yapmak isterseniz [`unpeek/unplugin`](packages/unpeek/src/plugins/unplugin.ts) modülünü veya doğrudan ilgili alt yolu (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/rspack`) kullanabilirsiniz:
 
 #### Vite (`vite.config.ts`)
 
@@ -191,12 +196,19 @@ const nextConfig = {
 export default nextConfig;
 ```
 
-#### Programatik API ve Paket Dışa Aktarımları (`2.0.0`)
+#### Programatik API ve Paket Dışa Aktarımları (`3.0.0`)
 
-`unpeek` 2.0.0 sürümünde kök `unpeek` giriş noktası temel üst düzey API'yi (`protectProject`, `transformJavaScript`, `initProject`, `defineConfig`, `loadUnpeekConfig`, `UnpeekError`, `UnpeekErrorCode` ve genel TypeScript tipleri) sunar; alt seviye yardımcılar ve paketleyici bağdaştırıcıları ise özel alt yollarda (`unpeek/config`, `unpeek/ast`, `unpeek/runtime`, `unpeek/browser`, `unpeek/next`, `unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/unplugin`) yer alır.
+`unpeek` 3.0.0 sürümünde kök `unpeek` giriş noktası temel üst düzey API'yi (`protectProject`, `transformJavaScript`, `initProject`, `checkProject`, `symbolicateStackTrace`, `PRESETS`, `defineConfig`, `loadUnpeekConfig`, `UnpeekError`, `isUnpeekError`, `UnpeekErrorCode` ve `UnpeekProfile`, `UnpeekDiagnostic`, `TransformResult` gibi genel TypeScript tipleri) sunar; paketleyici bağdaştırıcıları ve yapılandırma yardımcıları ise özel alt yollarda (`unpeek/config`, `unpeek/browser`, `unpeek/next`, `unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/rspack`, `unpeek/unplugin`, `unpeek/package.json`) yer alır. v2.x'ten geçiş ve kırıcı değişiklikler için [Geçiş Kılavuzu (v3.0.0)](docs/MIGRATION_V3.md) belgesine bakın.
 
 ```ts
-import { transformJavaScript, protectProject, UnpeekError } from 'unpeek';
+import {
+  PRESETS,
+  transformJavaScript,
+  protectProject,
+  checkProject,
+  symbolicateStackTrace,
+  isUnpeekError,
+} from 'unpeek';
 
 try {
   // Tek bir JavaScript kod dizesini bellek içinde dönüştürün
@@ -205,20 +217,25 @@ try {
     minStringLength: 4,
     injectRuntimeShield: true,
     deterrentMode: 'passive',
+    scrubPaths: true,
   });
 
+  if (result.skippedReason) {
+    console.log('Atlandı:', result.skippedReason);
+  }
   console.log(result.hotPathReport);
   // { totalFunctions: 12, hotFunctionsSkipped: ['renderLoop'], coldFunctionsProtected: ['signRequest'] }
 
   // Veya tüm derleme dizinini koruyun
   const summary = await protectProject({
     cwd: process.cwd(),
+    profile: 'recommended',
     keepPrivateMaps: true,
     privateMapsDir: '.unpeek-maps',
   });
 } catch (err) {
-  if (err instanceof UnpeekError) {
-    // err.code bir UnpeekErrorCode değeridir (ör. 'ERR_CONFIG_INVALID', 'ERR_CONFIG_LOAD', 'ERR_PARSE_FAILED')
+  if (isUnpeekError(err)) {
+    // err.code bir UnpeekErrorCode değeridir (ör. 'ERR_CONFIG_INVALID', 'ERR_CONFIG_LOAD', 'ERR_PARSE_FAILED', 'ERR_BUDGET_EXCEEDED')
     console.error(err.code, err.message);
   }
   throw err;
@@ -291,7 +308,12 @@ export default defineConfig({
     },
     // Otomatik entropi tarayıcılarını yanıltmak için sahte metinler üret
     polymorphicDecoys: true,
+    // Metin kasasını birden fazla parçaya böl ('strict' profilinde varsayılan olarak etkindir)
+    fragmented: true,
+    fragmentCount: 4,
   },
+  // Yerel dosya sistemi yollarını ve artık geliştirme meta verilerini temizle (CWE-540)
+  scrubPaths: true,
 
   // Tanımlayıcı ve sembol maskeleme (mangler) yapılandırması
   mangler: {

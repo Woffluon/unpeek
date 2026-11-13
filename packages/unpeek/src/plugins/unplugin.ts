@@ -1,28 +1,18 @@
 import { createUnplugin } from 'unplugin';
+import type { UnpeekConfig, UnpeekPluginOptions } from '../config.js';
 import type {
   InternalShieldPayload,
   InternalTransformOptions,
-  ProtectOptions,
-  UnpeekConfig,
-} from '../types.js';
+} from '../internal/types.js';
 import { transformJavaScript } from '../ast/index.js';
 import { computeFnv1aHash } from '../shared/hash.js';
-import { deriveWindowKeySymbol, generateRuntimeShield } from '../runtime/index.js';
+import { generateRuntimeShield } from '../runtime/index.js';
+import { deriveWindowKeySymbol } from '../internal/runtime.js';
 
 const ENTRY_CHUNK_PATTERN = /(?:^|\/)(?:webpack|main|index|runtime|turbopack|pages\/_app|pages\/index)(?:[-._/]|$)/i;
 
-export const unpeekPlugin = createUnplugin<ProtectOptions | undefined>((options = {}) => {
-  const config: UnpeekConfig | undefined =
-    options.config ??
-    (('framework' in options ||
-      'target' in options ||
-      'vault' in options ||
-      'hotPath' in options ||
-      'mangler' in options ||
-      'shield' in options ||
-      'sourcemaps' in options)
-      ? (options as UnpeekConfig)
-      : undefined);
+export const unpeekPlugin = createUnplugin<UnpeekPluginOptions | undefined>((options = {}) => {
+  const config: UnpeekConfig | undefined = options.config;
 
   const baseSeed =
     typeof options.seed === 'number'
@@ -114,5 +104,6 @@ export const vitePlugin = unpeekPlugin.vite;
 export const webpackPlugin = unpeekPlugin.webpack;
 export const rollupPlugin = unpeekPlugin.rollup;
 export const esbuildPlugin = unpeekPlugin.esbuild;
+export const rspackPlugin = unpeekPlugin.rspack;
 
 export default unpeekPlugin;

@@ -122,6 +122,73 @@ describe('CLI Argument Parsing and Execution', () => {
         message: 'Invalid non-negative integer for --min-string-length: "-5"',
       });
     });
+
+    it('parses --profile, --dry-run, and --max-gzip-delta for protect and init', () => {
+      expect(
+        parseCliArgs(['protect', '--profile', 'strict', '--dry-run', '--max-gzip-delta=12.5'], '/repo')
+      ).toEqual({
+        kind: 'protect',
+        options: {
+          cwd: '/repo',
+          profile: 'strict',
+          dryRun: true,
+          maxGzipDelta: 12.5,
+        },
+      });
+
+      expect(parseCliArgs(['init', '--profile=minimal'])).toEqual({
+        kind: 'init',
+        dryRun: false,
+        profile: 'minimal',
+      });
+
+      expect(parseCliArgs(['protect', '--profile', 'invalid'])).toMatchObject({
+        kind: 'error',
+        message: expect.stringContaining('Invalid value for --profile'),
+      });
+
+      expect(parseCliArgs(['protect', '--max-gzip-delta=-3'])).toMatchObject({
+        kind: 'error',
+        message: expect.stringContaining('Invalid non-negative value for --max-gzip-delta'),
+      });
+
+      expect(parseCliArgs(['protect', '--max-gzip-delta', 'NaN'])).toMatchObject({
+        kind: 'error',
+        message: expect.stringContaining('Invalid numeric value for --max-gzip-delta'),
+      });
+    });
+
+    it('parses check and symbolicate subcommands', () => {
+      expect(
+        parseCliArgs(['check', '--out-dir', 'dist', '--max-gzip-delta', '10', '--require-zero-eval', '--json'], '/repo')
+      ).toEqual({
+        kind: 'check',
+        options: {
+          cwd: '/repo',
+          outDir: 'dist',
+          maxGzipDelta: 10,
+          requireZeroEval: true,
+        },
+        json: true,
+      });
+
+      expect(
+        parseCliArgs(['symbolicate', '--maps-dir', '.maps', '--trace', 'at fn (app.js:1:2)'], '/repo')
+      ).toEqual({
+        kind: 'symbolicate',
+        options: {
+          cwd: '/repo',
+          mapsDir: '.maps',
+          stackTrace: 'at fn (app.js:1:2)',
+        },
+        file: undefined,
+      });
+
+      expect(parseCliArgs(['symbolicate'])).toMatchObject({
+        kind: 'error',
+        message: expect.stringContaining('requires either --trace'),
+      });
+    });
   });
 
   describe('runCli error exitCode and lazy version', () => {

@@ -8,7 +8,9 @@ import {
   detectHotPaths,
   computeFnv1aHash,
   UnpeekError,
+  classifyChunkBoundary,
 } from '../src/ast/index.js';
+import { parseJavaScriptAst } from '../src/ast/hot-path-detector.js';
 import * as browserEntry from '../src/browser.js';
 
 describe('AST & Call-Graph Transformation Engine', () => {
@@ -1354,6 +1356,222 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(typeof browserEntry.computeFnv1aHash).toBe('function');
       expect(typeof browserEntry.computeIntegrityHash).toBe('function');
       expect(typeof browserEntry.verifyCodeIntegrity).toBe('function');
+    });
+  });
+
+  describe('M-06 TransformResult.skippedReason', () => {
+    it('reports empty, parse-error, and already-protected reasons on early returns', () => {
+      const emptyRes = transformJavaScript('   ', { seed: 0x1234 });
+      expect(emptyRes.skippedReason).toBe('empty');
+
+      const parseErrRes = transformJavaScript('function broken( {', {
+        seed: 0x1234,
+        strict: false,
+      });
+      expect(parseErrRes.skippedReason).toBe('parse-error');
+
+      const first = transformJavaScript(
+        'function checkSecret(k) { return k === "SUPER_SECRET_KEY"; }',
+        { seed: 0x1234 }
+      );
+      expect(first.skippedReason).toBeUndefined();
+
+      const second = transformJavaScript(first.code, { seed: 0x1234 });
+      expect(second.skippedReason).toBe('already-protected');
+    });
+  });
+
+  describe('M-07 AST Boundary Classifier & Dynamic import() Protection', () => {
+    it('classifies rsc-flight, entry-bootstrap, preload-manifest, and app-chunk in single pass', () => {
+      const rscAst = parseJavaScriptAst(
+        '(self.__next_f=self.__next_f||[]).push([1,"0:[\\"$\\",\\"$L1\\",null,{}]"]);'
+      )!;
+      expect(classifyChunkBoundary(rscAst).kind).toBe('rsc-flight');
+
+      const turboAst = parseJavaScriptAst(
+        '(globalThis.TURBOPACK=globalThis.TURBOPACK||[]).push(["chunks/8f3a.js",{}]);'
+      )!;
+      expect(classifyChunkBoundary(turboAst).kind).toBe('entry-bootstrap');
+
+      const viteAst = parseJavaScriptAst(
+        'const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/vendor-123.js"])))=>i.map(i=>d[i]);'
+      )!;
+      expect(classifyChunkBoundary(viteAst).kind).toBe('preload-manifest');
+
+      const appAst = parseJavaScriptAst(
+        'export function greet() { return "hello world"; }'
+      )!;
+      expect(classifyChunkBoundary(appAst).kind).toBe('app-chunk');
+    });
+
+    it('exempts self.__next_f.push, TURBOPACK, and __vite__mapDeps payloads from string vault while protecting user logic', () => {
+      const rscCode = `
+        (self.__next_f = self.__next_f || []).push([1, "NEXT_RSC_PAYLOAD_MARKER"]);
+        function checkAuth(token) {
+          return token === "USER_SECRET_TOKEN_VALUE";
+        }
+      `;
+      const rscOut = transformJavaScript(rscCode, { seed: 0x223344 });
+      expect(rscOut.code).toContain('NEXT_RSC_PAYLOAD_MARKER');
+      expect(rscOut.code).not.toContain('USER_SECRET_TOKEN_VALUE');
+
+      const turboCode = `
+        (globalThis.TURBOPACK = globalThis.TURBOPACK || []).push(["chunks/turbopack-boot.js", {}]);
+      `;
+      const turboOut = transformJavaScript(turboCode, { seed: 0x223344 });
+      expect(turboOut.code).toContain('chunks/turbopack-boot.js');
+
+      const viteCode = `
+        const __vite__mapDeps = (i, m = __vite__mapDeps, d = (m.f || (m.f = ["assets/chunk-abc.js", "assets/style.css"]))) => i.map((x) => d[x]);
+      `;
+      const viteOut = transformJavaScript(viteCode, { seed: 0x223344 });
+      expect(viteOut.code).toContain('assets/chunk-abc.js');
+    });
+
+    it('exempts ImportExpression.source subtrees (literals, templates, conditionals) and preserves magic comments', () => {
+      const code = `
+        export async function loadMod(cond, id) {
+          const a = await import(/* webpackChunkName: "lazy-mod" */ "./lazy-module.js");
+          const b = await import(/* @vite-ignore */ cond ? "./branch-a.js" : "./branch-b.js");
+          const c = await import(\`./dynamic/\${id}.js\`);
+          const secret = "PROTECTED_API_TOKEN_123";
+          return [a, b, c, secret];
+        }
+      `;
+      const out = transformJavaScript(code, { seed: 0x556677 });
+      expect(out.code).toContain('./lazy-module.js');
+      expect(out.code).toContain('./branch-a.js');
+      expect(out.code).toContain('./branch-b.js');
+      expect(out.code).toContain('webpackChunkName: "lazy-mod"');
+      expect(out.code).toContain('@vite-ignore');
+      expect(out.code).not.toContain('PROTECTED_API_TOKEN_123');
+    });
+  });
+
+  describe('M-11 CWE-540 Residual Symbol & Path Scrubber', () => {
+    it('scrubs POSIX, Windows, and file:/// local paths in Literals and TemplateLiterals while preserving URLs, public assets, RegExps, and hot paths', () => {
+      const code = `
+        function coldErrorReporter() {
+          const posixErr = "Failed at /Users/alice/projects/secret-app/src/auth.ts";
+          const homeErr = "Key missing at /home/bob/work/secrets/key.pem";
+          const winErr = "Built from C:\\\\Users\\\\Efe\\\\Desktop\\\\unpeek\\\\src\\\\index.ts";
+          const uriErr = \`Source: file:///Users/alice/app/src/main.ts\`;
+          const publicUrl = "https://cdn.example.com/Users/alice/avatar.png";
+          const publicAsset = "/assets/logo.png";
+          const nextAsset = "/_next/static/chunks/app.js";
+          const pathRegex = /\\/Users\\/alice\\//;
+          return { posixErr, homeErr, winErr, uriErr, publicUrl, publicAsset, nextAsset, pathRegex };
+        }
+        function hotLoopPath() {
+          let out = "";
+          for (let i = 0; i < 2; i++) {
+            out = "/Users/alice/hot-loop/item.ts";
+          }
+          return out;
+        }
+        return coldErrorReporter();
+      `;
+      const out = transformJavaScript(code, {
+        seed: 0x778899,
+        scrubPaths: true,
+      });
+
+      const res = new Function(out.code)();
+      expect(res.posixErr).toBe('Failed at [src]/projects/secret-app/src/auth.ts');
+      expect(res.homeErr).toBe('Key missing at [src]/work/secrets/key.pem');
+      expect(res.winErr).toBe('Built from [src]/Desktop/unpeek/src/index.ts');
+      expect(res.uriErr).toBe('Source: [src]/app/src/main.ts');
+      expect(res.publicUrl).toBe('https://cdn.example.com/Users/alice/avatar.png');
+      expect(res.publicAsset).toBe('/assets/logo.png');
+      expect(res.nextAsset).toBe('/_next/static/chunks/app.js');
+      expect(res.pathRegex.source).toContain('Users');
+      // Hot-path literal should remain untouched
+      expect(out.code).toContain('/Users/alice/hot-loop/item.ts');
+      expect(out.code).not.toContain('/Users/alice/projects/secret-app');
+    });
+  });
+
+  describe('M-12 Prelude-Fragmentation', () => {
+    it('splits string pool into K independent micro-vaults without location.origin when stringCount >= 8', () => {
+      const code = `
+        function collectSecrets() {
+          const s1 = "ALPHA_SECRET_001";
+          const s2 = "BRAVO_SECRET_002";
+          const s3 = "CHARLIE_SECRET_003";
+          const s4 = "DELTA_SECRET_004";
+          const s5 = "ECHO_SECRET_005";
+          const s6 = "FOXTROT_SECRET_006";
+          const s7 = "GOLF_SECRET_007";
+          const s8 = "HOTEL_SECRET_008";
+          const s9 = "INDIA_SECRET_009";
+          const s10 = "JULIET_SECRET_010";
+          const s11 = "KILO_SECRET_011";
+          const s12 = "LIMA_SECRET_012";
+          return [s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12];
+        }
+        return collectSecrets();
+      `;
+      const out = transformJavaScript(code, {
+        seed: 0x424242,
+        config: {
+          vault: {
+            fragmented: true,
+            fragmentCount: 3,
+          },
+        },
+      });
+
+      expect(out.encryptedStringsCount).toBe(12);
+      expect(out.code).not.toContain('ALPHA_SECRET_001');
+      expect(out.code).not.toContain('location.origin');
+      // 3 distinct micro-vault decryptor functions (f0, f1, f2)
+      expect(out.code).toMatch(/f0\(/);
+      expect(out.code).toMatch(/f1\(/);
+      expect(out.code).toMatch(/f2\(/);
+
+      const result = new Function(out.code)();
+      expect(result).toEqual([
+        'ALPHA_SECRET_001',
+        'BRAVO_SECRET_002',
+        'CHARLIE_SECRET_003',
+        'DELTA_SECRET_004',
+        'ECHO_SECRET_005',
+        'FOXTROT_SECRET_006',
+        'GOLF_SECRET_007',
+        'HOTEL_SECRET_008',
+        'INDIA_SECRET_009',
+        'JULIET_SECRET_010',
+        'KILO_SECRET_011',
+        'LIMA_SECRET_012',
+      ]);
+    });
+
+    it('falls back to a single vault on small chunks (< 8 strings)', () => {
+      const code = `
+        function smallFn() {
+          return ["SMALL_ONE", "SMALL_TWO", "SMALL_THREE", "SMALL_FOUR", "SMALL_FIVE"];
+        }
+        return smallFn();
+      `;
+      const out = transformJavaScript(code, {
+        seed: 0x424242,
+        config: {
+          vault: {
+            fragmented: true,
+            fragmentCount: 4,
+          },
+        },
+      });
+
+      expect(out.encryptedStringsCount).toBe(5);
+      expect(out.code).not.toMatch(/f0\(/);
+      expect(new Function(out.code)()).toEqual([
+        'SMALL_ONE',
+        'SMALL_TWO',
+        'SMALL_THREE',
+        'SMALL_FOUR',
+        'SMALL_FIVE',
+      ]);
     });
   });
 });

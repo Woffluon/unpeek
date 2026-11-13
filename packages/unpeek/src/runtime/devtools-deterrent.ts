@@ -1,4 +1,4 @@
-import type { ShieldConfig } from '../types.js';
+import type { ShieldConfig } from './types.js';
 import { derivePolymorphicIdent } from '../ast/codegen.js';
 
 export function deriveIntegrityFnName(seed: number): string {

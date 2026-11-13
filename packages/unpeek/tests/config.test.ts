@@ -2,16 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { defineConfig, loadUnpeekConfig, type UnpeekConfig } from '../src/config.js';
 import {
   DEFAULT_CONFIG,
-  defineConfig,
   findConfigFile,
-  loadUnpeekConfig,
   mergeUnpeekConfig,
   resolveUnpeekConfigSync,
-} from '../src/config.js';
-import { UnpeekError } from '../src/errors.js';
-import type { UnpeekConfig } from '../src/types.js';
+} from '../src/internal/config.js';
+import { UnpeekError } from '../src/shared/errors.js';
 
 describe('Unpeek Config System', () => {
   let tempDir: string;

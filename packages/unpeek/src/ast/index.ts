@@ -1,12 +1,11 @@
 import type * as acorn from 'acorn';
+import type { TransformOptions, TransformResult } from './types.js';
 import type {
   InternalShieldPayload,
   InternalTransformOptions,
   InternalTransformResult,
-  TransformOptions,
-  TransformResult,
-} from '../types.js';
-import { UnpeekError, type UnpeekErrorCode } from '../errors.js';
+} from '../internal/types.js';
+import { UnpeekError, type UnpeekErrorCode } from '../shared/errors.js';
 import { computeFnv1aHash } from '../shared/hash.js';
 import {
   analyzeAstHotPaths,
@@ -19,10 +18,24 @@ import { applyColdFlowGuard } from './cold-flow-guard.js';
 import { generateCompactJs, derivePolymorphicIdent } from './codegen.js';
 import { applyMicroVm } from './micro-vm.js';
 import { applySaltedStringVault } from './salted-vault.js';
-import { deriveWindowKeySymbol, generateRuntimeShield } from '../runtime/index.js';
+import { generateRuntimeShield } from '../runtime/index.js';
+import { deriveWindowKeySymbol } from '../internal/runtime.js';
+import {
+  attachMagicComments,
+  classifyChunkBoundary,
+  type BoundaryClassification,
+  type ChunkBoundaryKind,
+} from './boundary-classifier.js';
+import { scrubResidualPaths } from './scrubber.js';
 
-export { detectHotPaths, computeFnv1aHash, UnpeekError };
-export type { UnpeekErrorCode };
+export {
+  detectHotPaths,
+  computeFnv1aHash,
+  UnpeekError,
+  classifyChunkBoundary,
+  scrubResidualPaths,
+};
+export type { UnpeekErrorCode, BoundaryClassification, ChunkBoundaryKind };
 
 function isAstAlreadyProtected(ast: acorn.Program): boolean {
   if (!ast || !Array.isArray(ast.body)) return false;
@@ -96,11 +109,13 @@ export function transformJavaScript(
       integrityToken: computeFnv1aHash('', seed),
       virtualizedFunctionsCount: 0,
       shaderBuffersCount: 0,
+      skippedReason: 'empty',
     };
     return emptyResult;
   }
 
-  const ast = parseJavaScriptAst(code);
+  const comments: acorn.Comment[] = [];
+  const ast = parseJavaScriptAst(code, comments);
   if (!ast) {
     if (options.strict) {
       const targetLabel = options.filename ? ` "${options.filename}"` : '';
@@ -121,6 +136,7 @@ export function transformJavaScript(
       integrityToken: computeFnv1aHash(code, seed),
       virtualizedFunctionsCount: 0,
       shaderBuffersCount: 0,
+      skippedReason: 'parse-error',
     };
     return unparsedResult;
   }
@@ -137,9 +153,14 @@ export function transformJavaScript(
       integrityToken: computeFnv1aHash(code, seed),
       virtualizedFunctionsCount: 0,
       shaderBuffersCount: 0,
+      skippedReason: 'already-protected',
     };
     return protectedResult;
   }
+
+  // 0. Classify chunk boundaries & attach dynamic import magic comments
+  const boundary = classifyChunkBoundary(ast);
+  attachMagicComments(boundary.importExpressions, comments);
 
   // 1. Detect hot paths (loops, array HOF callbacks, rAF, UI components, and their callees)
   const {
@@ -149,6 +170,15 @@ export function transformJavaScript(
     hotExemptNodes,
     serializedFunctionNodes,
   } = analyzeAstHotPaths(ast, options.config);
+
+  if (options.scrubPaths || options.config?.scrubPaths) {
+    scrubResidualPaths(
+      ast,
+      { scrubPaths: true },
+      hotExemptNodes,
+      boundary.exemptSubtreeRoots
+    );
+  }
 
   const shieldCoupled =
     internalOptions.shieldCoupled ?? Boolean(internalOptions.injectRuntimeShield);
@@ -209,7 +239,8 @@ export function transformJavaScript(
       shieldDelta,
       deterrentMode,
       shieldCoupled,
-      detectHeadless
+      detectHeadless,
+      boundary.exemptSubtreeRoots
     );
     encryptedStringsCount = saltedRes.encryptedStringsCount;
     integrityToken = saltedRes.integrityToken;
@@ -224,7 +255,8 @@ export function transformJavaScript(
       deterrentMode,
       options.config,
       shieldCoupled,
-      detectHeadless
+      detectHeadless,
+      boundary.exemptSubtreeRoots
     );
     encryptedStringsCount = vaultRes.encryptedStringsCount;
     integrityToken = vaultRes.integrityToken;

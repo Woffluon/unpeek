@@ -1,6 +1,6 @@
 {
   "name": "unpeek",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Zero-config, call-graph-aware polymorphic AST obfuscation and passive runtime anti-tamper with <2% CPU overhead.",
   "type": "module",
   "license": "MIT",
@@ -76,85 +76,77 @@
     },
     "./unplugin": {
       "types": {
-        "import": "./dist/bundler/unplugin.d.ts",
-        "require": "./dist/bundler/unplugin.d.cts"
+        "import": "./dist/plugins/unplugin.d.ts",
+        "require": "./dist/plugins/unplugin.d.cts"
       },
-      "import": "./dist/bundler/unplugin.js",
-      "require": "./dist/bundler/unplugin.cjs",
-      "default": "./dist/bundler/unplugin.js"
+      "import": "./dist/plugins/unplugin.js",
+      "require": "./dist/plugins/unplugin.cjs",
+      "default": "./dist/plugins/unplugin.js"
     },
     "./vite": {
       "types": {
-        "import": "./dist/vite.d.ts",
-        "require": "./dist/vite.d.cts"
+        "import": "./dist/adapters/vite.d.ts",
+        "require": "./dist/adapters/vite.d.cts"
       },
-      "import": "./dist/vite.js",
-      "require": "./dist/vite.cjs",
-      "default": "./dist/vite.js"
+      "import": "./dist/adapters/vite.js",
+      "require": "./dist/adapters/vite.cjs",
+      "default": "./dist/adapters/vite.js"
     },
     "./webpack": {
       "types": {
-        "import": "./dist/webpack.d.ts",
-        "require": "./dist/webpack.d.cts"
+        "import": "./dist/adapters/webpack.d.ts",
+        "require": "./dist/adapters/webpack.d.cts"
       },
-      "import": "./dist/webpack.js",
-      "require": "./dist/webpack.cjs",
-      "default": "./dist/webpack.js"
+      "import": "./dist/adapters/webpack.js",
+      "require": "./dist/adapters/webpack.cjs",
+      "default": "./dist/adapters/webpack.js"
     },
     "./rollup": {
       "types": {
-        "import": "./dist/rollup.d.ts",
-        "require": "./dist/rollup.d.cts"
+        "import": "./dist/adapters/rollup.d.ts",
+        "require": "./dist/adapters/rollup.d.cts"
       },
-      "import": "./dist/rollup.js",
-      "require": "./dist/rollup.cjs",
-      "default": "./dist/rollup.js"
+      "import": "./dist/adapters/rollup.js",
+      "require": "./dist/adapters/rollup.cjs",
+      "default": "./dist/adapters/rollup.js"
     },
     "./esbuild": {
       "types": {
-        "import": "./dist/esbuild.d.ts",
-        "require": "./dist/esbuild.d.cts"
+        "import": "./dist/adapters/esbuild.d.ts",
+        "require": "./dist/adapters/esbuild.d.cts"
       },
-      "import": "./dist/esbuild.js",
-      "require": "./dist/esbuild.cjs",
-      "default": "./dist/esbuild.js"
+      "import": "./dist/adapters/esbuild.js",
+      "require": "./dist/adapters/esbuild.cjs",
+      "default": "./dist/adapters/esbuild.js"
     },
-    "./ast": {
+    "./rspack": {
       "types": {
-        "import": "./dist/ast/index.d.ts",
-        "require": "./dist/ast/index.d.cts"
+        "import": "./dist/adapters/rspack.d.ts",
+        "require": "./dist/adapters/rspack.d.cts"
       },
-      "import": "./dist/ast/index.js",
-      "require": "./dist/ast/index.cjs",
-      "default": "./dist/ast/index.js"
-    },
-    "./runtime": {
-      "types": {
-        "import": "./dist/runtime/index.d.ts",
-        "require": "./dist/runtime/index.d.cts"
-      },
-      "import": "./dist/runtime/index.js",
-      "require": "./dist/runtime/index.cjs",
-      "default": "./dist/runtime/index.js"
+      "import": "./dist/adapters/rspack.js",
+      "require": "./dist/adapters/rspack.cjs",
+      "default": "./dist/adapters/rspack.js"
     },
     "./next": {
       "types": {
-        "import": "./dist/next/index.d.ts",
-        "require": "./dist/next/index.d.cts"
+        "import": "./dist/adapters/next/index.d.ts",
+        "require": "./dist/adapters/next/index.d.cts"
       },
-      "import": "./dist/next/index.js",
-      "require": "./dist/next/index.cjs",
-      "default": "./dist/next/index.js"
+      "import": "./dist/adapters/next/index.js",
+      "require": "./dist/adapters/next/index.cjs",
+      "default": "./dist/adapters/next/index.js"
     },
     "./next/adapter": {
       "types": {
-        "import": "./dist/next/adapter.d.ts",
-        "require": "./dist/next/adapter.d.cts"
+        "import": "./dist/adapters/next/adapter.d.ts",
+        "require": "./dist/adapters/next/adapter.d.cts"
       },
-      "import": "./dist/next/adapter.js",
-      "require": "./dist/next/adapter.cjs",
-      "default": "./dist/next/adapter.js"
-    }
+      "import": "./dist/adapters/next/adapter.js",
+      "require": "./dist/adapters/next/adapter.cjs",
+      "default": "./dist/adapters/next/adapter.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "bin",
@@ -180,6 +172,7 @@
     "unplugin": "^2.2.2"
   },
   "peerDependencies": {
+    "@rspack/core": ">=1.0.0 <2.0.0",
     "esbuild": ">=0.18.0 <1.0.0",
     "next": ">=15.0.0 <17.0.0",
     "rollup": ">=3.0.0 <5.0.0",
@@ -187,6 +180,9 @@
     "webpack": ">=5.0.0 <6.0.0"
   },
   "peerDependenciesMeta": {
+    "@rspack/core": {
+      "optional": true
+    },
     "esbuild": {
       "optional": true
     },

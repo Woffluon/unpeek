@@ -1,20 +1,22 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
-import type { DeterrentMode, UnpeekConfig } from '../types.js';
+import type { DeterrentMode } from '../runtime/types.js';
+import type { UnpeekConfig } from '../config.js';
 import { computeFnv1aHash } from '../shared/hash.js';
 import { derivePolymorphicIdent, generateCompactJs } from './codegen.js';
 
 export { computeFnv1aHash };
 import {
-  deriveWindowKeySymbol,
   generateRuntimeShield,
   computeIntegrityHash,
 } from '../runtime/index.js';
+import { deriveWindowKeySymbol } from '../internal/runtime.js';
 import {
   computeCallSiteSalt,
   createSaltedDecryptorFnAst,
   createSaltedVaultHelperAst,
 } from './salted-vault.js';
+import { isNodeInExemptSubtree } from './boundary-classifier.js';
 
 export const SAFE_ALPHA =
   " !#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~";
@@ -467,6 +469,44 @@ function createShaderVaultAst(
   return createSaltedVaultHelperAst(shaderVarName, b64List, fnAst);
 }
 
+function extractScopeChain(
+  ast: acorn.Program,
+  ancestors: acorn.Node[]
+): acorn.Node[] {
+  const chain: acorn.Node[] = [ast];
+  for (let i = 1; i < ancestors.length - 1; i++) {
+    const a: any = ancestors[i];
+    const prev: any = ancestors[i - 1];
+    if (
+      a.type === 'BlockStatement' &&
+      (prev.type === 'FunctionDeclaration' ||
+        prev.type === 'FunctionExpression' ||
+        prev.type === 'ArrowFunctionExpression')
+    ) {
+      chain.push(a);
+    }
+  }
+  return chain;
+}
+
+function findLowestCommonScope(
+  ast: acorn.Program,
+  chains: acorn.Node[][]
+): acorn.Node {
+  if (chains.length === 0) return ast;
+  let lca = chains[0];
+  for (let c = 1; c < chains.length; c++) {
+    const cur = chains[c];
+    let matchLen = 0;
+    const limit = Math.min(lca.length, cur.length);
+    while (matchLen < limit && lca[matchLen] === cur[matchLen]) {
+      matchLen++;
+    }
+    lca = lca.slice(0, Math.max(1, matchLen));
+  }
+  return lca[lca.length - 1] ?? ast;
+}
+
 export function applyStringVault(
   ast: acorn.Program,
   seed = 0x9e3779b9,
@@ -477,7 +517,8 @@ export function applyStringVault(
   deterrentMode?: DeterrentMode,
   config?: UnpeekConfig,
   shieldCoupled = true,
-  detectHeadless = false
+  detectHeadless = false,
+  exemptSubtreeRoots?: WeakSet<acorn.Node>
 ): StringVaultResult {
   const minLen = config?.vault?.minStringLength ?? minStringLength;
   const activeDirectives = new Set(DIRECTIVE_STRINGS);
@@ -491,7 +532,9 @@ export function applyStringVault(
     ? new Set(config.vault.reservedProps)
     : undefined;
 
-  const semanticPatterns = config?.vault?.semanticAnchors?.patterns;
+  const semanticPatterns = config?.vault?.semanticAnchors?.patterns?.map((p) =>
+    typeof p === 'string' ? new RegExp(p) : p,
+  );
   const excludeUi = config?.vault?.semanticAnchors?.excludeUiClasses !== false;
 
   const suffix = ((seed >>> 0) & 0xffff).toString(36);
@@ -554,6 +597,7 @@ export function applyStringVault(
   const expectedKey = (buildH ^ 0 ^ (shieldCoupled ? (expDelta ?? 0) & 0xffff : 0)) >>> 0;
 
   const stringToIndex = new Map<string, number>();
+  const uniqueStrings: string[] = [];
   const encryptedPayloads: string[] = [];
   const shaderToIndex = new Map<string, number>();
   const shaderPayloads: string[] = [];
@@ -563,6 +607,7 @@ export function applyStringVault(
     node: any;
     parent?: any;
     idx: number;
+    scopeChain: acorn.Node[];
   }[] = [];
 
   const hotTargetsToReplace: {
@@ -600,6 +645,10 @@ export function applyStringVault(
 
         const parent = ancestors[ancestors.length - 2] as any;
         if (!parent) return;
+
+        if (isNodeInExemptSubtree(ancestors, exemptSubtreeRoots)) {
+          return;
+        }
 
         // Skip directives at top of program or function body, or any ExpressionStatement where directive is truthy
         if (
@@ -694,19 +743,28 @@ export function applyStringVault(
             shaderToIndex.set(val, idx);
             shaderPayloads.push(val);
           }
-          targetsToReplace.push({ type: 'shader', node, parent, idx });
+          targetsToReplace.push({
+            type: 'shader',
+            node,
+            parent,
+            idx,
+            scopeChain: extractScopeChain(ast, ancestors),
+          });
         } else {
           if (!shouldEncryptString(val, minLen, parent, activeDirectives, customReserved)) return;
           let idx = stringToIndex.get(val);
           if (idx === undefined) {
-            idx = encryptedPayloads.length;
+            idx = uniqueStrings.length;
             stringToIndex.set(val, idx);
-            const salt = computeCallSiteSalt(seed, idx);
-            encryptedPayloads.push(
-              encodeStringWithSeed(val, P_CHARS, expectedKey, salt, idx)
-            );
+            uniqueStrings.push(val);
           }
-          targetsToReplace.push({ type: 'string', node, parent, idx });
+          targetsToReplace.push({
+            type: 'string',
+            node,
+            parent,
+            idx,
+            scopeChain: extractScopeChain(ast, ancestors),
+          });
         }
       },
 
@@ -716,6 +774,10 @@ export function applyStringVault(
 
         const val: string = node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
         if (typeof val !== 'string' || activeDirectives.has(val)) return;
+
+        if (isNodeInExemptSubtree(ancestors, exemptSubtreeRoots)) {
+          return;
+        }
 
         let isHotExempt = false;
         if (hotExemptNodes) {
@@ -729,6 +791,10 @@ export function applyStringVault(
 
         const parent = ancestors[ancestors.length - 2] as any;
         if (!parent) return;
+
+        if (isNodeInExemptSubtree(ancestors, exemptSubtreeRoots)) {
+          return;
+        }
 
         if (
           parent.type === 'ExpressionStatement' &&
@@ -783,19 +849,28 @@ export function applyStringVault(
             shaderToIndex.set(val, idx);
             shaderPayloads.push(val);
           }
-          targetsToReplace.push({ type: 'shader', node, parent, idx });
+          targetsToReplace.push({
+            type: 'shader',
+            node,
+            parent,
+            idx,
+            scopeChain: extractScopeChain(ast, ancestors),
+          });
         } else {
           if (!shouldEncryptString(val, minLen, parent, activeDirectives, customReserved)) return;
           let idx = stringToIndex.get(val);
           if (idx === undefined) {
-            idx = encryptedPayloads.length;
+            idx = uniqueStrings.length;
             stringToIndex.set(val, idx);
-            const salt = computeCallSiteSalt(seed, idx);
-            encryptedPayloads.push(
-              encodeStringWithSeed(val, P_CHARS, expectedKey, salt, idx)
-            );
+            uniqueStrings.push(val);
           }
-          targetsToReplace.push({ type: 'string', node, parent, idx });
+          targetsToReplace.push({
+            type: 'string',
+            node,
+            parent,
+            idx,
+            scopeChain: extractScopeChain(ast, ancestors),
+          });
         }
       },
     },
@@ -843,58 +918,6 @@ export function applyStringVault(
     delete node.expressions;
   }
 
-  const serializedTable = JSON.stringify(encryptedPayloads);
-  const integrityToken = computeFnv1aHash(serializedTable, seed);
-
-  for (const { type, node, parent, idx } of targetsToReplace) {
-    if (parent?.type === 'Property' && parent.key === node) {
-      parent.computed = true;
-    }
-    if (type === 'shader') {
-      node.type = 'CallExpression';
-      node.callee = {
-        type: 'Identifier',
-        name: shaderVarName,
-      };
-      node.arguments = [
-        {
-          type: 'Literal',
-          value: idx,
-          raw: String(idx),
-        },
-      ];
-      node.optional = false;
-      delete node.value;
-      delete node.raw;
-      delete node.quasis;
-      delete node.expressions;
-    } else {
-      const salt = computeCallSiteSalt(seed, idx);
-      node.type = 'CallExpression';
-      node.callee = {
-        type: 'Identifier',
-        name: decryptFnName,
-      };
-      node.arguments = [
-        {
-          type: 'Literal',
-          value: idx,
-          raw: String(idx),
-        },
-        {
-          type: 'Literal',
-          value: salt,
-          raw: String(salt),
-        },
-      ];
-      node.optional = false;
-      delete node.value;
-      delete node.raw;
-      delete node.quasis;
-      delete node.expressions;
-    }
-  }
-
   let insertIdx = 0;
   while (insertIdx < ast.body.length) {
     const stmt: any = ast.body[insertIdx];
@@ -912,6 +935,184 @@ export function applyStringVault(
     }
   }
 
+  const wantFragmented = Boolean(config?.vault?.fragmented);
+  let fragCount = Math.max(2, Math.min(8, Math.floor(config?.vault?.fragmentCount ?? 3)));
+  while (fragCount > 2 && Math.floor(uniqueStrings.length / fragCount) < 4) {
+    fragCount--;
+  }
+  const useFragmented =
+    wantFragmented &&
+    uniqueStrings.length >= 8 &&
+    Math.floor(uniqueStrings.length / fragCount) >= 4;
+
+  let integrityToken = computeFnv1aHash('empty', seed);
+
+  if (!useFragmented) {
+    for (let idx = 0; idx < uniqueStrings.length; idx++) {
+      const salt = computeCallSiteSalt(seed, idx);
+      encryptedPayloads.push(
+        encodeStringWithSeed(uniqueStrings[idx], P_CHARS, expectedKey, salt, idx)
+      );
+    }
+    integrityToken = computeFnv1aHash(JSON.stringify(encryptedPayloads), seed);
+
+    for (const { type, node, parent, idx } of targetsToReplace) {
+      if (parent?.type === 'Property' && parent.key === node) {
+        parent.computed = true;
+      }
+      if (type === 'shader') {
+        node.type = 'CallExpression';
+        node.callee = { type: 'Identifier', name: shaderVarName };
+        node.arguments = [{ type: 'Literal', value: idx, raw: String(idx) }];
+      } else {
+        const salt = computeCallSiteSalt(seed, idx);
+        node.type = 'CallExpression';
+        node.callee = { type: 'Identifier', name: decryptFnName };
+        node.arguments = [
+          { type: 'Literal', value: idx, raw: String(idx) },
+          { type: 'Literal', value: salt, raw: String(salt) },
+        ];
+      }
+      node.optional = false;
+      delete node.value;
+      delete node.raw;
+      delete node.quasis;
+      delete node.expressions;
+    }
+  } else {
+    // Deterministic seed-based PRNG permutation of unique string indices
+    const perm: number[] = [];
+    for (let i = 0; i < uniqueStrings.length; i++) perm.push(i);
+    let prng = (seed || 0x12345678) >>> 0;
+    for (let i = perm.length - 1; i > 0; i--) {
+      prng ^= prng << 13;
+      prng ^= prng >>> 17;
+      prng ^= prng << 5;
+      const j = (prng >>> 0) % (i + 1);
+      const tmp = perm[i];
+      perm[i] = perm[j];
+      perm[j] = tmp;
+    }
+
+    const stringFragAssign = new Array<{ fragId: number; localIdx: number }>(
+      uniqueStrings.length
+    );
+    const fragStrings: string[][] = Array.from({ length: fragCount }, () => []);
+    for (let p = 0; p < perm.length; p++) {
+      const strIdx = perm[p];
+      const fragId = p % fragCount;
+      const localIdx = fragStrings[fragId].length;
+      fragStrings[fragId].push(uniqueStrings[strIdx]);
+      stringFragAssign[strIdx] = { fragId, localIdx };
+    }
+
+    const fragMeta: {
+      fragSeed: number;
+      fnName: string;
+      fnAst: any;
+      payloads: string[];
+      chains: acorn.Node[][];
+    }[] = [];
+    const usedFnNames = new Set<string>();
+
+    for (let f = 0; f < fragCount; f++) {
+      const fragSeed = (seed ^ Math.imul(f + 1, 0x9e3779b9)) >>> 0;
+      let fnName = `_uD${(fragSeed & 0xffff).toString(36)}f${f}`;
+      while (usedFnNames.has(fnName)) {
+        fnName += '_';
+      }
+      usedFnNames.add(fnName);
+
+      const pCharsF = createPermutationTable(fragSeed);
+      const fnAstF = createSaltedDecryptorFnAst(
+        fragSeed,
+        pCharsF,
+        expDelta ?? 0,
+        sym,
+        SAFE_ALPHA,
+        shieldCoupled,
+        browserOnly
+      );
+      const buildHF = computeIntegrityHash(generateCompactJs(fnAstF), 0);
+      const expectedKeyF =
+        (buildHF ^ 0 ^ (shieldCoupled ? (expDelta ?? 0) & 0xffff : 0)) >>> 0;
+
+      const payloads: string[] = [];
+      for (let localIdx = 0; localIdx < fragStrings[f].length; localIdx++) {
+        const salt = computeCallSiteSalt(fragSeed, localIdx);
+        payloads.push(
+          encodeStringWithSeed(
+            fragStrings[f][localIdx],
+            pCharsF,
+            expectedKeyF,
+            salt,
+            localIdx
+          )
+        );
+      }
+
+      fragMeta.push({
+        fragSeed,
+        fnName,
+        fnAst: fnAstF,
+        payloads,
+        chains: [],
+      });
+    }
+
+    for (const { type, node, parent, idx, scopeChain } of targetsToReplace) {
+      if (parent?.type === 'Property' && parent.key === node) {
+        parent.computed = true;
+      }
+      if (type === 'shader') {
+        node.type = 'CallExpression';
+        node.callee = { type: 'Identifier', name: shaderVarName };
+        node.arguments = [{ type: 'Literal', value: idx, raw: String(idx) }];
+      } else {
+        const { fragId, localIdx } = stringFragAssign[idx];
+        const meta = fragMeta[fragId];
+        meta.chains.push(scopeChain);
+        const salt = computeCallSiteSalt(meta.fragSeed, localIdx);
+        node.type = 'CallExpression';
+        node.callee = { type: 'Identifier', name: meta.fnName };
+        node.arguments = [
+          { type: 'Literal', value: localIdx, raw: String(localIdx) },
+          { type: 'Literal', value: salt, raw: String(salt) },
+        ];
+      }
+      node.optional = false;
+      delete node.value;
+      delete node.raw;
+      delete node.quasis;
+      delete node.expressions;
+    }
+
+    const allPayloads: string[][] = [];
+    for (const meta of fragMeta) {
+      allPayloads.push(meta.payloads);
+      const helperStmt = createSaltedVaultHelperAst(
+        meta.fnName,
+        meta.payloads,
+        meta.fnAst
+      );
+      const lcaScope = findLowestCommonScope(ast, meta.chains) as any;
+      if (lcaScope === ast || !Array.isArray(lcaScope.body)) {
+        ast.body.splice(insertIdx++, 0, helperStmt);
+      } else {
+        let blockInsertIdx = 0;
+        while (
+          blockInsertIdx < lcaScope.body.length &&
+          lcaScope.body[blockInsertIdx]?.type === 'ExpressionStatement' &&
+          Boolean(lcaScope.body[blockInsertIdx]?.directive)
+        ) {
+          blockInsertIdx++;
+        }
+        lcaScope.body.splice(blockInsertIdx, 0, helperStmt);
+      }
+    }
+    integrityToken = computeFnv1aHash(JSON.stringify(allPayloads), seed);
+  }
+
   if (hotTargetsToReplace.length > 0) {
     const alreadyHasHx = ast.body.some(
       (stmt: any) =>
@@ -926,7 +1127,7 @@ export function applyStringVault(
     }
   }
 
-  if (encryptedPayloads.length > 0) {
+  if (!useFragmented && encryptedPayloads.length > 0) {
     const vaultHelperStmt = createSaltedVaultHelperAst(
       decryptFnName,
       encryptedPayloads,
@@ -945,7 +1146,7 @@ export function applyStringVault(
   }
 
   return {
-    encryptedStringsCount: encryptedPayloads.length + hotTargetsToReplace.length,
+    encryptedStringsCount: uniqueStrings.length + hotTargetsToReplace.length,
     integrityToken,
     shaderBuffersCount: shaderPayloads.length,
   };

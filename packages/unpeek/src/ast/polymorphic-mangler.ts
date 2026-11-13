@@ -1,6 +1,6 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
-import type { ManglerConfig, UnpeekConfig } from '../types.js';
+import type { ManglerConfig, UnpeekConfig } from '../config.js';
 import { computeFnv1aHash } from './string-vault.js';
 
 export const RESERVED_IDENTIFIERS = new Set([
@@ -202,7 +202,9 @@ export function isMangleableName(
     (!manglerConfig?.excludePrefixes ||
       !manglerConfig.excludePrefixes.some((p) => origName.startsWith(p))) &&
     (!manglerConfig?.excludePatterns ||
-      !manglerConfig.excludePatterns.some((re) => re.test(origName)))
+      !manglerConfig.excludePatterns.some((re) =>
+        (typeof re === 'string' ? new RegExp(re) : re).test(origName),
+      ))
   );
 }
 

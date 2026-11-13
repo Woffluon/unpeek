@@ -1,11 +1,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { DeterrentMode, ProtectOptions, ProtectSummary } from '../types.js';
+import type { DeterrentMode } from '../runtime/types.js';
+import type { UnpeekProfile } from '../config.js';
+import type {
+  CheckOptions,
+  CheckResult,
+  ProtectOptions,
+  ProtectSummary,
+  SymbolicateOptions,
+} from '../core/types.js';
 import { initProject } from '../core/init.js';
 import { protectProject } from '../core/protect.js';
+import { checkProject } from '../core/check.js';
+import { symbolicateStackTrace } from '../core/vlq.js';
 
-const VERSION = '2.0.0';
+const VERSION = '3.0.0';
 let cachedPackageVersion: string | undefined;
 
 export function getPackageVersion(): string {
@@ -61,10 +71,15 @@ function printHelp(): void {
     brandBlock(),
     '',
     '  Usage:',
-    '    unpeek init [--dry-run]        wire postbuild and the .unpeek-maps/ vault',
-    '    unpeek protect [options]       protect client bundles in place (Tier 1 default: <2% CPU, <15% Gzip)',
+    '    unpeek init [--dry-run] [--profile <name>]   wire postbuild and the .unpeek-maps/ vault',
+    '    unpeek protect [options]                     protect client bundles in place (Tier 1 default: <2% CPU, <15% Gzip)',
+    '    unpeek check [options]                       read-only CI gate for leaks, ignores, budget, and CSP',
+    '    unpeek symbolicate [options]                 resolve stack traces locally using .unpeek-maps/',
     '',
-    '  Options:',
+    '  Options (protect):',
+    '    --profile <name>               preset profile: minimal | recommended | strict',
+    '    --dry-run                      compute transform & Gzip delta in memory without writing files',
+    '    --max-gzip-delta <num>         fail if Gzip delta exceeds percentage',
     '    --out-dir <dir>                explicit client output directory',
     '    --seed <number>                deterministic polymorphic seed',
     '    --passive                      passive deterrent mode (default: marks tamper, keeps console)',
@@ -75,6 +90,20 @@ function printHelp(): void {
     '    --private-maps-dir <dir>       vault directory (default: .unpeek-maps)',
     '    --no-shield                    skip the runtime anti-tamper shield',
     '    --aggressive                   enable Tier 2 aggressive protection (Micro-VM & WASM KDF)',
+    '',
+    '  Options (check):',
+    '    --out-dir <dir>                explicit client output directory',
+    '    --max-gzip-delta <num>         maximum allowed Gzip delta percentage (default: 15)',
+    '    --require-zero-eval            fail on eval() or new Function() in client bundles',
+    '    --private-maps-dir <dir>       vault directory (default: .unpeek-maps)',
+    '    --json                         output machine-readable JSON',
+    '',
+    '  Options (symbolicate):',
+    '    --maps-dir <dir>               source maps directory (default: .unpeek-maps)',
+    '    --trace <str>                  inline stack trace string to resolve',
+    '    --file <path>                  path to stack trace log file',
+    '',
+    '  General:',
     '    -h, --help                     show help',
     '    -v, --version                  show version',
     '',
@@ -100,15 +129,23 @@ function printSummaryTable(summary: ProtectSummary): void {
 
   console.log('');
   console.log(brandBlock());
+  if (summary.dryRun) {
+    console.log('');
+    console.log('  [DRY-RUN] Preview only — no files were modified on disk.');
+  }
   console.log('');
-  console.log(
-    sectionBlock('PROJECT', [
-      ['framework', summary.framework],
-      ['tier', tierLabel],
-      ['output', summary.outDir],
-      ['bundles', String(summary.processedFiles)],
-    ])
-  );
+  const projectRows: Array<[string, string]> = [
+    ['framework', summary.framework],
+    ['tier', tierLabel],
+  ];
+  if (summary.profile) {
+    projectRows.push(['profile', summary.profile]);
+  }
+  if (summary.seed !== undefined) {
+    projectRows.push(['seed', String(summary.seed)]);
+  }
+  projectRows.push(['output', summary.outDir], ['bundles', String(summary.processedFiles)]);
+  console.log(sectionBlock('PROJECT', projectRows));
   console.log('');
   console.log(
     sectionBlock('CALL GRAPH', [
@@ -202,9 +239,25 @@ function printInitResult(
 export type ParsedCliCommand =
   | { kind: 'help' }
   | { kind: 'version' }
-  | { kind: 'init'; dryRun: boolean }
+  | { kind: 'init'; dryRun: boolean; profile?: UnpeekProfile }
   | { kind: 'protect'; options: ProtectOptions }
+  | { kind: 'check'; options: CheckOptions; json: boolean }
+  | { kind: 'symbolicate'; options: SymbolicateOptions; file?: string }
   | { kind: 'error'; message: string };
+
+const VALID_PROFILES = new Set<UnpeekProfile>(['minimal', 'recommended', 'strict']);
+
+function parseProfileFlag(
+  raw: string,
+  flag: string,
+): { value: UnpeekProfile } | { error: string } {
+  if (!VALID_PROFILES.has(raw as UnpeekProfile)) {
+    return {
+      error: `Invalid value for ${flag}: "${raw}". Expected minimal, recommended, or strict.`,
+    };
+  }
+  return { value: raw as UnpeekProfile };
+}
 
 function readFlagValue(
   args: string[],
@@ -257,7 +310,7 @@ export function parseCliArgs(args: string[], cwd: string = process.cwd()): Parse
   const first = args[0];
   const hasSubcommand = !first.startsWith('-');
 
-  if (hasSubcommand && first !== 'init' && first !== 'protect') {
+  if (hasSubcommand && first !== 'init' && first !== 'protect' && first !== 'check' && first !== 'symbolicate') {
     return {
       kind: 'error',
       message: `Unknown command "${first}". Run "unpeek --help" for usage.`,
@@ -266,10 +319,18 @@ export function parseCliArgs(args: string[], cwd: string = process.cwd()): Parse
 
   if (first === 'init') {
     let dryRun = false;
+    let profile: UnpeekProfile | undefined;
     for (let i = 1; i < args.length; i++) {
       const arg = args[i];
       if (arg === '--dry-run') {
         dryRun = true;
+      } else if (arg === '--profile' || arg.startsWith('--profile=')) {
+        const res = readFlagValue(args, i, '--profile');
+        if ('error' in res) return { kind: 'error', message: res.error };
+        const prof = parseProfileFlag(res.value, '--profile');
+        if ('error' in prof) return { kind: 'error', message: prof.error };
+        profile = prof.value;
+        i = res.nextIndex;
       } else {
         return {
           kind: 'error',
@@ -277,7 +338,86 @@ export function parseCliArgs(args: string[], cwd: string = process.cwd()): Parse
         };
       }
     }
-    return { kind: 'init', dryRun };
+    return profile ? { kind: 'init', dryRun, profile } : { kind: 'init', dryRun };
+  }
+
+  if (first === 'check') {
+    const options: CheckOptions = { cwd };
+    let json = false;
+    for (let i = 1; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '--out-dir' || arg.startsWith('--out-dir=')) {
+        const res = readFlagValue(args, i, '--out-dir');
+        if ('error' in res) return { kind: 'error', message: res.error };
+        options.outDir = res.value;
+        i = res.nextIndex;
+      } else if (arg === '--private-maps-dir' || arg.startsWith('--private-maps-dir=')) {
+        const res = readFlagValue(args, i, '--private-maps-dir');
+        if ('error' in res) return { kind: 'error', message: res.error };
+        options.privateMapsDir = res.value;
+        i = res.nextIndex;
+      } else if (arg === '--max-gzip-delta' || arg.startsWith('--max-gzip-delta=')) {
+        const res = readFlagValue(args, i, '--max-gzip-delta');
+        if ('error' in res) return { kind: 'error', message: res.error };
+        const num = parseNumericFlag(res.value, '--max-gzip-delta');
+        if ('error' in num) return { kind: 'error', message: num.error };
+        if (num.value < 0) {
+          return { kind: 'error', message: `Invalid non-negative value for --max-gzip-delta: "${res.value}"` };
+        }
+        options.maxGzipDelta = num.value;
+        i = res.nextIndex;
+      } else if (arg === '--require-zero-eval') {
+        options.requireZeroEval = true;
+      } else if (arg === '--strict-csp') {
+        options.strictCsp = true;
+      } else if (arg === '--json') {
+        json = true;
+      } else {
+        return {
+          kind: 'error',
+          message: `Unknown option "${arg}" for check. Run "unpeek --help" for usage.`,
+        };
+      }
+    }
+    return { kind: 'check', options, json };
+  }
+
+  if (first === 'symbolicate') {
+    const options: SymbolicateOptions = { stackTrace: '', cwd };
+    let file: string | undefined;
+    let hasTrace = false;
+    for (let i = 1; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '--maps-dir' || arg.startsWith('--maps-dir=')) {
+        const res = readFlagValue(args, i, '--maps-dir');
+        if ('error' in res) return { kind: 'error', message: res.error };
+        options.mapsDir = res.value;
+        i = res.nextIndex;
+      } else if (arg === '--trace' || arg.startsWith('--trace=')) {
+        const res = readFlagValue(args, i, '--trace');
+        if ('error' in res) return { kind: 'error', message: res.error };
+        options.stackTrace = res.value;
+        hasTrace = true;
+        i = res.nextIndex;
+      } else if (arg === '--file' || arg.startsWith('--file=')) {
+        const res = readFlagValue(args, i, '--file');
+        if ('error' in res) return { kind: 'error', message: res.error };
+        file = res.value;
+        i = res.nextIndex;
+      } else {
+        return {
+          kind: 'error',
+          message: `Unknown option "${arg}" for symbolicate. Run "unpeek --help" for usage.`,
+        };
+      }
+    }
+    if (!hasTrace && !file) {
+      return {
+        kind: 'error',
+        message: 'symbolicate requires either --trace <str> or --file <path>.',
+      };
+    }
+    return { kind: 'symbolicate', options, file };
   }
 
   const options: ProtectOptions = { cwd };
@@ -322,6 +462,28 @@ export function parseCliArgs(args: string[], cwd: string = process.cwd()): Parse
       options.detectHeadless = true;
     } else if (arg === '--no-maps') {
       options.keepPrivateMaps = false;
+    } else if (arg === '--dry-run') {
+      options.dryRun = true;
+    } else if (arg === '--profile' || arg.startsWith('--profile=')) {
+      const res = readFlagValue(args, i, '--profile');
+      if ('error' in res) return { kind: 'error', message: res.error };
+      const prof = parseProfileFlag(res.value, '--profile');
+      if ('error' in prof) return { kind: 'error', message: prof.error };
+      options.profile = prof.value;
+      i = res.nextIndex;
+    } else if (arg === '--max-gzip-delta' || arg.startsWith('--max-gzip-delta=')) {
+      const res = readFlagValue(args, i, '--max-gzip-delta');
+      if ('error' in res) return { kind: 'error', message: res.error };
+      const num = parseNumericFlag(res.value, '--max-gzip-delta');
+      if ('error' in num) return { kind: 'error', message: num.error };
+      if (num.value < 0) {
+        return {
+          kind: 'error',
+          message: `Invalid non-negative value for --max-gzip-delta: "${res.value}"`,
+        };
+      }
+      options.maxGzipDelta = num.value;
+      i = res.nextIndex;
     } else {
       return {
         kind: 'error',
@@ -331,6 +493,33 @@ export function parseCliArgs(args: string[], cwd: string = process.cwd()): Parse
   }
 
   return { kind: 'protect', options };
+}
+
+function printCheckResult(result: CheckResult): void {
+  console.log('');
+  console.log(brandBlock());
+  console.log('');
+  console.log(
+    sectionBlock('CHECK', [
+      ['status', result.passed ? 'PASSED' : 'FAILED'],
+      ['output', result.outDir],
+      ['files', String(result.checkedFiles)],
+      ['violations', String(result.violations.length)],
+      ['warnings', String(result.warnings.length)],
+    ])
+  );
+  if (result.violations.length > 0) {
+    console.log('');
+    for (const v of result.violations) {
+      console.error(`  [ERROR] (${v.rule}) ${v.message}`);
+    }
+  }
+  if (result.warnings.length > 0) {
+    console.log('');
+    for (const w of result.warnings) {
+      console.warn(`  [WARN]  (${w.rule}) ${w.message}`);
+    }
+  }
 }
 
 export async function runCli(args: string[]): Promise<void> {
@@ -348,13 +537,66 @@ export async function runCli(args: string[]): Promise<void> {
       process.exitCode = 1;
       return;
     case 'init': {
-      const res = initProject(process.cwd(), { dryRun: parsed.dryRun });
+      const cwd = process.cwd();
+      const res = initProject(cwd, { dryRun: parsed.dryRun });
+      if (parsed.profile && !parsed.dryRun) {
+        const configPath = path.join(cwd, 'unpeek.config.json');
+        let existing: Record<string, unknown> = {};
+        if (fs.existsSync(configPath)) {
+          try {
+            existing = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+          } catch {
+            existing = {};
+          }
+        }
+        existing.profile = parsed.profile;
+        fs.writeFileSync(configPath, `${JSON.stringify(existing, null, 2)}\n`, 'utf8');
+      }
       printInitResult(res, parsed.dryRun);
       return;
     }
     case 'protect': {
       const summary = await protectProject(parsed.options);
       printSummaryTable(summary);
+      if (summary.dryRun && summary.budgetExceeded) {
+        console.error(
+          `[unpeek] Budget exceeded: gzipDeltaPercent (${summary.gzipDeltaPercent}%) > maxGzipDelta (${parsed.options.maxGzipDelta}%).`
+        );
+        process.exitCode = 1;
+      }
+      return;
+    }
+    case 'check': {
+      const result = await checkProject(parsed.options);
+      if (parsed.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        printCheckResult(result);
+      }
+      if (!result.passed) {
+        process.exitCode = 1;
+      }
+      return;
+    }
+    case 'symbolicate': {
+      let stackTrace = parsed.options.stackTrace;
+      if (parsed.file) {
+        const filePath = path.resolve(parsed.options.cwd ?? process.cwd(), parsed.file);
+        if (!fs.existsSync(filePath)) {
+          console.error(`[unpeek] Trace file not found: "${filePath}"`);
+          process.exitCode = 1;
+          return;
+        }
+        stackTrace = fs.readFileSync(filePath, 'utf8');
+      }
+      const result = await symbolicateStackTrace({
+        ...parsed.options,
+        stackTrace,
+      });
+      console.log(result.stackTrace);
+      for (const w of result.warnings) {
+        console.error(`[unpeek:warn] ${w}`);
+      }
       return;
     }
   }

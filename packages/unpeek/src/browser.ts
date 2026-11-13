@@ -1,27 +1,38 @@
 export type {
-  ConfigFramework,
+  BaseProtectionOptions,
   ConfigTarget,
-  DetectedFramework,
-  DeterrentMode,
   FilterConfig,
   HotPathConfig,
-  HotPathReport,
   ManglerConfig,
   NextConfigOptions,
+  PatternInput,
   SemanticAnchorsConfig,
-  ShieldConfig,
   ShieldOptionsConfig,
-  ShieldPayload,
   SourcemapsConfig,
-  TransformOptions,
-  TransformResult,
   UnpeekConfig,
+  UnpeekFramework,
+  UnpeekPluginOptions,
+  UnpeekProfile,
   VaultConfig,
   ViteConfigOptions,
-} from './types.js';
+} from './config.js';
 
-export { UnpeekError } from './errors.js';
-export type { UnpeekErrorCode } from './errors.js';
+export type {
+  HotPathReport,
+  ScrubberOptions,
+  TransformOptions,
+  TransformResult,
+  TransformSkippedReason,
+} from './ast/types.js';
+
+export type {
+  DeterrentMode,
+  ShieldConfig,
+  ShieldPayload,
+} from './runtime/types.js';
+
+export { PRESETS } from './presets.js';
+export { UnpeekError, isUnpeekError, type UnpeekErrorCode } from './shared/errors.js';
 
 export {
   transformJavaScript,

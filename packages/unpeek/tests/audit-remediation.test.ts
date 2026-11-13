@@ -9,10 +9,10 @@ import {
   loadUnpeekConfig,
 } from '../src/index.js';
 import { detectHotPaths } from '../src/ast/index.js';
-import { scanClientBundles, SUPPORTED_EXTENSIONS } from '../src/bundler/detector.js';
-import { unpeekPlugin } from '../src/bundler/unplugin.js';
-import { resolveUnpeekConfigSync } from '../src/config.js';
-import type { UnpeekConfig } from '../src/types.js';
+import { scanClientBundles, SUPPORTED_EXTENSIONS } from '../src/core/detector.js';
+import { unpeekPlugin } from '../src/plugins/unplugin.js';
+import { resolveUnpeekConfigSync } from '../src/internal/config.js';
+import type { UnpeekConfig } from '../src/config.js';
 
 describe('Audit Remediation Verification Suite', () => {
   let tmpDir: string;

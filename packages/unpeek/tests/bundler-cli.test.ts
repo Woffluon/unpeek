@@ -10,8 +10,8 @@ import {
 import {
   detectTargetFramework,
   scanClientBundles,
-} from '../src/bundler/detector.js';
-import { unpeekPlugin } from '../src/bundler/unplugin.js';
+} from '../src/core/detector.js';
+import { unpeekPlugin } from '../src/plugins/unplugin.js';
 
 describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin', () => {
   let tmpDir: string;
@@ -215,7 +215,7 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
   });
 
   it('sourcemap vault updates .dockerignore and .npmignore if present, and blocks placing private maps in outDir or publicDir', async () => {
-    const { relocateSourceMaps } = await import('../src/bundler/sourcemap-vault.js');
+    const { relocateSourceMaps } = await import('../src/core/sourcemap-vault.js');
     const outDir = path.join(tmpDir, 'dist');
     const publicDir = path.join(tmpDir, 'public');
     fs.mkdirSync(outDir, { recursive: true });
@@ -441,7 +441,7 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
 
   it('issues Dockerignore advisory warning when .dockerignore does not exist or lacks .unpeek-maps/', async () => {
     const { runCli } = await import('../src/cli/index.js');
-    const { relocateSourceMaps } = await import('../src/bundler/sourcemap-vault.js');
+    const { relocateSourceMaps } = await import('../src/core/sourcemap-vault.js');
 
     fs.writeFileSync(
       path.join(tmpDir, 'package.json'),
@@ -639,7 +639,7 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
   });
 
   it('sourcemap-vault dynamically validates static/assets publicDirs and discovers monorepo root ignore files', async () => {
-    const { relocateSourceMaps } = await import('../src/bundler/sourcemap-vault.js');
+    const { relocateSourceMaps } = await import('../src/core/sourcemap-vault.js');
     const outDir = path.join(tmpDir, 'dist');
     fs.mkdirSync(outDir, { recursive: true });
 
@@ -836,5 +836,89 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
     expect(caught).toBeInstanceOf(UnpeekError);
     expect((caught as UnpeekError).code).toBe('ERR_INIT_INVALID_PACKAGE_JSON');
     expect(fs.readFileSync(pkgPath, 'utf8')).toBe(malformed);
+  });
+
+  it('M-08: supports profile presets, dryRun (no disk writes), maxGzipDelta budget guard, and ProtectSummary fields', async () => {
+    const distDir = path.join(tmpDir, 'dist');
+    fs.mkdirSync(distDir, { recursive: true });
+    const bundlePath = path.join(distDir, 'app.js');
+    const mapPath = path.join(distDir, 'app.js.map');
+    const originalCode = 'function greet() { return "secret-api-token-value"; }\n//# debugId=uuid-123\n//# sourceMappingURL=app.js.map\n';
+    fs.writeFileSync(bundlePath, originalCode, 'utf8');
+    fs.writeFileSync(mapPath, '{"version":3,"sources":[],"names":[],"mappings":""}', 'utf8');
+
+    // 1. dryRun leaves all files untouched and returns seed, tier, diagnostics, profile, debugIdsPreserved
+    const drySummary = await protectProject({
+      cwd: tmpDir,
+      outDir: 'dist',
+      profile: 'minimal',
+      dryRun: true,
+      seed: 9001,
+    });
+
+    expect(drySummary.dryRun).toBe(true);
+    expect(drySummary.profile).toBe('minimal');
+    expect(drySummary.seed).toBe(9001);
+    expect(drySummary.tier).toBe('Tier 1');
+    expect(drySummary.debugIdsPreserved).toBe(1);
+    expect(drySummary.diagnostics?.some((d) => d.code === 'DOCKERIGNORE_MISSING')).toBe(true);
+    expect(fs.readFileSync(bundlePath, 'utf8')).toBe(originalCode);
+    expect(fs.existsSync(mapPath)).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, '.unpeek-maps'))).toBe(false);
+
+    // 2. maxGzipDelta throws ERR_BUDGET_EXCEEDED before modifying bundle.js
+    let budgetErr: unknown;
+    try {
+      await protectProject({
+        cwd: tmpDir,
+        outDir: 'dist',
+        profile: 'recommended',
+        maxGzipDelta: 0.01,
+      });
+    } catch (err) {
+      budgetErr = err;
+    }
+    expect(budgetErr).toBeInstanceOf(UnpeekError);
+    expect((budgetErr as UnpeekError).code).toBe('ERR_BUDGET_EXCEEDED');
+    expect(fs.readFileSync(bundlePath, 'utf8')).toBe(originalCode);
+  });
+
+  it('M-09: checkProject enforces read-only CI gate (maps, comments, ignores, .next/server exemption, AST eval)', async () => {
+    const { checkProject } = await import('../src/core/check.js');
+
+    const nextDir = path.join(tmpDir, '.next');
+    const clientDir = path.join(nextDir, 'static', 'chunks');
+    const serverDir = path.join(nextDir, 'server');
+    fs.mkdirSync(clientDir, { recursive: true });
+    fs.mkdirSync(serverDir, { recursive: true });
+
+    // Server .map and sourceMappingURL must NEVER be flagged
+    fs.writeFileSync(path.join(serverDir, 'page.js'), 'console.log("server");\n//# sourceMappingURL=page.js.map\n', 'utf8');
+    fs.writeFileSync(path.join(serverDir, 'page.js.map'), '{}', 'utf8');
+
+    // Client chunk with string literal "eval('ok')" (should NOT trigger eval-csp) and leaked .map
+    fs.writeFileSync(path.join(clientDir, 'main.js'), 'const s = "eval(\'ok\') new Function(\'x\')";\n', 'utf8');
+    fs.writeFileSync(path.join(clientDir, 'main.js.map'), '{}', 'utf8');
+
+    const res1 = await checkProject({ cwd: tmpDir, outDir: '.next/static/chunks', requireZeroEval: true });
+    expect(res1.passed).toBe(false);
+    expect(res1.violations.some((v) => v.rule === 'public-map' && v.file === 'main.js.map')).toBe(true);
+    expect(res1.violations.some((v) => v.rule === 'ignore-missing')).toBe(true);
+    expect(res1.violations.some((v) => v.rule === 'eval-csp')).toBe(false);
+
+    // Fix map leak & .gitignore, add real eval() call
+    fs.unlinkSync(path.join(clientDir, 'main.js.map'));
+    fs.writeFileSync(path.join(tmpDir, '.gitignore'), '.unpeek-maps/\n', 'utf8');
+    fs.writeFileSync(path.join(clientDir, 'main.js'), 'eval("1+1");\n', 'utf8');
+
+    const res2 = await checkProject({ cwd: tmpDir, outDir: '.next/static/chunks', requireZeroEval: true });
+    expect(res2.passed).toBe(false);
+    expect(res2.violations.some((v) => v.rule === 'eval-csp')).toBe(true);
+
+    // Clean client bundle -> passes
+    fs.writeFileSync(path.join(clientDir, 'main.js'), 'console.log("clean");\n', 'utf8');
+    const res3 = await checkProject({ cwd: tmpDir, outDir: '.next/static/chunks', requireZeroEval: true });
+    expect(res3.passed).toBe(true);
+    expect(res3.violations).toHaveLength(0);
   });
 });
