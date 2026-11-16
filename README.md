@@ -519,7 +519,7 @@ powershell -File scripts/stage-release.ps1
 
 - **Build / Transform Time:** `< 3000 ms`
 - **Gzip Size Delta:** `< 15%` on Tier 1 & Tier 2 production application bundles
-- **Runtime CPU Overhead:** `< 2.00%` on Tier 1 & Tier 2 hot paths (interleaved multi-round interquartile mean)
+- **Runtime CPU Overhead:** `< 2.00%` on Tier 1 & Tier 2 hot paths (60k interleaved multi-round interquartile mean)
 - **Plaintext Leak Rate:** `0%` for string literals meeting `minStringLength`
 
 ## License

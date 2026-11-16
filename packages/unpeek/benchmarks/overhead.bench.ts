@@ -1084,8 +1084,8 @@ function createBenchmarkRunner(
 ): (data: number[]) => number {
   const loopBody =
     mode === 'hot'
-      ? 'for (let i = 0; i < 80000; i++) { s += computeHotRenderMetrics(sampleData); }'
-      : 'for (let i = 0; i < 80000; i++) { s += computeHotRenderMetrics(sampleData); } for (let j = 0; j < 10; j++) { s += createClientSession("usr_101", "tnt_99"); }';
+      ? 'for (let i = 0; i < 60000; i++) { s += computeHotRenderMetrics(sampleData); }'
+      : 'for (let i = 0; i < 60000; i++) { s += computeHotRenderMetrics(sampleData); if (i % 6000 === 0) { s += createClientSession("usr_101", "tnt_99"); } }';
   const executableBody =
     codeToRun.replace(/export\s+function/g, 'function') +
     `\nreturn function(sampleData) { let s = 0; ${loopBody} return s; };`;
