@@ -519,7 +519,7 @@ powershell -File scripts/stage-release.ps1
 
 - **Derleme / Dönüşüm Süresi:** `< 3000 ms`
 - **Gzip Boyut Artışı:** `< %15` (Tier 1 & Tier 2 üretim uygulama paketlerinde)
-- **Çalışma Zamanı CPU Ek Yükü:** `< %2.00` (Tier 1 & Tier 2 sıcak yollarında aralıklı çok turlu V8 JIT testi)
+- **Çalışma Zamanı CPU Ek Yükü:** `< %2.00` (Tier 1 & Tier 2 sıcak yollarında aralıklı çeyrekler arası ortalama)
 - **Düz Metin Sızıntı Oranı:** `%0` (`minStringLength` kuralını karşılayan metin sabitleri için)
 
 ## Lisans
