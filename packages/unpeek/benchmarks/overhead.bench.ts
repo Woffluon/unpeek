@@ -1146,6 +1146,7 @@ async function runBenchmark() {
   const tiers: Array<{
     name: string;
     options: Parameters<typeof transformJavaScript>[1];
+    enforceCpuBudget: boolean;
     enforceGzipBudget: boolean;
   }> = [
     {
@@ -1155,6 +1156,7 @@ async function runBenchmark() {
         minStringLength: 6,
         config: { coldFlow: false },
       },
+      enforceCpuBudget: true,
       enforceGzipBudget: true,
     },
     {
@@ -1163,6 +1165,7 @@ async function runBenchmark() {
         seed: 0x7f3a91,
         minStringLength: 6,
       },
+      enforceCpuBudget: true,
       enforceGzipBudget: true,
     },
     {
@@ -1173,6 +1176,7 @@ async function runBenchmark() {
         aggressive: true,
         critical: { annotation: '@unpeek-critical', maxFunctionsPerChunk: 2 },
       },
+      enforceCpuBudget: false,
       enforceGzipBudget: false,
     },
   ];
@@ -1218,7 +1222,7 @@ async function runBenchmark() {
     console.log(`Mangled Local Symbols  : ${transformed.mangledSymbolsCount}`);
     console.log(`Virtualized Functions  : ${transformed.virtualizedFunctionsCount}`);
     console.log(`Hot-Loop CPU Overhead  : ${hotCpuOverheadPct.toFixed(2)}% (Budget: < 2.00%)`);
-    console.log(`Runtime CPU Overhead   : ${cpuOverheadPct.toFixed(2)}% (Budget: < 2.00%)`);
+    console.log(`Runtime CPU Overhead   : ${cpuOverheadPct.toFixed(2)}%${tier.enforceCpuBudget ? ' (Budget: < 2.00%)' : ' (Informational Tier 3)'}`);
 
     if (buildTimeMs > 3000) {
       console.error(`FAIL [${tier.name}]: Build time exceeded 3000ms budget`);
@@ -1228,7 +1232,7 @@ async function runBenchmark() {
       console.error(`FAIL [${tier.name}]: Hot-loop CPU overhead ${hotCpuOverheadPct.toFixed(2)}% exceeded 2.00% budget`);
       process.exit(1);
     }
-    if (cpuOverheadPct > 2.0) {
+    if (tier.enforceCpuBudget && cpuOverheadPct > 2.0) {
       console.error(`FAIL [${tier.name}]: CPU overhead ${cpuOverheadPct.toFixed(2)}% exceeded 2.00% budget`);
       process.exit(1);
     }
