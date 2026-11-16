@@ -14,3 +14,6 @@ Thumbs.db
 analizler
 *.tsbuildinfo
 .shots
+geliştirmeler
+audit-report*.md
+
