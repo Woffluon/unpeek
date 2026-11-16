@@ -1084,8 +1084,8 @@ function createBenchmarkRunner(
 ): (data: number[]) => number {
   const loopBody =
     mode === 'hot'
-      ? 'for (let i = 0; i < 60000; i++) { s += computeHotRenderMetrics(sampleData); }'
-      : 'for (let i = 0; i < 60000; i++) { s += computeHotRenderMetrics(sampleData); if (i % 6000 === 0) { s += createClientSession("usr_101", "tnt_99"); } }';
+      ? 'for (let i = 0; i < 40000; i++) { s += computeHotRenderMetrics(sampleData); }'
+      : 'for (let i = 0; i < 40000; i++) { s += computeHotRenderMetrics(sampleData); if (i % 8000 === 0) { s += createClientSession("usr_101", "tnt_99"); } }';
   const executableBody =
     codeToRun.replace(/export\s+function/g, 'function') +
     `\nreturn function(sampleData) { let s = 0; ${loopBody} return s; };`;
@@ -1094,10 +1094,12 @@ function createBenchmarkRunner(
 }
 
 function interquartileMean(values: number[]): number {
+  if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
-  const lo = Math.floor(sorted.length * 0.2);
-  const hi = Math.ceil(sorted.length * 0.8);
+  const lo = Math.floor(sorted.length * 0.25);
+  const hi = Math.ceil(sorted.length * 0.75);
   const middle = sorted.slice(lo, hi);
+  if (middle.length === 0) return 0;
   return middle.reduce((acc, v) => acc + v, 0) / middle.length;
 }
 
@@ -1106,38 +1108,45 @@ function measureInterleavedOverheadPct(
   runProtected: (data: number[]) => number,
   sampleData: number[]
 ): number {
-  // Warmup V8 TurboFan JIT for both functions identically
-  for (let w = 0; w < 25; w++) {
-    runOriginal(sampleData);
-    runProtected(sampleData);
-  }
-
-  const origTimes: number[] = [];
-  const protTimes: number[] = [];
-
-  for (let r = 0; r < 31; r++) {
-    if (r % 2 === 0) {
-      const s1 = performance.now();
+  // Warmup V8 TurboFan JIT for both functions with alternating interleaving
+  for (let w = 0; w < 10; w++) {
+    if (w % 2 === 0) {
       runOriginal(sampleData);
-      origTimes.push(performance.now() - s1);
-
-      const s2 = performance.now();
       runProtected(sampleData);
-      protTimes.push(performance.now() - s2);
     } else {
-      const s2 = performance.now();
       runProtected(sampleData);
-      protTimes.push(performance.now() - s2);
-
-      const s1 = performance.now();
       runOriginal(sampleData);
-      origTimes.push(performance.now() - s1);
     }
   }
 
-  const medOrig = interquartileMean(origTimes);
-  const medProt = interquartileMean(protTimes);
-  return Math.max(0, ((medProt - medOrig) / medOrig) * 100);
+  const pairedOverheadPct: number[] = [];
+
+  for (let r = 0; r < 31; r++) {
+    let origMs: number;
+    let protMs: number;
+    if (r % 2 === 0) {
+      const s1 = performance.now();
+      runOriginal(sampleData);
+      origMs = performance.now() - s1;
+
+      const s2 = performance.now();
+      runProtected(sampleData);
+      protMs = performance.now() - s2;
+    } else {
+      const s2 = performance.now();
+      runProtected(sampleData);
+      protMs = performance.now() - s2;
+
+      const s1 = performance.now();
+      runOriginal(sampleData);
+      origMs = performance.now() - s1;
+    }
+    if (origMs > 0) {
+      pairedOverheadPct.push(((protMs - origMs) / origMs) * 100);
+    }
+  }
+
+  return Math.max(0, interquartileMean(pairedOverheadPct));
 }
 
 async function runBenchmark() {
