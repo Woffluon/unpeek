@@ -1,6 +1,10 @@
 import type { ShieldConfig, ShieldPayload } from './types.js';
 import type { InternalShieldPayload } from '../internal/types.js';
-import { computeIntegrityHash, verifyCodeIntegrity } from './integrity-guard.js';
+import {
+  computeIntegrityHash,
+  computeNormalizedIntegrityHash,
+  verifyCodeIntegrity,
+} from './integrity-guard.js';
 import {
   createDeterrentSnippet,
   deriveIntegrityFnName,
@@ -39,9 +43,16 @@ export function generateRuntimeShield(config: ShieldConfig): ShieldPayload {
     expectedHash,
     windowKeySymbol,
     expectedDelta,
+    stateKeySymbol: `${windowKeySymbol}_s`,
   };
   return payload;
 }
 
-export { computeIntegrityHash, verifyCodeIntegrity } from './integrity-guard.js';
+export {
+  computeIntegrityHash,
+  computeNormalizedIntegrityHash,
+  isNativeDescriptorIntact,
+  normalizeIntegritySource,
+  verifyCodeIntegrity,
+} from './integrity-guard.js';
 export { createDeterrentSnippet } from './devtools-deterrent.js';

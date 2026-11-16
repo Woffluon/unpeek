@@ -4,16 +4,18 @@ unpeek combines call-graph-aware static AST transformation with a lightweight ru
 
 ---
 
-## 1. Two-Tier Defense Architecture Overview
+## 1. Three-Tier Defense Architecture Overview
 
-unpeek operates on two distinct defense tiers depending on security requirements and runtime budgets:
+unpeek operates on three protection tiers aligned with `minimal`, `recommended`, and `strict` preset profiles:
 
-- **Layer 1: Default Zero-Config Profile (Fast & Universal)**
-  - **Targets**: Everyday production deployments with strict performance and bundle budgets (<2% CPU tax, <15% Gzip delta).
-  - **Key Features**: 3-tier call-graph hot-path exemption (`TRUE_HOT_60FPS`, `SHALLOW_RENDER_COMPONENT`, `SERIALIZED_WORKER`), zero-escape 92-char involutory permutation string vault, Tailwind CSS & SVG noise filtering, In-Place Re-Encrypting `Uint8Array` Shader Vault (supporting WebGPU `@vgpu/wgsl` and GLSL), and synchronous entry-chunk runtime shield.
-- **Layer 2: `--aggressive` Profile (Zero Plaintext Exposure)**
-  - **Targets**: High-value client IP, sensitive licensing algorithms, financial models, and WebGPU compute shaders.
-  - **Key Features**: Selective Bytecode Micro-VM (<1.2 KB, 24 opcodes, async/await, try/catch, closures without `eval`/`new Function`), Inline <512 B WebAssembly Key Derivation Function (with CSP JS fallback), and Idempotent Call-Site Salted Lazy String Vault (React 19 Concurrent Mode and StrictMode safe).
+- **Tier 1 (`minimal` Profile — Fast Baseline)**:
+  - **Targets**: Ultra-low-footprint deployments with `coldFlow: false`, `mangler.minLength: 1`, 3-tier call-graph hot-path exemption, and order-independent `globalThis` runtime shield (`<2%` CPU tax, `<15%` Gzip delta).
+- **Tier 2 (`recommended` / Default Profile — Balanced Production Hardening)**:
+  - **Targets**: Everyday production deployments (`<2%` CPU tax, `<15%` Gzip delta).
+  - **Key Features**: 3-tier call-graph hot-path exemption (`TRUE_HOT_60FPS`, `SHALLOW_RENDER_COMPONENT`, `SERIALIZED_WORKER`), zero-escape 92-char involutory permutation string vault, Tailwind CSS & SVG noise filtering, `>=4`-variable semi-linear MBA + degree-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR predicates, In-Place Re-Encrypting `Uint8Array` Shader Vault (supporting WebGPU `@vgpu/wgsl` and GLSL), `mangler.minLength: 1` with deterministic polymorphic identifier prefixes, and order-independent `globalThis` runtime shield.
+- **Tier 3 (`strict` / `--aggressive` Profile — Critical Enclave Virtualization)**:
+  - **Targets**: `@unpeek-critical` annotated functions, `critical.include` patterns, high-value client IP, licensing algorithms, financial models, and WebGPU compute shaders.
+  - **Key Features**: Micro-VM v2 (43-opcode direct-threaded trampoline with pre-VM AST lowering and inter-block `$f.ac` accumulator ratchet, `[8, 400]` node window, no `eval`/`new Function`), shared singleton `<1.2 KB` (`371 B` binary) host-coupled WASM KDF (`env.g`/`env.m` with bit-identical non-linear JS fallback), 64-bit call-site salted lazy string vault, and CWE-540 path scrubbing (`rootDir`, `[project]/`, `webpack://`, Windows `C:\`).
 
 ---
 
@@ -65,54 +67,48 @@ String literals in cold paths (`length >= minStringLength`, default: 4) are prot
 
 ---
 
-## 4. 4-Family Contextual MBA Cold Flow Guards
+## 4. Non-Linear Semi-Linear MBA, Rivest Polynomials & QNR Cold Flow Guards
 
-In cold functions (event handlers, authentication, payment logic):
-- Eliminates hardcoded `0x7fffffff` signatures and static `0` inputs (`fnIndex = guardedCount`).
-- Binds a contextual dynamic runtime zero (`z = param ? 0 : 0`) with 4 distinct algebraic MBA families:
-  1. `(((v ^ k) + ((v & k) << 1)) - (v + k)) !== target`
-  2. `(((v | k) + (v & k)) ^ (v + k)) !== target`
-  3. `(((v | ~k) - (~k)) ^ (v & k)) !== target`
-  4. `(((v & ~k) + (v & k)) ^ v) !== target`
-- Targets are polymorphic constants derived from the seed and function index (`target = ((seed ^ Math.imul(fnIndex + 1, 0x9e3779b1)) & 0x7fffff) | 1`).
-- Shared module-level decoy arrays inject plausible fake API endpoints (`/api/v2/auth/admin-bypass`, `_verifyMasterToken`) to confuse automated reverse engineers.
+In cold functions (`coldFlow: true`; event handlers, authentication, payment logic):
+- Eliminates static single-variable `0 === odd` identities and hardcoded `0x7fffffff` signatures.
+- Combines `>=4`-variable semi-linear Mixed Boolean-Arithmetic (MBA) predicates with folded constants, degree-3 Rivest permutation polynomials mod $2^{32}$, a 256-entry seeded S-Box, and a quadratic non-residue (QNR) branch condition `((Math.imul(z, z) + 1) & 3) === 3` (mathematically impossible for any 32-bit integer `z`, as LHS evaluates strictly to `1` or `2`).
+- Existing application `if/else` branches are never mutated; neutral, return-domain-aligned contextual decoy bridges (`number`/`boolean`/`string`/`void`/`object`) avoid leaking source identifiers or hardcoded decoy routes.
+- Bundler runtime headers (`globalThis.TURBOPACK.push`, `self.webpackChunk*`, `__rspack_chunk*`) and `serializedFunctionNodes` (including nested worker helpers) are exempted cleanly, while `compactGenerator` preserves spacing around consecutive unary/update operators (`y + +!T * P`).
 
 ---
 
-## 5. Runtime Anti-Tamper Shield (Synchronous Attestation)
+## 5. Order-Independent `globalThis` Anti-Tamper Shield
 
-Injected exclusively into entry chunks as an SSR-safe, self-executing IIFE (<1.5 KB):
-- **Synchronous Attestation**: Evaluates native function integrity (`Function.prototype.toString`) and sets `window[sym]` synchronously without deferring to `queueMicrotask`, closing the race condition before string vault decoders execute.
-- **Tamper Detection**: Detects DevTools pretty-printing (`/\n/.test(src)`), headless browsers (`navigator.webdriver`), or prototype monkey-patching.
-- **Poisoning**: If tampered, sets `window.__unpeek_tampered = true`, poisons the string vault key (`String.prototype._u = 14`), and dispatches `CustomEvent('unpeek:tamper')`. In `gradual` mode, standard console logging methods are silenced.
+Injected exclusively into entry chunks as a `WorkerGlobalScope`-safe (`self`/`globalThis`), self-executing IIFE:
+- **Order-Independent Attestation (Issue #1 Fix)**: Writes `globalThis[sym]` and companion state record `globalThis[sym + '_s']` synchronously without `queueMicrotask` races. If an async split chunk (such as Next.js 16 Turbopack) executes before the entry shield initializes (`globalThis[sym] === undefined`), string and VM decoders resolve valid plaintext without poisoning their cache (`d = -1` poisoning removed).
+- **Tamper Detection**: Detects DevTools pretty-printing (`/\n/.test(src)`), headless browsers (`navigator.webdriver`), or `Reflect.apply` / `Object.getOwnPropertyDescriptor` / `Function.prototype.toString` prototype spoofing (`TypeError` & `prototype` checks).
+- **Fail-Closed Poisoning**: Only on active tampering (`__unpeek_tampered === true`, `status === 2`, or mismatched delta) do decoders fail closed without writing to cache, while dispatching `CustomEvent('unpeek:tamper')` (and silencing `console` in `gradual` mode).
 
 ---
 
-## 6. Layer 2 `--aggressive` Virtualization & WASM Security
+## 6. Tier 3 `--aggressive` Virtualization & Host-Coupled WASM KDF
 
-When `--aggressive` is enabled:
+When `--aggressive` or `tier: 'Tier 3'` (`--profile strict`) is enabled:
 
-### Bytecode Micro-VM (<1.2 KB)
-- Selected cold functions are translated into stack-based bytecode with 24 seed-permuted opcodes.
-- Executes within a lightweight while/switch loop without `eval` or `new Function`, remaining 100% compliant with strict CSP (`script-src 'self'`).
-- Fully supports `async/await` (via promise continuation frames), `try/catch` error resumption, and lexical closure scopes.
+### Bytecode Micro-VM v2 (43-Opcode Direct-Threaded Trampoline)
+- Prioritizes `@unpeek-critical` annotated cold functions and `critical.include` enclaves (default `maxFunctionsPerChunk: 12`, `[8, 400]` AST node window) without touching hot paths.
+- Pre-VM AST lowering supports `&&`/`||`/`??`, `?:`, sequence expressions, `for`/`while`/`do..while` loops, `try/throw` (`OP_THROW`), `this`, `new`, template literals, destructuring/default parameters, and `obj.arguments`/`obj.eval` member accesses.
+- Executes via a `$step` direct-threaded closure trampoline with an inter-block `$f.ac` accumulator key ratchet and per-`(seed, op)` MBA-wrapped 43 distinct handler ASTs—zero `eval()` or `new Function()`, 100% strict CSP compliant.
 
-### Inline <512 B WebAssembly KDF
-- Embeds a minimal precompiled WASM binary (~180 bytes) instantiated synchronously via `WebAssembly.Module` and `WebAssembly.Instance`.
-- Computes non-linear key mixing: `((fnId ^ seed) * 0x01000193) ^ ((callSiteSalt + shieldHash) * 0x45d9f3b)`.
-- Falls back to an identical 32-bit JavaScript `Math.imul` implementation if CSP blocks WebAssembly.
+### Shared Host-Coupled WASM KDF (<1.2 KB Singleton)
+- Synthesizes a compact `371 B` (`<1.2 KB`) WebAssembly binary importing `env.g(i32)->i32` and `env.m(i32, i32)->i32` host hooks (with `bulkMix` and `mem` exports; zero-import instantiation fails with `TypeError`/`LinkError`).
+- Compiled once into a shared `globalThis` polymorphic singleton slot across split chunks, eliminating per-chunk WASM bloat, with a bit-identical non-linear Rivest + 256-entry affine S-Box JavaScript fallback (`kdfParityVerified: true`) when CSP blocks WebAssembly.
 
-### Idempotent Call-Site Salted Lazy Vault
-- Each string reference passes a unique, static `callSiteSalt` constant (`_uD(idx, localSalt)`).
-- Eliminates sequential mutable counters, making string access completely safe under React 19 Concurrent Mode interrupted renders.
+### Idempotent 64-Bit Call-Site Salted Lazy Vault
+- Each string reference passes a 31-bit positive call-site salt derived via 64-bit mixing (`computeCallSiteSalt64`) instead of a 5-bit mask or mutable counter, guaranteeing React 19 Concurrent Mode and StrictMode idempotence.
 
 ---
 
 ## 7. Performance & Size Budgets
 
-| Metric | Layer 1 (Default) | Layer 2 (`--aggressive`) | Observed Typical |
+| Metric | Tier 1 (`minimal`) | Tier 2 (`recommended`) | Tier 3 (`strict` / `--aggressive`) |
 | :--- | :--- | :--- | :--- |
-| **Runtime CPU Overhead** | `< 2.0%` | `< 5.0%` | `0.4% - 1.2%` |
-| **Gzip Bundle Size Delta** | `< 15.0%` | `< 25.0%` | `3.8% - 7.9%` (L1) |
-| **Deobfuscator Resistance**| Class 1 & 2 Resistant | Class 1–4 Immune | `%0` static recovery |
+| **Runtime CPU Overhead** | `< 1.0%` | `< 2.0%` | `< 5.0%` (0% hot loop) |
+| **Gzip Bundle Size Delta** | `< 5.0%` | `< 15.0%` | `< 25.0%` |
+| **Deobfuscator Resistance**| Mangling + Shield | Class 1–2 Resistant | Class 1–4 Enclave Hardened |
 | **React StrictMode / SSR** | 100% Idempotent | 100% Idempotent | 0 hydration errors |

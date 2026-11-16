@@ -22,13 +22,14 @@ Zero-config, call-graph-aware client-side JavaScript protection and source map i
 1. **Initialize**: Run `npx unpeek init` (optionally with `--dry-run` or `--profile <minimal|recommended|strict>`) to wire `"postbuild": "unpeek protect"` in `package.json` and add `.unpeek-maps/` to `.gitignore`.
 2. **Configure (Optional)**: Declare settings in `unpeek.config.js` via `defineConfig` and `PRESETS` to tune hot paths, vaults, mangling, or framework options.
 3. **Build**: Run the project's standard production build (`npm run build`).
-4. **Protect**: `unpeek protect` runs post-build under Tier 1 (<2% CPU, <15% Gzip). Append `--aggressive` for Tier 2 defense (Micro-VM & WASM KDF), `--dry-run` to preview, or `--max-gzip-delta <percent>` to enforce a budget.
-5. **Verify & Symbolicate**: Run `npx unpeek check` as a read-only CI gate and `npx unpeek symbolicate` to resolve production stack traces locally using `.unpeek-maps/`.
+4. **Protect**: `unpeek protect` runs post-build under `<2%` CPU and `<15%` Gzip budgets. Pass `--profile <minimal|recommended|strict>` or `--aggressive` for Micro-VM v2 + singleton WASM KDF, `--dry-run` to preview, or `--max-gzip-delta <percent>` to enforce a budget.
+5. **Verify & Symbolicate**: Run `npx unpeek check` as a read-only CI gate (including `debugId` integrity) and `npx unpeek symbolicate` to resolve production stack traces locally using `.unpeek-maps/`.
 
-## Two-Tier Defense Architecture
+## Defense Architecture (Tiers 1–3)
 
-- **Tier 1 (Default Profile)**: Production protection (<2% CPU, <15% Gzip delta). Employs 3-tier call-graph exemption (`TRUE_HOT_60FPS`, `SHALLOW_RENDER_COMPONENT`, `SERIALIZED_WORKER`), 92-char involutory string vault, quadratic MBA predicates, in-place shader vault, and runtime shield.
-- **Tier 2 (`--aggressive` Profile)**: Zero plaintext exposure for sensitive logic. Compiles cold functions to a <1.2 KB 24-opcode Bytecode Micro-VM (with closures, without `eval`), backed by inline WASM KDF (with CSP fallback) and call-site salted decoders.
+- **Tier 1 (`minimal` / Fast Baseline)**: Call-graph hot-path exemption (`TRUE_HOT_60FPS`, `SHALLOW_RENDER_COMPONENT`, `SERIALIZED_WORKER`), `mangler.minLength: 1` without cold-flow bloat (`coldFlow: false`), and order-independent `globalThis` runtime shield (`<2%` CPU, `<15%` Gzip).
+- **Tier 2 (`recommended` / Default)**: Adds 92-char involutory string vault, `>=4`-var semi-linear MBA + degree-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR guards, in-place `Uint8Array` shader vault, and non-poisoning async chunk handling.
+- **Tier 3 (`strict` / `--aggressive` Enclave)**: Targets `@unpeek-critical` or `critical.include` functions with a 43-opcode direct-threaded Micro-VM v2 (no `eval`), singleton `<1.2 KB` host-coupled WASM KDF (with bit-identical JS fallback), 64-bit call-site salted vault, and CWE-540 path scrubbing.
 
 ## Reference Navigation
 

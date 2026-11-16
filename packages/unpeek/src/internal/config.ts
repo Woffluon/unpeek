@@ -16,6 +16,8 @@ export const CONFIG_CANDIDATES = [
 export const DEFAULT_CONFIG: UnpeekConfig = {
   framework: undefined,
   target: 'browser',
+  tier: 'Tier 2',
+  coldFlow: true,
   outDir: undefined,
   extensions: ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'],
   publicDirs: ['public', 'static'],
@@ -32,6 +34,10 @@ export const DEFAULT_CONFIG: UnpeekConfig = {
     excludeComponents: [],
     maxPipelineCallers: 2,
   },
+  critical: {
+    include: [],
+    annotation: '@unpeek-critical',
+  },
   vault: {
     minStringLength: 4,
     customDirectives: [],
@@ -43,7 +49,7 @@ export const DEFAULT_CONFIG: UnpeekConfig = {
     polymorphicDecoys: true,
   },
   mangler: {
-    minLength: 3,
+    minLength: 1,
     reservedIdentifiers: [],
     excludePrefixes: [],
     excludePatterns: [],
@@ -130,11 +136,23 @@ export function normalizeConfig(raw: Record<string, unknown>): UnpeekConfig {
 }
 
 function mergeTwoConfigs(base: UnpeekConfig, override: UnpeekConfig): UnpeekConfig {
+  const mergedCriticalInclude =
+    override.critical?.include || base.critical?.include
+      ? Array.from(
+          new Set([
+            ...(base.critical?.include ?? []),
+            ...(override.critical?.include ?? []),
+          ])
+        )
+      : undefined;
+
   return {
     ...base,
     framework: override.framework ?? base.framework,
     target: override.target ?? base.target,
     profile: override.profile ?? base.profile,
+    tier: override.tier ?? base.tier,
+    coldFlow: override.coldFlow ?? base.coldFlow,
     outDir: override.outDir ?? base.outDir,
     scrubPaths: override.scrubPaths ?? base.scrubPaths,
     extensions: override.extensions ? [...override.extensions] : (base.extensions ? [...base.extensions] : undefined),
@@ -172,6 +190,19 @@ function mergeTwoConfigs(base: UnpeekConfig, override: UnpeekConfig): UnpeekConf
         override.hotPath?.excludeComponents,
       ),
     },
+    critical:
+      base.critical || override.critical
+        ? {
+            include: mergedCriticalInclude,
+            annotation:
+              override.critical?.annotation ??
+              base.critical?.annotation ??
+              '@unpeek-critical',
+            maxFunctionsPerChunk:
+              override.critical?.maxFunctionsPerChunk ??
+              base.critical?.maxFunctionsPerChunk,
+          }
+        : undefined,
     vault: {
       minStringLength: override.vault?.minStringLength ?? base.vault?.minStringLength ?? 4,
       customDirectives: mergeStringArrays(
@@ -193,7 +224,7 @@ function mergeTwoConfigs(base: UnpeekConfig, override: UnpeekConfig): UnpeekConf
       fragmentCount: override.vault?.fragmentCount ?? base.vault?.fragmentCount,
     },
     mangler: {
-      minLength: override.mangler?.minLength ?? base.mangler?.minLength ?? 3,
+      minLength: override.mangler?.minLength ?? base.mangler?.minLength ?? 1,
       reservedIdentifiers: mergeStringArrays(
         base.mangler?.reservedIdentifiers,
         override.mangler?.reservedIdentifiers,

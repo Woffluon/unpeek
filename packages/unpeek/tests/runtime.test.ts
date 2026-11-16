@@ -408,24 +408,46 @@ describe('Runtime Integrity Guard & DevTools Deterrent', () => {
       vm.runInContext(result.code, cleanContext);
       expect(cleanContext.__secret).toBe('SUPER_SECRET_DATABASE_CREDENTIAL');
 
-      // 2. When the deterrent snippet (shield IIFE) is stripped from the AST/code or when window[sym] is missing
+      // 2. Issue #1 order-independent loading: when the shield IIFE has not executed yet
+      // (globalThis[sym] === undefined), decryptor resolves plaintext without poisoning cache;
+      // loading the shield afterward keeps resolving cleanly, while active tamper fails closed.
+      const shield = generateRuntimeShield({ seed: 0x9e3779b9, deterrentMode: 'passive' });
       const codeLines = result.code.split('\n');
+      const shieldLine = codeLines[0];
       const strippedCode = codeLines.slice(1).join('\n');
 
-      const prunedWindow: Record<string, unknown> = {};
-      const prunedContext = vm.createContext({
-        window: prunedWindow,
+      const lateWindow: Record<string, unknown> = {};
+      const lateContext = vm.createContext({
+        window: lateWindow,
         globalThis: {},
       });
-      prunedContext.globalThis = prunedContext;
-      prunedContext.window = prunedWindow;
+      lateContext.globalThis = lateContext;
+      lateContext.window = lateWindow;
 
-      vm.runInContext(strippedCode, prunedContext);
+      vm.runInContext(strippedCode, lateContext);
+      expect(lateContext.__secret).toBe('SUPER_SECRET_DATABASE_CREDENTIAL');
+      // Loading the shield later in the same context must still resolve cleanly
+      vm.runInContext(shieldLine, lateContext);
+      expect(lateContext.__secret).toBe('SUPER_SECRET_DATABASE_CREDENTIAL');
 
-      // The decryptor produces corrupted garbage data (does NOT fall back to working plain strings via expDelta)
-      expect(prunedContext.__secret).not.toBe('SUPER_SECRET_DATABASE_CREDENTIAL');
-      expect(typeof prunedContext.__secret).toBe('string');
-      expect((prunedContext.__secret as string).length).toBeGreaterThan(0);
+      // 3. Active tamper (mismatched shield slot or __unpeek_tampered = true) fails closed
+      const tamperedWindow: Record<string, unknown> = {
+        [shield.windowKeySymbol]: (shield.expectedDelta ^ 0x1234) & 0xffff,
+      };
+      const tamperedContext = vm.createContext({
+        window: tamperedWindow,
+        globalThis: {
+          [shield.windowKeySymbol]: (shield.expectedDelta ^ 0x1234) & 0xffff,
+          __unpeek_tampered: true,
+        },
+      });
+      tamperedContext.globalThis = tamperedContext;
+      tamperedContext.window = tamperedWindow;
+
+      vm.runInContext(strippedCode, tamperedContext);
+      expect(tamperedContext.__secret).not.toBe('SUPER_SECRET_DATABASE_CREDENTIAL');
+      expect(typeof tamperedContext.__secret).toBe('string');
+      expect((tamperedContext.__secret as string).length).toBeGreaterThan(0);
     });
   });
 });

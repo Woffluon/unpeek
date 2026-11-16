@@ -19,31 +19,112 @@ const GLOBAL_HOSTS = new Set(['self', 'window', 'globalThis']);
 const MAGIC_COMMENT_RE =
   /webpack(?:ChunkName|Mode|Prefetch|Preload|Ignore|Include|Exclude|Exports)|@?vite-ignore|viteIgnore/i;
 
-function isHostMember(node: any, propName: string): boolean {
+type PropMatcher = string | ((name: string) => boolean);
+
+function matchesPropName(name: string, matcher: PropMatcher): boolean {
+  return typeof matcher === 'function' ? matcher(name) : name === matcher;
+}
+
+function isWebpackOrRspackChunkName(name: string): boolean {
+  return name.startsWith('webpackChunk') || name.startsWith('__rspack_chunk');
+}
+
+function isWebpackModuleMap(node: any): boolean {
+  if (
+    !node ||
+    node.type !== 'ObjectExpression' ||
+    !Array.isArray(node.properties) ||
+    node.properties.length === 0
+  ) {
+    return false;
+  }
+  return node.properties.some(
+    (p: any) =>
+      p?.type === 'Property' &&
+      (p.value?.type === 'FunctionExpression' ||
+        p.value?.type === 'ArrowFunctionExpression')
+  );
+}
+
+function exemptWebpackPushArg(
+  arg: any,
+  exemptSubtreeRoots: WeakSet<acorn.Node>
+): void {
+  if (!arg || typeof arg !== 'object') return;
+  if (isWebpackModuleMap(arg)) return;
+  if (arg.type === 'ArrayExpression' && Array.isArray(arg.elements)) {
+    const hasModuleMap = arg.elements.some((el: any) => isWebpackModuleMap(el));
+    if (hasModuleMap) {
+      for (const el of arg.elements) {
+        if (el && typeof el === 'object' && !isWebpackModuleMap(el)) {
+          exemptSubtreeRoots.add(el);
+        }
+      }
+      return;
+    }
+  }
+  exemptSubtreeRoots.add(arg);
+}
+
+function isHostMember(node: any, matcher: PropMatcher): boolean {
   if (!node) return false;
-  if (node.type === 'Identifier' && node.name === propName) {
+  if (node.type === 'Identifier' && matchesPropName(node.name, matcher)) {
     return true;
   }
   if (
     node.type === 'MemberExpression' &&
-    !node.computed &&
-    node.object?.type === 'Identifier' &&
-    GLOBAL_HOSTS.has(node.object.name) &&
-    node.property?.type === 'Identifier' &&
-    node.property.name === propName
+    ((node.object?.type === 'Identifier' && GLOBAL_HOSTS.has(node.object.name)) ||
+      node.object?.type === 'ThisExpression')
   ) {
-    return true;
+    if (!node.computed && node.property?.type === 'Identifier') {
+      return matchesPropName(node.property.name, matcher);
+    }
+    if (
+      node.computed &&
+      node.property?.type === 'Literal' &&
+      typeof node.property.value === 'string'
+    ) {
+      return matchesPropName(node.property.value, matcher);
+    }
   }
   return false;
 }
 
-function unwrapAssignedHostMember(node: any, propName: string): boolean {
-  if (!node) return false;
-  if (isHostMember(node, propName)) return true;
-  if (node.type === 'AssignmentExpression' && isHostMember(node.left, propName)) {
-    return true;
+function unwrapAssignedHostMember(
+  node: any,
+  matcher: PropMatcher,
+  depth = 0
+): boolean {
+  if (!node || depth > 16) return false;
+  if (isHostMember(node, matcher)) return true;
+  switch (node.type) {
+    case 'ParenthesizedExpression':
+      return unwrapAssignedHostMember(node.expression, matcher, depth + 1);
+    case 'AssignmentExpression':
+      return (
+        unwrapAssignedHostMember(node.left, matcher, depth + 1) ||
+        unwrapAssignedHostMember(node.right, matcher, depth + 1)
+      );
+    case 'LogicalExpression':
+      return (
+        unwrapAssignedHostMember(node.left, matcher, depth + 1) ||
+        unwrapAssignedHostMember(node.right, matcher, depth + 1)
+      );
+    case 'SequenceExpression':
+      return (
+        Array.isArray(node.expressions) &&
+        node.expressions.some((expr: any) =>
+          unwrapAssignedHostMember(expr, matcher, depth + 1)
+        )
+      );
+    case 'ConditionalExpression':
+      return (
+        unwrapAssignedHostMember(node.consequent, matcher, depth + 1) ||
+        unwrapAssignedHostMember(node.alternate, matcher, depth + 1)
+      );
+    default:
+      return false;
   }
-  return false;
 }
 
 /**
@@ -62,12 +143,15 @@ export function classifyChunkBoundary(ast: acorn.Program): BoundaryClassificatio
   walk.simple(ast, {
     CallExpression(node: any) {
       const callee = node.callee;
-      if (
+      const isPushCall =
         callee?.type === 'MemberExpression' &&
-        !callee.computed &&
-        callee.property?.type === 'Identifier' &&
-        callee.property.name === 'push'
-      ) {
+        ((!callee.computed &&
+          callee.property?.type === 'Identifier' &&
+          callee.property.name === 'push') ||
+          (callee.computed &&
+            callee.property?.type === 'Literal' &&
+            callee.property.value === 'push'));
+      if (isPushCall) {
         if (unwrapAssignedHostMember(callee.object, '__next_f')) {
           hasRscFlight = true;
           if (Array.isArray(node.arguments)) {
@@ -87,12 +171,28 @@ export function classifyChunkBoundary(ast: acorn.Program): BoundaryClassificatio
               }
             }
           }
+        } else if (
+          unwrapAssignedHostMember(callee.object, isWebpackOrRspackChunkName)
+        ) {
+          hasEntryBootstrap = true;
+          exemptSubtreeRoots.add(callee);
+          if (callee.object && typeof callee.object === 'object') {
+            exemptSubtreeRoots.add(callee.object);
+          }
+          if (Array.isArray(node.arguments)) {
+            for (const arg of node.arguments) {
+              exemptWebpackPushArg(arg, exemptSubtreeRoots);
+            }
+          }
         }
       }
     },
 
     AssignmentExpression(node: any) {
-      if (isHostMember(node.left, 'TURBOPACK')) {
+      if (
+        isHostMember(node.left, 'TURBOPACK') ||
+        isHostMember(node.left, isWebpackOrRspackChunkName)
+      ) {
         hasEntryBootstrap = true;
         exemptSubtreeRoots.add(node);
       } else if (

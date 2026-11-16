@@ -79,19 +79,18 @@ npx unpeek protect
 
 If `postbuild` is configured, `npm run build` triggers `unpeek protect` automatically.
 
-### Defense Tiers
+### Defense Tiers & Presets
 
-unpeek provides two distinct defense tiers depending on security and performance requirements:
+unpeek provides three protection tiers aligned with `minimal`, `recommended`, and `strict` preset profiles:
 
-- **Tier 1 (Default Profile)**:
+- **Tier 1 (`--profile minimal`)**:
+  - Fast baseline protection (`coldFlow: false`, `mangler.minLength: 1`, order-independent `globalThis` runtime shield) with `<2%` runtime CPU overhead and `<15%` Gzip delta.
+- **Tier 2 (`--profile recommended` / Default)**:
   - Command: `npx unpeek protect`
-  - Targets everyday production deployments where strict performance and size budgets must be maintained (<2% runtime CPU overhead, <15% Gzip size delta).
-  - Employs 3-tier bidirectional call-graph exemption (`TRUE_HOT_60FPS`, `SHALLOW_RENDER_COMPONENT`, `SERIALIZED_WORKER`), 92-character zero-escape involutory string vaulting, non-linear quadratic MBA opaque predicates, in-place re-encrypting `Uint8Array` shader vault, and synchronous entry-chunk anti-tamper shield.
-- **Tier 2 (`--aggressive` Profile)**:
-  - Command: `npx unpeek protect --aggressive`
-  - Eliminates plaintext exposure for high-value intellectual property, proprietary algorithms, financial calculations, and sensitive handlers.
-  - Compiles selected cold functions into a compact (<1.2 KB, 24 opcodes) Bytecode Micro-VM supporting `async/await`, `try/catch`, and lexical closures without `eval` or `new Function`.
-  - Backed by an inline WebAssembly Key Derivation Function (WASM KDF, <512 B, with hardened CSP JS fallback) and React 19 Concurrent-safe call-site salted decoders.
+  - Employs 3-tier bidirectional call-graph exemption (`TRUE_HOT_60FPS`, `SHALLOW_RENDER_COMPONENT`, `SERIALIZED_WORKER`), 92-char zero-escape involutory string vaulting, `>=4`-variable semi-linear MBA + degree-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR predicates, in-place re-encrypting `Uint8Array` shader vault, and non-poisoning `globalThis` anti-tamper shield.
+- **Tier 3 (`--profile strict` / `--aggressive`)**:
+  - Command: `npx unpeek protect --aggressive` (or `--profile strict`)
+  - Targets `@unpeek-critical` annotated functions and `critical.include` enclaves with a 43-opcode direct-threaded Bytecode Micro-VM v2 (supporting `for`/`while`, `&&`/`||`/`??`, `?:`, `try/throw`, closures without `eval`/`new Function`), a shared singleton `<1.2 KB` host-coupled WASM KDF (`env.g`/`env.m`, with bit-identical non-linear JS fallback), 64-bit call-site salted decoders, and CWE-540 path scrubbing.
 
 ---
 

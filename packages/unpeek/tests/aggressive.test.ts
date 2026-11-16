@@ -39,10 +39,11 @@ describe('Aggressive Profile & Advanced Protection (Layer 2 & Red-Team Verificat
       expect(code1).not.toBe(code2);
       expect(code0).not.toBe(code2);
 
-      // Consequent decoy modelleri fnIndex % 3'e göre değişmelidir
-      expect(code0).toContain('/api/v2/auth/admin-bypass');
-      expect(code1).toContain('_verifyMasterToken');
-      expect(code2).toContain('debug_supervisor_override');
+      // Consequent decoy modelleri fnIndex % 3'e göre nötr/polimorfik yapılarla değişmelidir (sabit imza yok)
+      expect(code0).not.toContain('/api/v2/auth/admin-bypass');
+      expect(code0).toContain('telemetryOk');
+      expect(code1).toContain('frameSeq');
+      expect(code2).toContain('epochSync');
     });
 
     it('Kusur 2: 0x7fffffff sabit katlama imzası statik aramalara karşı kaldırılmış ve 5-aileli bağlamsal MBA (Euler Karesel Kalanlar dahil) kullanılmıştır', () => {
@@ -509,6 +510,7 @@ describe('Aggressive Profile & Advanced Protection (Layer 2 & Red-Team Verificat
     it('generateWasmKdfBinary blinds seed and FNV/mul constants in <512B WASM and matches fallbackKdf + CSP MBA fallback bit-for-bit', async () => {
       const {
         generateWasmKdfBinary,
+        createWasmHostEnv,
         encodeSignedLeb128,
         fallbackKdf,
         injectWasmVault,
@@ -550,7 +552,11 @@ describe('Aggressive Profile & Advanced Protection (Layer 2 & Red-Team Verificat
         expect(containsSubseq(wasmBytes, [0x41, ...encodeSignedLeb128(0x45d9f3b)])).toBe(false);
 
         const mod = new WebAssembly.Module(wasmBytes as BufferSource);
-        const inst = new WebAssembly.Instance(mod);
+        // v4 host coupling: zero-import instantiation must fail (TypeError / LinkError)
+        expect(() => new WebAssembly.Instance(mod)).toThrow(TypeError);
+        expect(() => new WebAssembly.Instance(mod, {})).toThrow(TypeError);
+        expect(() => new WebAssembly.Instance(mod, { env: {} })).toThrow(WebAssembly.LinkError);
+        const inst = new WebAssembly.Instance(mod, createWasmHostEnv(seed));
         const wasmKdf = inst.exports.kdf as (f: number, s: number, h: number) => number;
 
         // Also test CSP JS fallback via injectWasmVault with WebAssembly disabled
@@ -562,7 +568,8 @@ describe('Aggressive Profile & Advanced Protection (Layer 2 & Red-Team Verificat
         expect(injectedCode).not.toContain('16777619');
         expect(injectedCode).not.toContain('73244475');
         expect(injectedCode).not.toContain('Math.imul((f ^');
-        expect(injectedCode).toContain('+!String');
+        expect(injectedCode).not.toContain('+!String');
+        expect(injectedCode).toContain('__unpeek_wasm_kdf');
 
         const cspCtx = vm.createContext({
           WebAssembly: undefined,
@@ -656,7 +663,7 @@ describe('Aggressive Profile & Advanced Protection (Layer 2 & Red-Team Verificat
   // =========================================================================
   describe('7. UNP-01, UNP-03 & UNP-05 Hardening Regressions', () => {
     it('UNP-01: non-linear WASM KDF resists kdf(0,0,0) * modInv32(0x01000193) seed inversion and skips 0-string chunks', async () => {
-      const { generateWasmKdfBinary, fallbackKdf } = await import('../src/ast/wasm-vault.js');
+      const { generateWasmKdfBinary, createWasmHostEnv, fallbackKdf } = await import('../src/ast/wasm-vault.js');
 
       // 32-bit modular inverse of 0x01000193 mod 2^32
       function modInv32(a: number): number {
@@ -672,7 +679,10 @@ describe('Aggressive Profile & Advanced Protection (Layer 2 & Red-Team Verificat
         const wasmBytes = generateWasmKdfBinary(seed);
         expect(wasmBytes.byteLength).toBeLessThan(512);
         const mod = new WebAssembly.Module(wasmBytes as BufferSource);
-        const inst = new WebAssembly.Instance(mod);
+        expect(() => new WebAssembly.Instance(mod)).toThrow(TypeError);
+        expect(() => new WebAssembly.Instance(mod, {})).toThrow(TypeError);
+        expect(() => new WebAssembly.Instance(mod, { env: {} })).toThrow(WebAssembly.LinkError);
+        const inst = new WebAssembly.Instance(mod, createWasmHostEnv(seed));
         const kdf = inst.exports.kdf as (f: number, s: number, h: number) => number;
 
         const out000 = kdf(0, 0, 0);
@@ -808,9 +818,14 @@ describe('Aggressive Profile & Advanced Protection (Layer 2 & Red-Team Verificat
         'TIER2_SHIELD_COUPLED_KEY_usr_9:17'
       );
 
-      // 2. Stripping runtime shield preamble in browser context corrupts/blocks decryption & VM
-      const strippedCode = res.code.split('\n').slice(1).join('\n');
-      const strippedCtx: Record<string, any> = {
+      // 2. Issue #1 order-independent loading: stripping shield preamble (globalThis[sym] === undefined)
+      // resolves cleanly without cache poisoning, while active tamper (__unpeek_tampered / mismatched slot) fails closed.
+      const { generateRuntimeShield } = await import('../src/runtime/index.js');
+      const shieldInfo = generateRuntimeShield({ seed: 0x55aa77cc, deterrentMode: 'passive' });
+      const lines = res.code.split('\n');
+      const shieldLine = lines[0];
+      const strippedCode = lines.slice(1).join('\n');
+      const lateCtx: Record<string, any> = {
         window: {},
         Math,
         String,
@@ -819,16 +834,36 @@ describe('Aggressive Profile & Advanced Protection (Layer 2 & Red-Team Verificat
         WebAssembly,
         CustomEvent: class {},
       };
-      strippedCtx.globalThis = strippedCtx;
-      vm.createContext(strippedCtx);
-      let strippedOut: unknown;
+      lateCtx.globalThis = lateCtx;
+      vm.createContext(lateCtx);
+      expect(vm.runInContext(`(function(){${strippedCode}})()`, lateCtx)).toBe(
+        'TIER2_SHIELD_COUPLED_KEY_usr_9:17'
+      );
+      vm.runInContext(shieldLine, lateCtx);
+      expect(vm.runInContext(`(function(){${strippedCode}})()`, lateCtx)).toBe(
+        'TIER2_SHIELD_COUPLED_KEY_usr_9:17'
+      );
+
+      const tamperedCtx: Record<string, any> = {
+        window: { [shieldInfo.windowKeySymbol]: (shieldInfo.expectedDelta ^ 0x1111) & 0xffff },
+        Math,
+        String,
+        Uint8Array,
+        Promise,
+        WebAssembly,
+        CustomEvent: class {},
+        __unpeek_tampered: true,
+      };
+      tamperedCtx.globalThis = tamperedCtx;
+      vm.createContext(tamperedCtx);
+      let tamperedOut: unknown;
       let threw = false;
       try {
-        strippedOut = vm.runInContext(`(function(){${strippedCode}})()`, strippedCtx);
+        tamperedOut = vm.runInContext(`(function(){${strippedCode}})()`, tamperedCtx);
       } catch {
         threw = true;
       }
-      expect(threw || strippedOut !== 'TIER2_SHIELD_COUPLED_KEY_usr_9:17').toBe(true);
+      expect(threw || tamperedOut !== 'TIER2_SHIELD_COUPLED_KEY_usr_9:17').toBe(true);
 
       // 3. SSR execution (window undefined) still returns exact value
       const ssrCtx: Record<string, any> = {

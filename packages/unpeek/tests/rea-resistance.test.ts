@@ -210,16 +210,18 @@ describe('Reverse Engineering & Deobfuscation Resistance (Acceptance Thresholds)
       minStringLength: 4,
     });
 
-    // 1. Decoy keywords exist in the transformed AST / generated code to divert LLM deobfuscator attention
-    expect(res.code).toContain('/api/v2/auth/admin-bypass');
-    expect(res.code).toContain('superadmin_token');
-    expect(res.code).toContain('elevate');
+    // 1. Neutral/polymorphic decoys exist in the transformed AST without leaking real auth endpoints or identifiers
+    expect(res.code).toContain('telemetryOk');
+    expect(res.code).toContain('retryBudget');
+    expect(res.code).toContain('slotMask');
+    expect(res.code).not.toContain('/api/v2/auth/admin-bypass');
+    expect(res.code).not.toContain('rawToken');
 
     // 2. Cold function is protected, while original secret strings from user code remain vaulted
     expect(res.hotPathReport.coldFunctionsProtected).toContain('authenticateUserSession');
     expect(res.code).not.toContain('secret_pass_123');
 
-    // 3. Runtime execution: The MBA opaque predicate deterministically evaluates to false,
+    // 3. Runtime execution: The QNR + MBA opaque predicate deterministically evaluates to false,
     // so the decoy block is never executed and normal application logic executes with 100% fidelity.
     const fn = new Function(res.code);
     const sessionResult = fn();
@@ -229,14 +231,16 @@ describe('Reverse Engineering & Deobfuscation Resistance (Acceptance Thresholds)
       session: 'usr_100:auth_hash_secret_pass_123',
     });
     expect(sessionResult.role).not.toBe('superadmin');
-    expect(sessionResult.elevate).toBeUndefined();
+    expect(sessionResult.telemetryOk).toBeUndefined();
 
-    // 4. Inverting the MBA test (simulating condition triggering) verifies that the decoy block is indeed present and returns fake admin bypass
-    const triggeredDecoyCode = res.code.replace(/(===)\s*(\d+)/, '!== $2');
+    // 4. Inverting the QNR predicate (=== 3 -> !== 3) verifies the neutral object-domain decoy block fires cleanly
+    const triggeredDecoyCode = res.code.replace(/(===)\s*3\b/, '!== 3');
     const decoyFn = new Function(triggeredDecoyCode);
     const decoyResult = decoyFn();
     expect(decoyResult).toBeDefined();
-    expect(decoyResult.endpoint).toMatch(/^\/api\/v2\/auth\//);
+    expect(typeof decoyResult.telemetryOk).toBe('number');
+    expect(typeof decoyResult.retryBudget).toBe('boolean');
+    expect(decoyResult.slotMask).toMatch(/^v0_\d{3}$/);
   });
 
   it('defeats memory dump deobfuscation by preventing mass in-memory string decryption at module evaluation time', () => {
@@ -350,19 +354,22 @@ describe('Reverse Engineering & Deobfuscation Resistance (Acceptance Thresholds)
       injectRuntimeShield: true,
     });
 
-    // SSR fallback literal must not expose plaintext expectedDelta directly or use static +!String
+    // v4 blinds expectedDelta via Rivest degree-3 permutation polynomial without plaintext expectedDelta, +!String, or v3 w?-1: poisoning
     expect(res.code).not.toContain(`w?0:${shield.expectedDelta}`);
+    expect(res.code).not.toContain(String(shield.expectedDelta));
     expect(res.code).not.toContain('+!String');
-    expect(res.code).toContain('w?-1:');
+    expect(res.code).not.toContain('w?-1:');
+    expect(res.code).toContain('Math.imul');
 
-    // Browser-only target omits SSR maskA ^ maskB fallback completely (w?-1:0)
+    // Browser-only target also omits v3 w?-1:0 poisoning and relies on Rivest self-sovereign delta + order-independent tamper check
     const browserRes = transformJavaScript(src, {
       seed,
       minStringLength: 4,
       injectRuntimeShield: true,
       config: { target: 'browser' },
     });
-    expect(browserRes.code).toContain('w?-1:0');
+    expect(browserRes.code).not.toContain('w?-1:0');
+    expect(browserRes.code).not.toContain(String(shield.expectedDelta));
 
     // Extract encrypted array literal and P table from transformed output via AST
     const acorn = await import('acorn');

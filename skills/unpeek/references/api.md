@@ -102,15 +102,27 @@ The top-level configuration schema accepted in `unpeek.config.js`, `unpeek.confi
 ```ts
 export type ConfigFramework = 'nextjs' | 'vite' | 'webpack' | 'vanilla';
 export type ConfigTarget = 'browser' | 'worker' | 'universal';
+export type UnpeekTier = 'Tier 1' | 'Tier 2' | 'Tier 3';
+
+export interface CriticalConfig {
+  include?: PatternInput[];
+  annotation?: string;
+  maxFunctionsPerChunk?: number;
+}
 
 export interface UnpeekConfig {
   framework?: ConfigFramework;
   target?: ConfigTarget;
+  profile?: UnpeekProfile;
+  tier?: UnpeekTier;
+  coldFlow?: boolean;
   outDir?: string;
   extensions?: string[];
   publicDirs?: string[];
+  scrubPaths?: boolean;
   filter?: FilterConfig;
   hotPath?: HotPathConfig;
+  critical?: CriticalConfig;
   vault?: VaultConfig;
   mangler?: ManglerConfig;
   sourcemaps?: SourcemapsConfig;
@@ -170,9 +182,10 @@ export interface VaultConfig {
 Identifier mangling rules and exclusion boundaries:
 ```ts
 export interface ManglerConfig {
+  minLength?: number;              // default: 1 across minimal / recommended / strict presets
   reservedIdentifiers?: string[];
   excludePrefixes?: string[];
-  excludePatterns?: RegExp[];
+  excludePatterns?: PatternInput[];
 }
 ```
 
@@ -226,6 +239,10 @@ export interface ProtectOptions {
   aggressive?: boolean;
   /** Protection preset profile */
   profile?: UnpeekProfile;
+  /** Explicit protection tier override ('Tier 1' | 'Tier 2' | 'Tier 3') */
+  tier?: UnpeekTier;
+  /** Tier 3 critical enclave targeting (@unpeek-critical / include patterns) */
+  critical?: CriticalConfig;
   /** Compute summary and Gzip delta in memory without writing files */
   dryRun?: boolean;
   /** Fail with ERR_BUDGET_EXCEEDED if gzipDeltaPercent exceeds this percentage */
@@ -243,10 +260,18 @@ export interface TransformOptions {
   seed?: number;
   minStringLength?: number;
   filename?: string;
+  /** Project root directory stripped by the CWE-540 path scrubber */
+  rootDir?: string;
+  /** Tier 3 critical enclave targeting overrides */
+  critical?: CriticalConfig;
+  /** Generate an M2 Source Map v3 alongside the transformed output */
+  map?: boolean;
   injectRuntimeShield?: boolean;
   deterrentMode?: DeterrentMode;
-  /** Enable Layer 2 aggressive protection */
+  /** Enable Tier 3 aggressive protection (Micro-VM v2 + singleton WASM KDF) */
   aggressive?: boolean;
+  /** Explicit protection tier override */
+  tier?: UnpeekTier;
   /** Throw UnpeekError on JavaScript parse failures instead of returning input unchanged */
   strict?: boolean;
   /** Scrub local filesystem paths and residual dev metadata (CWE-540) */
@@ -294,7 +319,7 @@ export interface ProtectSummary {
   totalMangledSymbols: number;
   elapsedMs: number;
   seed?: number;
-  tier?: 'Tier 1' | 'Tier 2';
+  tier?: 'Tier 1' | 'Tier 2' | 'Tier 3';
   aggressive?: boolean;
   dockerIgnoreMissing?: boolean;
   dryRun?: boolean;

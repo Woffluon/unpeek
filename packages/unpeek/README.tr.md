@@ -62,14 +62,14 @@ flowchart TD
 
 1. **Çağrı Grafiği (Call-Graph) Hot-Path Muafiyeti (`<%2` CPU Bütçesi)**
    [`detectHotPaths`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/ast/index.ts), tek bir AST düğümünü değiştirmeden önce dosyanın çağrı grafiğini çift yönlü tarar. Döngü içeren fonksiyonlar (`for`, `while`, `do-while`, `for-of`), dizi yüksek mertebe geri çağrıları (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` zamanlayıcıları, React/UI bileşenleri (`useState`, `useEffect`, `createElement`) ve sıcak döngülerden çağrılan tüm yardımcı fonksiyonlar sıcak yol (hot path) olarak işaretlenir. `unpeek` sıcak döngüleri ve yardımcılarını hem opak kontrol akışı korumalarından hem de metin kasası dönüşümünden muaf tutar; korumayı yalnızca soğuk fonksiyonlara (lisans doğrulama, istek imzalama, yetki kontrolü gibi) uygular. Sıcak döngülerdeki V8 JIT optimizasyonu doğal hızında çalışmayı sürdürür.
-2. **O(1) Sabit-Dizi Metin Kasası ve Kalkan Dolanıklığı (`<%15` Gzip Bütçesi)**
-   Soğuk metin sabitleri (`minStringLength >= 4`), derleme zamanında LZ77/Gzip sıkıştırılabilirliğini koruyan periyot-2 polimorfik bir XOR akış şifresiyle kodlanır. Modül başlangıcında enjekte edilen `const _uC` kasası metinleri tek seferde V8 `kConst` sabit dizi hücrelerine çözer ve XOR anahtarını hem çalışma zamanı bütünlük kalkanına (`String.prototype._u`) hem de çözücü fonksiyonun kendi biçimlendirme kontrolüne (`/\n/.test(f)`) ikili olarak bağlar. Sonraki tüm okumalar doğrudan dizi indeksleme ile O(1) sürede tamamlanır.
-3. **Öz-Savunmalı `Function.prototype.toString()` Bütünlük Kontrolü ve Caydırıcı Modlar (Deterrent Modes)**
-   Bir analist korumalı bir dosyayı DevTools Pretty-Print (`{}`) ile biçimlendirdiğinde veya Sources panelinde bir koşulu değiştirdiğinde, biçimlendirilen kod `Function.prototype.toString()` çıktısını değiştirir. [`verifyCodeIntegrity`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/runtime/index.ts), dokunulmamış küçültülmüş kodda sıfır yanlış pozitif oranıyla 32-bit FNV-1a özetini (checksum) doğrular. Verilen tepki `deterrentMode` seçeneğiyle yönetilir:
-   - `passive` (hem CLI `protect` hem de `unplugin` varsayılanı): Konsol çıktısını susturmadan veya uygulamayı çökertmeden `window` nesnesine bir telemetri olayı (`unpeek:tamper` event) iletir; tersine mühendislik girişimlerinin sessizce izlenmesini sağlar.
-   - `gradual` (`--gradual` veya `deterrentMode: 'gradual'` ile seçime bağlı): İç çalışma zamanı çözümlemelerini kademeli olarak bozar ve `console` çıktılarını susturur; saldırganların doğrudan yamayabileceği ani bir hata yığın izi (stack trace) üretmeden kodu işlevsizleştirir.
-4. **Otomatik Source Map Kasası (`.unpeek-maps/`)**
-   Üretim çıktısında `.js.map` dosyalarını bırakmak, orijinal TypeScript proje ağacınızın DevTools içinde birebir yeniden oluşturulmasına yol açar. [`protectProject`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/core/protect.ts), `.map` dosyalarını genel çıktı dizininden özel `.unpeek-maps/` klasörüne taşır ve tüm istemci paketlerinden `//# sourceMappingURL=` yorumlarını temizler. Böylece haritaları son kullanıcılara sunmadan Sentry veya Datadog gibi platformlara yükleyebilirsiniz.
+2. **O(1) Sabit-Dizi ve 64-Bit Tuzlu Metin Kasaları (`<%15` Gzip Bütçesi)**
+   Soğuk metin sabitleri (`minStringLength >= 4`), 92 karakterli kaçışsız involutory ASCII permütasyonu (`P[P[c]] = c`) veya paylaşımlı tekil `<1.2 KB` konak-bağlı WASM KDF (`env.g`/`env.m`, bit-özdeş non-lineer Rivest + S-Box JS yedeği ile) destekli 64-bit çağrı-noktası tuzlu çözücülerle (`computeCallSiteSalt64`) kodlanır. Giriş kalkanından önce çalışan asenkron parçalar (Issue #1) önbelleği zehirlemeden geçerli düz metni çözer; aktif kurcalamada ise önbelleğe yazmadan kapalı başarısız olur.
+3. **Sıra-Bağımsız `globalThis` Kalkanı, Non-Lineer MBA ve Tier 3 Micro-VM v2**
+   Giriş paketleri, `WorkerGlobalScope` uyumlu (`self`/`globalThis`) sıra-bağımsız bir bütünlük IIFE'i enjekte eder ve [`verifyCodeIntegrity`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/runtime/index.ts) ile `Function.prototype.toString()` + `Reflect.apply` tanımlayıcı sahtelemelerini yakalar. Soğuk yollar (`coldFlow: true`) `>=4`-değişkenli yarı-lineer MBA + derece-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR koşulları (`((z^2 + 1) & 3) === 3`) ve nötr tuzak köprüleri alır; Tier 3 / `--aggressive`, `@unpeek-critical` fonksiyonlarını 43-komutlu direct-threaded Micro-VM v2 motoruna (`$step` trambolini + bloklar arası `$f.ac` akümülatör çarkı, sıfır `eval()`) önceliklendirir. Verilen tepki `deterrentMode` ile yönetilir:
+   - `passive` (hem CLI `protect` hem de `unplugin` varsayılanı): Konsol çıktısını susturmadan veya uygulamayı çökertmeden `self`/`globalThis` üzerine bir telemetri olayı (`unpeek:tamper`) iletir; tersine mühendislik girişimlerinin sessizce izlenmesini sağlar.
+   - `gradual` (`--gradual` veya `deterrentMode: 'gradual'` ile seçime bağlı): İç çalışma zamanı çözümlemelerini kademeli olarak bozar ve `console` çıktılarını susturur; saldırganların doğrudan yamayabileceği ani bir hata yığın izi üretmeden kodu işlevsizleştirir.
+4. **Çok Geçişli Source Map Kasası (`.unpeek-maps/`) ve SHA-256 `debugId`**
+   Üretim çıktısında `.js.map` dosyalarını bırakmak, orijinal TypeScript proje ağacınızın DevTools içinde birebir yeniden oluşturulmasına yol açar. [`protectProject`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/core/protect.ts), ECMA-426 `.sections` indeks haritalarını düzleştirir, çok geçişli $M_1 \circ M_2$ VLQ bileşimini (`chainSourceMaps`) hesaplar, JS paketine ve kasadaki `.map` dosyasına aynı deterministik SHA-256 `debugId` imzasını işler (`unpeek check` ile doğrulanır), `.map` dosyalarını `.unpeek-maps/` klasörüne taşır ve `//# sourceMappingURL=` yorumlarını temizler.
 
 ---
 
@@ -122,11 +122,12 @@ npx unpeek protect
 | `-v, --version` | Sürüm numarasını göster | |
 
 > [!NOTE]
-> **Koruma Katmanları (Protection Tiers):**
-> - **Tier 1 (Varsayılan):** Çağrı grafiği (call-graph) sıcak yol (hot path) muafiyeti (<%2 CPU ek yükü, <%15 Gzip bütçesi), polimorfik O(1) `kConst` sabit metin kasası, sembol maskeleme ve 32-bit FNV-1a sağlama toplamı (checksum) çalışma zamanı kalkanı.
-> - **Tier 2 (`--aggressive`):** Güvenlik açısından kritik mantıklar için bayt kodu Micro-VM sanallaştırması ve satır içi WebAssembly Anahtar Türetme Fonksiyonu (WASM KDF - Key Derivation Function).
+> **Koruma Katmanları ve Profiller:**
+> - **Tier 1 (`--profile minimal`):** Çağrı grafiği sıcak yol muafiyeti (`coldFlow: false`), `mangler.minLength: 1` ve sıra-bağımsız `globalThis` kalkanı (<%2 CPU, <%15 Gzip bütçesi).
+> - **Tier 2 (`--profile recommended` / Varsayılan):** 92-karakter kaçışsız metin kasası, `>=4`-değişkenli yarı-lineer MBA + derece-3 Rivest QNR koruyucuları ve yerinde şifrelenen `Uint8Array` shader kasası ekler.
+> - **Tier 3 (`--profile strict` / `--aggressive`):** `@unpeek-critical` fonksiyonlarını ve `critical.include` desenlerini 43-komutlu direct-threaded Micro-VM v2, paylaşımlı `<1.2 KB` konak-bağlı WASM KDF (bit-özdeş JS yedeğiyle), 64-bit çağrı-noktası tuzlu kasa ve CWE-540 yol temizliğiyle korur.
 >
-> `protectProject(options)` üzerinden programatik kullanım; `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, `aggressive` ve `cwd` gibi ek yapılandırma seçeneklerini destekler.
+> `protectProject(options)` üzerinden programatik kullanım; `tier`, `critical`, `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, `aggressive`, `scrubPaths` ve `cwd` seçeneklerini destekler. Paketleyici eklentileri küçültme sonrası aşamalarda çalışır (Vite `enforce: 'post'` `generateBundle` + `worker.plugins`, Webpack/Rspack `processAssets`, esbuild `onEnd`, Rollup `renderChunk`, Next.js `.next/build-manifest.json`), Service Worker ve Web Worker dosyaları (`sw.js`, `*.worker.js`) `target: 'worker'` belirtilmedikçe varsayılan olarak ayrı tutulur.
 
 > [!IMPORTANT]
 > **Yerel CommonJS & ESM Çift-Paket Desteği:**
@@ -267,6 +268,17 @@ export default defineConfig({
   // Hedef çalışma ortamı ('browser' | 'worker' | 'universal')
   target: 'browser',
 
+  // Hazır koruma profili ('minimal' | 'recommended' | 'strict') ve katman ('Tier 1' | 'Tier 2' | 'Tier 3')
+  profile: 'recommended',
+  tier: 'Tier 2',
+  coldFlow: true,
+
+  // Tier 3 kritik bölge hedeflemesi (@unpeek-critical / include desenleri)
+  critical: {
+    annotation: '@unpeek-critical',
+    maxFunctionsPerChunk: 12,
+  },
+
   // İstemci çıktı dizini geçersiz kılma (belirtilmezse çatıdan otomatik algılanır)
   outDir: '.next/static/chunks',
 
@@ -317,6 +329,8 @@ export default defineConfig({
 
   // Tanımlayıcı ve sembol maskeleme (mangler) yapılandırması
   mangler: {
+    // Maskelemeye tabi tutulacak en küçük yerel tanımlayıcı uzunluğu (varsayılan: 1)
+    minLength: 1,
     // Maskelemeden muaf tutulacak üst düzey tanımlayıcılar
     reservedIdentifiers: ['__NEXT_DATA__', '__PRELOADED_STATE__'],
     // Korunacak özellik önekleri

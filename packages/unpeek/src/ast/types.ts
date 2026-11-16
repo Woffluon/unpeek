@@ -1,4 +1,4 @@
-import type { BaseProtectionOptions } from '../config.js';
+import type { BaseProtectionOptions, CriticalConfig } from '../config.js';
 
 export interface HotPathReport {
   totalFunctions: number;
@@ -16,6 +16,12 @@ export interface ScrubberOptions {
 
 export interface TransformOptions extends BaseProtectionOptions {
   filename?: string;
+  /** Project root directory stripped by the CWE-540 path scrubber */
+  rootDir?: string;
+  /** Tier 3 critical enclave targeting overrides */
+  critical?: CriticalConfig;
+  /** Generate an M2 Source Map v3 alongside the transformed output */
+  map?: boolean;
   /** Throw UnpeekError on JavaScript parse failures instead of returning input unchanged */
   strict?: boolean;
   /** Scrub local filesystem paths and residual dev metadata (CWE-540) */

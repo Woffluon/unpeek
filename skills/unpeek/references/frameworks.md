@@ -62,7 +62,7 @@ export default defineConfig({
 This guarantees unpeek locates client chunks under `<distDir>/static/chunks` while keeping `<distDir>/server` and SSR assets strictly untouched.
 
 ### Option B: Next.js >= 16.2 Build Adapter (`unpeek/next`)
-For Next.js >= 16.2 (including Turbopack), wrap your config with `withUnpeek` from `unpeek/next` (automatically wired by `npx unpeek init`). `withUnpeek` is `phase`-aware when wrapping a Next.js config function (skipping non-production phases like `phase-development-server`) and uses a `RegExp`-safe `UNPEEK_NEXT_OPTIONS` bridge for worker-process serialization:
+For Next.js >= 16.2 (including Turbopack), wrap your config with `withUnpeek` from `unpeek/next` (automatically wired by `npx unpeek init`). `withUnpeek` is `phase`-aware when wrapping a Next.js config function (skipping non-production phases like `phase-development-server`), uses a `RegExp`-safe `UNPEEK_NEXT_OPTIONS` bridge, URL-decodes `outputs.staticFiles` paths (`%28public%29`, `%5Bparam%5D`), and discovers entry chunks from `.next/build-manifest.json` (`rootMainFiles` & `pages`). Turbopack and Webpack/Rspack chunk headers (`globalThis.TURBOPACK.push`, `webpackChunk*`) are automatically exempted while preserving module bodies, and async chunks executing before entry shield initialization resolve cleanly without poisoning.
 ```js
 // next.config.mjs (or CommonJS: const { withUnpeek } = require('unpeek/next');)
 import { withUnpeek } from 'unpeek/next';
@@ -101,6 +101,8 @@ export default nextConfig;
 ---
 
 ## 3. Vite Integration
+
+`unpeek/vite` runs with `enforce: 'post'` and `apply: 'build'` inside `generateBundle` (after Vite's esbuild minification and chunk splitting) and automatically wires `worker.plugins` via `config()` so Web Worker chunks receive worker-safe protection. Non-enumerable `toString()` wrappers on generated source maps prevent `[object Object]` serialization errors.
 
 ### Subpath Import (`unpeek/vite`)
 ```ts
@@ -144,7 +146,7 @@ export default defineConfig({
 ## 4. Webpack & Rspack Integration
 
 ### Subpath Import (`unpeek/webpack` & `unpeek/rspack`)
-`unpeek` and all subpaths natively support both ESM `import` and CommonJS `require(...)` (with `default` export for bundler subpaths). Use `unpeek/rspack` for Rspack builds, or `unpeek/webpack` for Webpack 5. Note that bundler plugins expect `UnpeekConfig` overrides nested under `options.config` (inline top-level `UnpeekConfig` duck-typing was removed in v3.0.0):
+`unpeek` and all subpaths natively support both ESM `import` and CommonJS `require(...)` (with `default` export for bundler subpaths). Both `unpeek/webpack` and `unpeek/rspack` hook into `thisCompilation` -> `processAssets` (`PROCESS_ASSETS_STAGE_OPTIMIZE_INLINE`) to transform emitted client chunks, strip `//# sourceMappingURL=`, and compose `.map` files accurately. Note that bundler plugins expect `UnpeekConfig` overrides nested under `options.config` (inline top-level `UnpeekConfig` duck-typing was removed in v3.0.0):
 ```js
 // webpack.config.js
 const unpeek = require('unpeek/webpack');
@@ -162,9 +164,10 @@ module.exports = {
 
 ---
 
-## 5. Rollup & Esbuild Integration
+## 5. Rollup, Esbuild & Worker Isolation
 
 ### Rollup (`unpeek/rollup`)
+`unpeek/rollup` transforms chunks during `renderChunk`, handling Rollup hash-placeholder filenames (`.js`/`.mjs`/`.cjs`) and returning `{ code, map }` cleanly.
 ```js
 // rollup.config.js
 import unpeek from 'unpeek/rollup';
@@ -181,6 +184,7 @@ export default {
 ```
 
 ### Esbuild (`unpeek/esbuild`)
+`unpeek/esbuild` enables `metafile: true` and runs in `build.onEnd`, supporting both in-memory `write: false` (`outputFiles`) and disk `write: true` builds (including `.map` updates).
 ```js
 // build.js
 import esbuild from 'esbuild';
@@ -194,21 +198,23 @@ await esbuild.build({
 });
 ```
 
+### Service Worker & Web Worker Isolation
+By default (`target: 'browser'`), `sw.js`, `service-worker.js`, `workbox-*.js`, and `*.worker*.(js|mjs|cjs)` files are excluded from browser chunk scanning to avoid breaking worker registration. Set `target: 'worker'` in `unpeek.config.js` when intentionally protecting standalone worker bundles (the `globalThis`/`self` runtime shield runs safely in `WorkerGlobalScope`).
+
 ---
 
 ## 6. Subpath Import Reference
 
 | Subpath | Bundler Target |
 | :--- | :--- |
-| `unpeek` | Narrowed root API (`protectProject`, `transformJavaScript`, `initProject`, `defineConfig`, `loadUnpeekConfig`, `UnpeekError`, `UnpeekErrorCode`, types) |
-| `unpeek/config` | Configuration utilities (`defineConfig`, `loadUnpeekConfig`, `findConfigFile`, `mergeUnpeekConfig`, `DEFAULT_CONFIG`) |
+| `unpeek` | Root API (`protectProject`, `transformJavaScript`, `initProject`, `checkProject`, `symbolicateStackTrace`, `PRESETS`, `defineConfig`, `loadUnpeekConfig`, `UnpeekError`, `isUnpeekError`, types) |
+| `unpeek/config` | Configuration helper (`defineConfig`, `loadUnpeekConfig`) |
 | `unpeek/next` | Next.js >= 16.2 Build Adapter (`withUnpeek`, `createUnpeekNextAdapter`) |
 | `unpeek/next/adapter` | Next.js adapter entry referenced by `adapterPath` |
 | `unpeek/unplugin` | Base Unplugin instance (`unpeekPlugin`, `vitePlugin`, `webpackPlugin`, etc.) |
 | `unpeek/vite` | Dedicated Vite plugin export |
-| `unpeek/webpack` | Dedicated Webpack / Rspack plugin export |
+| `unpeek/webpack` | Dedicated Webpack 5 plugin export |
+| `unpeek/rspack` | Dedicated Rspack plugin export |
 | `unpeek/rollup` | Dedicated Rollup plugin export |
 | `unpeek/esbuild` | Dedicated Esbuild plugin export |
-| `unpeek/ast` | Standalone AST transformation & hot-path detector |
-| `unpeek/runtime` | Standalone runtime anti-tamper shield & integrity checker |
 | `unpeek/browser` | Browser-side client runtime utilities |

@@ -9,6 +9,7 @@ import { protectProject } from '../../core/protect.js';
 import { computeFnv1aHash } from '../../shared/hash.js';
 import { UnpeekError } from '../../shared/errors.js';
 import { serializeNextOptions } from '../../internal/next.js';
+import { safeDecodeURIComponent } from '../../core/vlq.js';
 
 const MAX_NEXT_OPTIONS_ENV_BYTES = 32_767;
 
@@ -231,7 +232,9 @@ export function createUnpeekNextAdapter(
             : path.resolve(cwd, rawFilePath);
 
           if (!fs.existsSync(absPath)) {
-            const relClean = rawFilePath.replace(/\\/g, '/').replace(/^\/?(?:_next\/|\.next\/)/, '');
+            const relClean = safeDecodeURIComponent(rawFilePath)
+              .replace(/\\/g, '/')
+              .replace(/^\/?(?:_next\/|\.next\/)/, '');
             const fromDist = path.resolve(distDir, relClean);
             if (fs.existsSync(fromDist)) {
               absPath = fromDist;

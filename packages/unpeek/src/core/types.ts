@@ -50,7 +50,7 @@ export interface ProtectSummary {
   totalMangledSymbols: number;
   elapsedMs: number;
   seed?: number;
-  tier?: 'Tier 1' | 'Tier 2';
+  tier?: 'Tier 1' | 'Tier 2' | 'Tier 3';
   aggressive?: boolean;
   dockerIgnoreMissing?: boolean;
   dryRun?: boolean;
@@ -83,7 +83,13 @@ export interface CheckOptions {
 }
 
 export interface CheckViolation {
-  rule: 'public-map' | 'sourcemap-comment' | 'ignore-missing' | 'gzip-budget' | 'eval-csp';
+  rule:
+    | 'public-map'
+    | 'sourcemap-comment'
+    | 'ignore-missing'
+    | 'gzip-budget'
+    | 'eval-csp'
+    | 'debugid-mismatch';
   severity: 'error' | 'warning';
   message: string;
   file?: string;

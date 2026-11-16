@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { SymbolicateFrame, SymbolicateOptions, SymbolicateResult } from './types.js';
@@ -13,6 +14,15 @@ const VLQ_BASE = 1 << VLQ_BASE_SHIFT;
 const VLQ_BASE_MASK = VLQ_BASE - 1;
 const VLQ_CONTINUATION_BIT = VLQ_BASE;
 
+export interface SourceMapSection {
+  offset: {
+    line: number;
+    column: number;
+  };
+  map?: AnySourceMap;
+  url?: string;
+}
+
 export interface RawSourceMap {
   version: number;
   file?: string;
@@ -21,9 +31,17 @@ export interface RawSourceMap {
   sourcesContent?: Array<string | null>;
   names: string[];
   mappings: string;
+  sections?: SourceMapSection[];
   debugId?: string;
   debug_id?: string;
 }
+
+export type AnySourceMap = Omit<RawSourceMap, 'sources' | 'names' | 'mappings'> & {
+  sources?: string[];
+  names?: string[];
+  mappings?: string;
+  sections?: SourceMapSection[];
+};
 
 export interface DecodedMapping {
   generatedLine: number;
@@ -81,7 +99,7 @@ export function decodeVlq(
   return null;
 }
 
-export function decodeMappings(mappingsStr: string): {
+function decodeMappingsString(mappingsStr: string): {
   mappings: DecodedMapping[];
   malformedCount: number;
 } {
@@ -148,6 +166,162 @@ export function decodeMappings(mappingsStr: string): {
   return { mappings, malformedCount };
 }
 
+function resolveSourceWithRoot(rawSource: string, sourceRoot?: string): string {
+  if (!sourceRoot || !rawSource || rawSource.startsWith(sourceRoot)) {
+    return rawSource;
+  }
+  return `${sourceRoot.replace(/\/$/, '')}/${rawSource.replace(/^\//, '')}`;
+}
+
+function flattenSourceMapSectionsWithStats(rawMap: AnySourceMap): {
+  map: RawSourceMap;
+  malformedCount: number;
+} {
+  if (!Array.isArray(rawMap.sections)) {
+    const normalized: RawSourceMap = {
+      version: rawMap.version ?? 3,
+      sources: Array.isArray(rawMap.sources) ? [...rawMap.sources] : [],
+      names: Array.isArray(rawMap.names) ? [...rawMap.names] : [],
+      mappings: typeof rawMap.mappings === 'string' ? rawMap.mappings : '',
+    };
+    if (rawMap.file !== undefined) normalized.file = rawMap.file;
+    if (rawMap.sourceRoot !== undefined) normalized.sourceRoot = rawMap.sourceRoot;
+    if (Array.isArray(rawMap.sourcesContent)) {
+      normalized.sourcesContent = [...rawMap.sourcesContent];
+    }
+    const debugId = rawMap.debugId ?? rawMap.debug_id;
+    if (debugId) normalized.debugId = debugId;
+    return { map: normalized, malformedCount: 0 };
+  }
+
+  const mergedSources: string[] = [];
+  const mergedSourcesContent: Array<string | null> = [];
+  let hasAnySourcesContent = false;
+  const sourceIndexMap = new Map<string, number>();
+
+  const mergedNames: string[] = [];
+  const nameIndexMap = new Map<string, number>();
+
+  const mergedMappings: DecodedMapping[] = [];
+  let totalMalformed = 0;
+
+  const internSource = (src: string, content: string | null | undefined): number => {
+    const existing = sourceIndexMap.get(src);
+    if (existing !== undefined) {
+      if (mergedSourcesContent[existing] === null && content !== undefined && content !== null) {
+        mergedSourcesContent[existing] = content;
+        hasAnySourcesContent = true;
+      }
+      return existing;
+    }
+    const nextIdx = mergedSources.length;
+    mergedSources.push(src);
+    if (content !== undefined && content !== null) {
+      hasAnySourcesContent = true;
+    }
+    mergedSourcesContent.push(content ?? null);
+    sourceIndexMap.set(src, nextIdx);
+    return nextIdx;
+  };
+
+  const internName = (name: string): number => {
+    const existing = nameIndexMap.get(name);
+    if (existing !== undefined) return existing;
+    const nextIdx = mergedNames.length;
+    mergedNames.push(name);
+    nameIndexMap.set(name, nextIdx);
+    return nextIdx;
+  };
+
+  for (const section of rawMap.sections) {
+    if (!section || !section.map) continue;
+    const offLine = (section.offset?.line ?? 0) | 0;
+    const offCol = (section.offset?.column ?? 0) | 0;
+    const flatSecResult = flattenSourceMapSectionsWithStats(section.map);
+    const flatSec = flatSecResult.map;
+    totalMalformed += flatSecResult.malformedCount;
+
+    const decoded = decodeMappingsString(flatSec.mappings);
+    totalMalformed += decoded.malformedCount;
+
+    const secSources = flatSec.sources ?? [];
+    const secContents = flatSec.sourcesContent ?? [];
+    const secNames = flatSec.names ?? [];
+
+    const sourceRemap = new Map<number, number>();
+    for (let i = 0; i < secSources.length; i++) {
+      const fullSource = resolveSourceWithRoot(secSources[i], flatSec.sourceRoot);
+      sourceRemap.set(i, internSource(fullSource, secContents[i]));
+    }
+
+    const nameRemap = new Map<number, number>();
+    for (let i = 0; i < secNames.length; i++) {
+      nameRemap.set(i, internName(secNames[i]));
+    }
+
+    for (const m of decoded.mappings) {
+      const mappedSource = sourceRemap.get(m.sourceIndex);
+      if (mappedSource === undefined) continue;
+      const shifted: DecodedMapping = {
+        generatedLine: offLine + m.generatedLine,
+        generatedColumn: (m.generatedLine === 0 ? offCol : 0) + m.generatedColumn,
+        sourceIndex: mappedSource,
+        originalLine: m.originalLine,
+        originalColumn: m.originalColumn,
+      };
+      if (m.nameIndex !== undefined) {
+        const mappedName = nameRemap.get(m.nameIndex);
+        if (mappedName !== undefined) {
+          shifted.nameIndex = mappedName;
+        }
+      }
+      mergedMappings.push(shifted);
+    }
+  }
+
+  mergedMappings.sort((a, b) =>
+    a.generatedLine !== b.generatedLine
+      ? a.generatedLine - b.generatedLine
+      : a.generatedColumn - b.generatedColumn
+  );
+
+  const flat: RawSourceMap = {
+    version: rawMap.version ?? 3,
+    sources: mergedSources,
+    names: mergedNames,
+    mappings: encodeMappings(mergedMappings),
+  };
+  if (rawMap.file !== undefined) flat.file = rawMap.file;
+  if (rawMap.sourceRoot !== undefined) flat.sourceRoot = rawMap.sourceRoot;
+  if (hasAnySourcesContent) flat.sourcesContent = mergedSourcesContent;
+  const debugId = rawMap.debugId ?? rawMap.debug_id;
+  if (debugId) flat.debugId = debugId;
+
+  return { map: flat, malformedCount: totalMalformed };
+}
+
+export function flattenSourceMapSections(rawMap: AnySourceMap): RawSourceMap {
+  return flattenSourceMapSectionsWithStats(rawMap).map;
+}
+
+export function decodeMappings(mappingsOrMap: string | AnySourceMap): {
+  mappings: DecodedMapping[];
+  malformedCount: number;
+} {
+  if (typeof mappingsOrMap === 'string') {
+    return decodeMappingsString(mappingsOrMap);
+  }
+  if (!mappingsOrMap || typeof mappingsOrMap !== 'object') {
+    return { mappings: [], malformedCount: 0 };
+  }
+  const { map, malformedCount } = flattenSourceMapSectionsWithStats(mappingsOrMap);
+  const decoded = decodeMappingsString(map.mappings);
+  return {
+    mappings: decoded.mappings,
+    malformedCount: malformedCount + decoded.malformedCount,
+  };
+}
+
 export function encodeMappings(decoded: DecodedMapping[]): string {
   if (decoded.length === 0) return '';
 
@@ -195,6 +369,24 @@ export function encodeMappings(decoded: DecodedMapping[]): string {
   return lineBuckets.map((segs) => segs.join(',')).join(';');
 }
 
+function ensureSortedMappings(mappings: DecodedMapping[]): DecodedMapping[] {
+  for (let i = 1; i < mappings.length; i++) {
+    const prev = mappings[i - 1];
+    const curr = mappings[i];
+    if (
+      curr.generatedLine < prev.generatedLine ||
+      (curr.generatedLine === prev.generatedLine && curr.generatedColumn < prev.generatedColumn)
+    ) {
+      return [...mappings].sort((a, b) =>
+        a.generatedLine !== b.generatedLine
+          ? a.generatedLine - b.generatedLine
+          : a.generatedColumn - b.generatedColumn
+      );
+    }
+  }
+  return mappings;
+}
+
 function findMappingAt(
   mappings: DecodedMapping[],
   line0: number,
@@ -220,9 +412,33 @@ function findMappingAt(
   return best;
 }
 
-export function chainSourceMaps(mapB: RawSourceMap, mapA: RawSourceMap): RawSourceMap {
-  const decodedB = decodeMappings(mapB.mappings).mappings;
-  const decodedA = decodeMappings(mapA.mappings).mappings;
+export function shiftSourceMapLines(map: RawSourceMap, lineOffset: number): RawSourceMap {
+  if (lineOffset <= 0 || !map.mappings) {
+    return map;
+  }
+  return {
+    ...map,
+    mappings: `${';'.repeat(lineOffset)}${map.mappings}`,
+  };
+}
+
+export function computeDeterministicDebugId(code: string, mappings = ''): string {
+  const hash = crypto.createHash('sha256').update(code, 'utf8');
+  if (mappings) {
+    hash.update('\0', 'utf8').update(mappings, 'utf8');
+  }
+  const bytes = hash.digest();
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.subarray(0, 16).toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+export function chainSourceMaps(mapB: AnySourceMap, mapA: AnySourceMap): RawSourceMap {
+  const flatB = flattenSourceMapSections(mapB);
+  const flatA = flattenSourceMapSections(mapA);
+  const decodedB = ensureSortedMappings(decodeMappingsString(flatB.mappings).mappings);
+  const decodedA = ensureSortedMappings(decodeMappingsString(flatA.mappings).mappings);
   const chained: DecodedMapping[] = [];
 
   for (const mB of decodedB) {
@@ -239,14 +455,14 @@ export function chainSourceMaps(mapB: RawSourceMap, mapA: RawSourceMap): RawSour
     }
   }
 
-  const debugId = mapA.debugId ?? mapA.debug_id ?? mapB.debugId ?? mapB.debug_id;
+  const debugId = flatA.debugId ?? flatA.debug_id ?? flatB.debugId ?? flatB.debug_id;
   const result: RawSourceMap = {
     version: 3,
-    file: mapB.file ?? mapA.file,
-    sourceRoot: mapA.sourceRoot,
-    sources: [...mapA.sources],
-    sourcesContent: mapA.sourcesContent ? [...mapA.sourcesContent] : undefined,
-    names: [...mapA.names],
+    file: flatB.file ?? flatA.file,
+    sourceRoot: flatA.sourceRoot,
+    sources: [...flatA.sources],
+    sourcesContent: flatA.sourcesContent ? [...flatA.sourcesContent] : undefined,
+    names: [...flatA.names],
     mappings: encodeMappings(chained),
   };
   if (debugId) {
@@ -256,7 +472,7 @@ export function chainSourceMaps(mapB: RawSourceMap, mapA: RawSourceMap): RawSour
 }
 
 export function resolvePosition(
-  map: RawSourceMap,
+  map: AnySourceMap,
   line1Based: number,
   column1Based: number
 ): {
@@ -266,24 +482,42 @@ export function resolvePosition(
   name?: string;
   malformedCount: number;
 } {
-  const { mappings, malformedCount } = decodeMappings(map.mappings);
-  const match = findMappingAt(mappings, Math.max(0, line1Based - 1), Math.max(0, column1Based - 1));
+  const { map: flatMap, malformedCount: flattenMalformed } = flattenSourceMapSectionsWithStats(map);
+  const { mappings, malformedCount: decodeMalformed } = decodeMappingsString(flatMap.mappings);
+  const malformedCount = flattenMalformed + decodeMalformed;
+  const sortedMappings = ensureSortedMappings(mappings);
+  const match = findMappingAt(
+    sortedMappings,
+    Math.max(0, line1Based - 1),
+    Math.max(0, column1Based - 1)
+  );
   if (!match) {
     return { malformedCount };
   }
-  const rawSource = map.sources[match.sourceIndex];
-  const source =
-    map.sourceRoot && rawSource && !rawSource.startsWith(map.sourceRoot)
-      ? `${map.sourceRoot.replace(/\/$/, '')}/${rawSource.replace(/^\//, '')}`
-      : rawSource;
+  const rawSource = flatMap.sources[match.sourceIndex];
+  const source = resolveSourceWithRoot(rawSource, flatMap.sourceRoot);
 
   return {
     source,
     line: match.originalLine + 1,
     column: match.originalColumn + 1,
-    name: match.nameIndex !== undefined ? map.names[match.nameIndex] : undefined,
+    name: match.nameIndex !== undefined ? flatMap.names[match.nameIndex] : undefined,
     malformedCount,
   };
+}
+
+export function safeDecodeURIComponent(input: string): string {
+  try {
+    return decodeURIComponent(input);
+  } catch {
+    return input.replace(/%[0-9A-Fa-f]{2}/g, (seq) => {
+      try {
+        return decodeURIComponent(seq);
+      } catch {
+        return seq;
+      }
+    });
+  }
 }
 
 function collectMapFiles(mapsDir: string): string[] {
@@ -309,34 +543,96 @@ function collectMapFiles(mapsDir: string): string[] {
   return results;
 }
 
-function findMatchingMapFile(fileRef: string, mapsDir: string, allMaps: string[]): string | undefined {
+function normalizeFileRefCandidates(fileRef: string): string[] {
   let cleanRef = fileRef.trim();
   try {
-    if (/^https?:\/\//i.test(cleanRef)) {
+    if (/^(?:https?|file):\/\//i.test(cleanRef)) {
       cleanRef = new URL(cleanRef).pathname;
     }
   } catch {
     // keep cleanRef as-is
   }
-  cleanRef = cleanRef.split('?')[0].split('#')[0].replace(/\\/g, '/').replace(/^\/+/, '');
-  const targetMapName = `${path.posix.basename(cleanRef)}.map`;
+  cleanRef = cleanRef.split('?')[0].split('#')[0].replace(/\\/g, '/');
+  // Strip Windows drive prefix (e.g. /C:/... or C:/...)
+  cleanRef = cleanRef.replace(/^\/+([A-Za-z]:\/)/, '$1').replace(/^\/+/, '');
+  const decodedRef = safeDecodeURIComponent(cleanRef).replace(/\\/g, '/').replace(/^\/+/, '');
 
-  const exactCandidate = path.join(mapsDir, `${cleanRef}.map`);
-  if (fs.existsSync(exactCandidate)) {
-    return exactCandidate;
+  const variants = new Set<string>();
+  for (const raw of [decodedRef, cleanRef]) {
+    if (!raw) continue;
+    variants.add(raw);
+    const withoutDrive = raw.replace(/^[A-Za-z]:\//, '');
+    variants.add(withoutDrive);
+    for (const v of [raw, withoutDrive]) {
+      const nextStripped = v.replace(
+        /^(?:.*\/)?(?:_next\/static\/chunks\/|_next\/static\/|_next\/|static\/chunks\/|static\/)/,
+        ''
+      );
+      if (nextStripped) variants.add(nextStripped);
+      const chunksIdx = v.indexOf('/chunks/');
+      if (chunksIdx !== -1) {
+        variants.add(v.slice(chunksIdx + '/chunks/'.length));
+      }
+    }
   }
+  return Array.from(variants).filter(Boolean);
+}
 
-  for (const mapPath of allMaps) {
-    const rel = path.relative(mapsDir, mapPath).replace(/\\/g, '/');
-    if (rel === `${cleanRef}.map` || rel.endsWith(`/${cleanRef}.map`) || cleanRef.endsWith(`/${rel.slice(0, -4)}`)) {
-      return mapPath;
+function findMatchingMapFile(fileRef: string, mapsDir: string, allMaps: string[]): string | undefined {
+  const candidates = normalizeFileRefCandidates(fileRef);
+
+  for (const cand of candidates) {
+    const exactCandidate = path.join(mapsDir, `${cand}.map`);
+    if (fs.existsSync(exactCandidate)) {
+      return exactCandidate;
     }
   }
 
-  return allMaps.find((m) => path.basename(m) === targetMapName);
+  for (const mapPath of allMaps) {
+    const relRaw = path.relative(mapsDir, mapPath).replace(/\\/g, '/');
+    const relDecoded = safeDecodeURIComponent(relRaw);
+    for (const rel of [relDecoded, relRaw]) {
+      const relNoMap = rel.slice(0, -4);
+      for (const cand of candidates) {
+        if (
+          rel === `${cand}.map` ||
+          rel.endsWith(`/${cand}.map`) ||
+          cand.endsWith(`/${relNoMap}`) ||
+          cand === relNoMap
+        ) {
+          return mapPath;
+        }
+      }
+    }
+  }
+
+  const baseNames = new Set(candidates.map((c) => `${path.posix.basename(c)}.map`));
+  return allMaps.find((m) => {
+    const base = path.basename(m);
+    return baseNames.has(base) || baseNames.has(safeDecodeURIComponent(base));
+  });
 }
 
+const V8_PARENS_FRAME_REGEX = /^\s*at\s+(?:.+?\s+\()(.+):(\d+):(\d+)\)\s*$/;
+const V8_BARE_FRAME_REGEX = /^\s*at\s+(.+?):(\d+):(\d+)\s*$/;
+const FIREFOX_FRAME_REGEX = /^[^@]*@(.+?):(\d+):(\d+)\s*$/;
 const STACK_FRAME_REGEX = /(?:at\s+(?:[^(]+\s+\()?|\@)([^\s()]+?):(\d+):(\d+)\)?/;
+
+function parseStackFrame(rawLine: string): { fileRef: string; lineNum: number; colNum: number } | null {
+  const match =
+    rawLine.match(V8_PARENS_FRAME_REGEX) ??
+    rawLine.match(V8_BARE_FRAME_REGEX) ??
+    rawLine.match(FIREFOX_FRAME_REGEX) ??
+    rawLine.match(STACK_FRAME_REGEX);
+  if (!match) {
+    return null;
+  }
+  return {
+    fileRef: match[1],
+    lineNum: Number(match[2]),
+    colNum: Number(match[3]),
+  };
+}
 
 export async function symbolicateStackTrace(
   options: SymbolicateOptions
@@ -356,20 +652,25 @@ export async function symbolicateStackTrace(
   const outputLines: string[] = [];
 
   for (const rawLine of lines) {
-    const match = rawLine.match(STACK_FRAME_REGEX);
-    if (!match) {
+    const parsedFrame = parseStackFrame(rawLine);
+    if (!parsedFrame) {
       frames.push({ raw: rawLine, resolved: false });
       outputLines.push(rawLine);
       continue;
     }
 
-    const fileRef = match[1];
-    const lineNum = Number(match[2]);
-    const colNum = Number(match[3]);
+    const { fileRef, lineNum, colNum } = parsedFrame;
+    const normalizedFrameFile = safeDecodeURIComponent(fileRef).replace(/\\/g, '/');
 
     const mapPath = findMatchingMapFile(fileRef, mapsDir, allMaps);
     if (!mapPath) {
-      frames.push({ raw: rawLine, file: fileRef, line: lineNum, column: colNum, resolved: false });
+      frames.push({
+        raw: rawLine,
+        file: normalizedFrameFile,
+        line: lineNum,
+        column: colNum,
+        resolved: false,
+      });
       outputLines.push(rawLine);
       continue;
     }
@@ -377,7 +678,10 @@ export async function symbolicateStackTrace(
     let parsedMap = mapCache.get(mapPath);
     if (parsedMap === undefined) {
       try {
-        parsedMap = JSON.parse(fs.readFileSync(mapPath, 'utf8')) as RawSourceMap;
+        const rawJson = JSON.parse(fs.readFileSync(mapPath, 'utf8')) as AnySourceMap;
+        parsedMap = Array.isArray(rawJson?.sections)
+          ? flattenSourceMapSections(rawJson)
+          : (rawJson as RawSourceMap);
       } catch {
         parsedMap = null;
         warnings.push(`Failed to parse source map "${mapPath}".`);
@@ -386,7 +690,13 @@ export async function symbolicateStackTrace(
     }
 
     if (!parsedMap || typeof parsedMap.mappings !== 'string' || !Array.isArray(parsedMap.sources)) {
-      frames.push({ raw: rawLine, file: fileRef, line: lineNum, column: colNum, resolved: false });
+      frames.push({
+        raw: rawLine,
+        file: normalizedFrameFile,
+        line: lineNum,
+        column: colNum,
+        resolved: false,
+      });
       outputLines.push(rawLine);
       continue;
     }
@@ -397,14 +707,20 @@ export async function symbolicateStackTrace(
     }
 
     if (!pos.source || pos.line === undefined || pos.column === undefined) {
-      frames.push({ raw: rawLine, file: fileRef, line: lineNum, column: colNum, resolved: false });
+      frames.push({
+        raw: rawLine,
+        file: normalizedFrameFile,
+        line: lineNum,
+        column: colNum,
+        resolved: false,
+      });
       outputLines.push(rawLine);
       continue;
     }
 
     frames.push({
       raw: rawLine,
-      file: fileRef,
+      file: normalizedFrameFile,
       line: lineNum,
       column: colNum,
       originalSource: pos.source,

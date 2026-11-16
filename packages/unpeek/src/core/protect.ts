@@ -5,13 +5,27 @@ import type { ProtectOptions, ProtectSummary, UnpeekDiagnostic } from './types.j
 import type { InternalShieldPayload, InternalTransformOptions } from '../internal/types.js';
 import type { UnpeekProfile } from '../config.js';
 import { loadUnpeekConfig } from '../config.js';
-import { detectTargetFramework, scanClientBundles } from './detector.js';
 import {
-  DEBUG_ID_COMMENT_REGEX,
+  detectTargetFramework,
+  isWorkerOrServiceWorkerFile,
+  scanClientBundles,
+} from './detector.js';
+import {
   extractDebugId,
   relocateSourceMaps,
+  replaceOrAppendDebugId,
+  stripDebugIdComments,
   stripSourceMapComments,
 } from './sourcemap-vault.js';
+import {
+  type AnySourceMap,
+  type RawSourceMap,
+  chainSourceMaps,
+  computeDeterministicDebugId,
+  flattenSourceMapSections,
+  safeDecodeURIComponent,
+  shiftSourceMapLines,
+} from './vlq.js';
 import { computeFnv1aHash, transformJavaScript } from '../ast/index.js';
 import { generateRuntimeShield } from '../runtime/index.js';
 import { deriveWindowKeySymbol } from '../internal/runtime.js';
@@ -19,20 +33,213 @@ import { UnpeekError } from '../shared/errors.js';
 
 const ENTRY_PATTERN = /^(?:webpack|main|index|runtime|turbopack|pages\/_app|pages\/index)(?:[-._/]|$)/i;
 
-function isEntryChunk(relPath: string, index: number, allRelPaths: string[]): boolean {
+function normalizeManifestRel(fileRef: string): string[] {
+  const clean = fileRef
+    .replace(/\\/g, '/')
+    .split('?')[0]
+    .split('#')[0]
+    .replace(/^\/+/, '');
+  const stripped = clean.replace(
+    /^(?:_next\/static\/chunks\/|_next\/static\/|_next\/|static\/chunks\/|static\/|assets\/)/,
+    ''
+  );
+  return stripped && stripped !== clean ? [clean, stripped] : [clean];
+}
+
+function addManifestEntryCandidates(
+  outDir: string,
+  manifestRootDir: string,
+  fileRef: string,
+  target: Set<string>
+): void {
+  const clean = fileRef.replace(/\\/g, '/').split('?')[0].split('#')[0].replace(/^\/+/, '');
+  if (!clean) return;
+  const absFromRoot = path.resolve(manifestRootDir, clean);
+  const relFromOut = path.relative(outDir, absFromRoot).replace(/\\/g, '/');
+  if (relFromOut && !relFromOut.startsWith('..') && !path.isAbsolute(relFromOut)) {
+    target.add(relFromOut);
+  }
+  for (const variant of normalizeManifestRel(clean)) {
+    target.add(variant);
+  }
+}
+
+function collectManifestEntryFiles(
+  outDir: string,
+  cwd: string,
+  config?: { next?: { distDir?: string }; vite?: { outDir?: string } }
+): Set<string> {
+  const entries = new Set<string>();
+  const nextDist = config?.next?.distDir ?? '.next';
+  const viteOut = config?.vite?.outDir ?? 'dist';
+
+  const nextManifestCandidates = Array.from(
+    new Set([
+      path.join(outDir, 'build-manifest.json'),
+      path.join(outDir, '..', 'build-manifest.json'),
+      path.join(outDir, '..', '..', 'build-manifest.json'),
+      path.join(cwd, nextDist, 'build-manifest.json'),
+    ])
+  );
+
+  for (const manifestPath of nextManifestCandidates) {
+    if (!fs.existsSync(manifestPath)) continue;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+        rootMainFiles?: unknown;
+        pages?: Record<string, unknown>;
+      };
+      const manifestDir = path.dirname(manifestPath);
+      const hasRootMain = Array.isArray(parsed.rootMainFiles) && parsed.rootMainFiles.length > 0;
+      if (Array.isArray(parsed.rootMainFiles)) {
+        for (const item of parsed.rootMainFiles) {
+          if (typeof item === 'string') {
+            addManifestEntryCandidates(outDir, manifestDir, item, entries);
+          }
+        }
+      }
+      if (parsed.pages && typeof parsed.pages === 'object') {
+        const priorityKeys = ['/_app', '/', '/index'].filter((k) =>
+          Array.isArray(parsed.pages?.[k])
+        );
+        const pageLists =
+          priorityKeys.length > 0
+            ? priorityKeys.map((k) => parsed.pages![k])
+            : !hasRootMain
+              ? Object.values(parsed.pages)
+              : [];
+        for (const list of pageLists) {
+          if (!Array.isArray(list)) continue;
+          for (const item of list) {
+            if (typeof item === 'string') {
+              addManifestEntryCandidates(outDir, manifestDir, item, entries);
+            }
+          }
+        }
+      }
+      break;
+    } catch {
+      // ignore malformed build-manifest.json
+    }
+  }
+
+  const viteManifestCandidates = Array.from(
+    new Set([
+      path.join(outDir, '.vite', 'manifest.json'),
+      path.join(outDir, '..', '.vite', 'manifest.json'),
+      path.join(cwd, viteOut, '.vite', 'manifest.json'),
+      path.join(outDir, 'manifest.json'),
+      path.join(outDir, '..', 'manifest.json'),
+    ])
+  );
+
+  for (const manifestPath of viteManifestCandidates) {
+    if (!fs.existsSync(manifestPath)) continue;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== 'object') continue;
+      // Avoid confusing Next.js or unpeek vault manifests with Vite manifests
+      const manifestDir =
+        path.basename(path.dirname(manifestPath)) === '.vite'
+          ? path.dirname(path.dirname(manifestPath))
+          : path.dirname(manifestPath);
+      let matchedViteShape = false;
+      for (const val of Object.values(parsed)) {
+        if (
+          val &&
+          typeof val === 'object' &&
+          'file' in val &&
+          typeof (val as { file?: unknown }).file === 'string'
+        ) {
+          matchedViteShape = true;
+          if ((val as { isEntry?: boolean }).isEntry) {
+            addManifestEntryCandidates(
+              outDir,
+              manifestDir,
+              (val as { file: string }).file,
+              entries
+            );
+          }
+        }
+      }
+      if (matchedViteShape) break;
+    } catch {
+      // ignore malformed Vite manifest
+    }
+  }
+
+  return entries;
+}
+
+function matchesManifestEntry(relPath: string, manifestEntries: Set<string>): boolean {
+  if (manifestEntries.size === 0) return false;
+  for (const candidate of normalizeManifestRel(relPath)) {
+    if (manifestEntries.has(candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isEntryChunk(
+  relPath: string,
+  index: number,
+  allRelPaths: string[],
+  manifestEntries: Set<string>,
+  isWorkerTarget: boolean
+): boolean {
   const norm = relPath.replace(/\\/g, '/');
   const base = path.basename(norm);
+  if (isWorkerTarget && isWorkerOrServiceWorkerFile(norm)) {
+    return true;
+  }
+  if (matchesManifestEntry(norm, manifestEntries)) {
+    return true;
+  }
   if (ENTRY_PATTERN.test(norm) || ENTRY_PATTERN.test(base)) {
     return true;
   }
-  const hasAnyPatternMatch = allRelPaths.some((p) => {
+  const hasAnyKnownEntry = allRelPaths.some((p) => {
     const n = p.replace(/\\/g, '/');
-    return ENTRY_PATTERN.test(n) || ENTRY_PATTERN.test(path.basename(n));
+    return (
+      matchesManifestEntry(n, manifestEntries) ||
+      ENTRY_PATTERN.test(n) ||
+      ENTRY_PATTERN.test(path.basename(n))
+    );
   });
-  if (!hasAnyPatternMatch && index === 0) {
+  if (!hasAnyKnownEntry && index === 0) {
     return true;
   }
   return false;
+}
+
+function readOriginalSourceMapForFile(
+  filePath: string,
+  relPath: string,
+  vaultDir: string,
+  deferVaultWrites: boolean
+): AnySourceMap | undefined {
+  const candidates: string[] = [];
+  if (deferVaultWrites) {
+    candidates.push(`${filePath}.map`);
+  }
+  candidates.push(path.join(vaultDir, `${relPath}.map`));
+  const decodedRel = safeDecodeURIComponent(relPath);
+  if (decodedRel !== relPath) {
+    candidates.push(path.join(vaultDir, `${decodedRel}.map`));
+  }
+  for (const cand of candidates) {
+    if (!fs.existsSync(cand)) continue;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(cand, 'utf8')) as AnySourceMap;
+      if (parsed && typeof parsed === 'object') {
+        return parsed;
+      }
+    } catch {
+      // ignore malformed .map JSON
+    }
+  }
+  return undefined;
 }
 
 export async function protectProject(options: ProtectOptions = {}): Promise<ProtectSummary> {
@@ -76,6 +283,8 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
   });
   const clientFiles = scanClientBundles(outDir, config);
   const allRelPaths = clientFiles.map((f) => path.relative(outDir, f).replace(/\\/g, '/'));
+  const manifestEntries = collectManifestEntryFiles(outDir, cwd, config);
+  const isWorkerTarget = config.target === 'worker';
 
   let originalBytes = 0;
   let protectedBytes = 0;
@@ -99,7 +308,7 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
   const allOrigBufs: Buffer[] = [];
   const allProtBufs: Buffer[] = [];
   const stagedFiles: Array<{ tmpPath: string; finalPath: string }> = [];
-  const pendingDebugIds: Array<{ relPath: string; debugId: string }> = [];
+  const pendingVaultMaps: Array<{ relPath: string; map?: RawSourceMap; debugId?: string }> = [];
 
   let originalGzipBytes = 0;
   let protectedGzipBytes = 0;
@@ -125,7 +334,7 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
       allOrigBufs.push(origBuf);
 
       const relPath = allRelPaths[i];
-      const isEntry = isEntryChunk(relPath, i, allRelPaths);
+      const isEntry = isEntryChunk(relPath, i, allRelPaths, manifestEntries, isWorkerTarget);
       const shouldInjectShield = injectRuntimeShield && isEntry;
       const fileSeed = computeFnv1aHash(`${relPath}:${i}`, seed);
       const transformOptions: InternalTransformOptions = {
@@ -143,6 +352,9 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
         scrubPaths,
         config,
       };
+      (transformOptions as { generateMap?: boolean; rootDir?: string }).generateMap =
+        keepPrivateMaps;
+      (transformOptions as { generateMap?: boolean; rootDir?: string }).rootDir = cwd;
       const result = transformJavaScript(codeToTransform, transformOptions);
 
       if (result.skippedReason === 'parse-error') {
@@ -169,27 +381,55 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
       }
 
       let finalCode = result.code;
+      let preambleLineOffset = 0;
       if (
         shouldInjectShield &&
         masterShield?.preambleCode &&
-        !finalCode.includes('__unpeek_tampered') &&
         !finalCode.includes(masterShield.integrityCheckFnName) &&
         !finalCode.startsWith(masterShield.preambleCode)
       ) {
-        finalCode = `${masterShield.preambleCode}\n${finalCode}`;
+        const prefix = `${masterShield.preambleCode}\n`;
+        preambleLineOffset = (prefix.match(/\n/g) ?? []).length;
+        finalCode = `${prefix}${finalCode}`;
       }
 
-      const effectiveDebugId = result.debugId ?? fileDebugId;
-      if (effectiveDebugId) {
-        if (!DEBUG_ID_COMMENT_REGEX.test(finalCode)) {
-          const suffix = finalCode.length > 0 && !finalCode.endsWith('\n') ? '\n' : '';
-          finalCode = `${finalCode}${suffix}//# debugId=${effectiveDebugId}\n`;
+      const originalMap = keepPrivateMaps
+        ? readOriginalSourceMapForFile(filePath, relPath, vaultResult.vaultDir, deferVaultWrites)
+        : undefined;
+      const rawTransformMap = (result as { sourceMap?: RawSourceMap }).sourceMap;
+      const shiftedTransformMap = rawTransformMap
+        ? shiftSourceMapLines(rawTransformMap, preambleLineOffset)
+        : undefined;
+
+      let composedMap: RawSourceMap | undefined;
+      if (shiftedTransformMap && originalMap) {
+        composedMap = chainSourceMaps(shiftedTransformMap, originalMap);
+      } else if (originalMap) {
+        composedMap = flattenSourceMapSections(originalMap);
+      } else if (shiftedTransformMap) {
+        composedMap = shiftedTransformMap;
+      }
+
+      const originalMapDebugId = originalMap?.debugId ?? originalMap?.debug_id;
+      const hadDebugId = Boolean(fileDebugId || originalMapDebugId || result.debugId);
+      let mintedDebugId: string | undefined;
+
+      if (hadDebugId) {
+        const codeWithoutDebugId = stripDebugIdComments(finalCode);
+        mintedDebugId = computeDeterministicDebugId(
+          codeWithoutDebugId,
+          composedMap?.mappings ?? ''
+        );
+        finalCode = replaceOrAppendDebugId(codeWithoutDebugId, mintedDebugId);
+        if (composedMap) {
+          composedMap.debugId = mintedDebugId;
+          delete composedMap.debug_id;
         }
         debugIdsPreserved++;
+      }
 
-        if (!dryRun && keepPrivateMaps) {
-          pendingDebugIds.push({ relPath, debugId: effectiveDebugId });
-        }
+      if (!dryRun && keepPrivateMaps && (composedMap || mintedDebugId)) {
+        pendingVaultMaps.push({ relPath, map: composedMap, debugId: mintedDebugId });
       }
 
       if (!dryRun) {
@@ -245,18 +485,32 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
         vaultResult.movedFiles = finalVaultResult.movedFiles;
         vaultResult.dockerIgnoreMissing = finalVaultResult.dockerIgnoreMissing;
       }
-      for (const { relPath, debugId } of pendingDebugIds) {
+      for (const { relPath, map, debugId } of pendingVaultMaps) {
         const vaultedMapPath = path.join(vaultResult.vaultDir, `${relPath}.map`);
-        if (fs.existsSync(vaultedMapPath)) {
+        const decodedMapPath = path.join(
+          vaultResult.vaultDir,
+          `${safeDecodeURIComponent(relPath)}.map`
+        );
+        const targetMapPath = fs.existsSync(vaultedMapPath)
+          ? vaultedMapPath
+          : fs.existsSync(decodedMapPath)
+            ? decodedMapPath
+            : vaultedMapPath;
+        if (map && fs.existsSync(targetMapPath)) {
           try {
-            const mapJson = JSON.parse(fs.readFileSync(vaultedMapPath, 'utf8')) as Record<
+            fs.writeFileSync(targetMapPath, JSON.stringify(map), 'utf8');
+          } catch {
+            // ignore write error on vaulted map
+          }
+        } else if (debugId && fs.existsSync(targetMapPath)) {
+          try {
+            const mapJson = JSON.parse(fs.readFileSync(targetMapPath, 'utf8')) as Record<
               string,
               unknown
             >;
-            if (!mapJson.debugId) {
-              mapJson.debugId = debugId;
-              fs.writeFileSync(vaultedMapPath, JSON.stringify(mapJson), 'utf8');
-            }
+            mapJson.debugId = debugId;
+            delete mapJson.debug_id;
+            fs.writeFileSync(targetMapPath, JSON.stringify(mapJson), 'utf8');
           } catch {
             // ignore malformed map JSON
           }

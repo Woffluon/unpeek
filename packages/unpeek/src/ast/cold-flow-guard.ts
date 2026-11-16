@@ -1,220 +1,49 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
 
-function createDecoyObjectExpression(model: number): acorn.ObjectExpression {
-  const m = Math.abs(model) % 3;
-  if (m === 0) {
-    // Model 0: Sahte yetkilendirme baypası (/api/v2/auth/admin-bypass, superadmin_token, elevate)
-    return {
-      type: 'ObjectExpression',
-      properties: [
-        {
-          type: 'Property',
-          key: { type: 'Identifier', name: 'endpoint' },
-          value: {
-            type: 'Literal',
-            value: '/api/v2/auth/admin-bypass',
-            raw: '"/api/v2/auth/admin-bypass"',
-          },
-          kind: 'init',
-          computed: false,
-          method: false,
-          shorthand: false,
-        },
-        {
-          type: 'Property',
-          key: { type: 'Identifier', name: 'superadmin_token' },
-          value: { type: 'Literal', value: 1, raw: '1' },
-          kind: 'init',
-          computed: false,
-          method: false,
-          shorthand: false,
-        },
-        {
-          type: 'Property',
-          key: { type: 'Identifier', name: 'elevate' },
-          value: { type: 'Literal', value: 1, raw: '1' },
-          kind: 'init',
-          computed: false,
-          method: false,
-          shorthand: false,
-        },
-      ],
-    } as unknown as acorn.ObjectExpression;
-  }
+export type ColdReturnDomain = 'number' | 'boolean' | 'string' | 'void' | 'object';
 
-  if (m === 1) {
-    // Model 1: Sahte master JWT doğrulama (_verifyMasterToken, mock_jwt_bypass_signature, authorized: true)
-    return {
-      type: 'ObjectExpression',
-      properties: [
-        {
-          type: 'Property',
-          key: { type: 'Identifier', name: 'endpoint' },
-          value: {
-            type: 'Literal',
-            value: '/api/v2/auth/verify-master',
-            raw: '"/api/v2/auth/verify-master"',
-          },
-          kind: 'init',
-          computed: false,
-          method: false,
-          shorthand: false,
-        },
-        {
-          type: 'Property',
-          key: { type: 'Identifier', name: '_verifyMasterToken' },
-          value: { type: 'Literal', value: true, raw: 'true' },
-          kind: 'init',
-          computed: false,
-          method: false,
-          shorthand: false,
-        },
-        {
-          type: 'Property',
-          key: { type: 'Identifier', name: '_bypassToken' },
-          value: {
-            type: 'Literal',
-            value: 'mock_jwt_bypass_signature',
-            raw: '"mock_jwt_bypass_signature"',
-          },
-          kind: 'init',
-          computed: false,
-          method: false,
-          shorthand: false,
-        },
-        {
-          type: 'Property',
-          key: { type: 'Identifier', name: 'authorized' },
-          value: { type: 'Literal', value: true, raw: 'true' },
-          kind: 'init',
-          computed: false,
-          method: false,
-          shorthand: false,
-        },
-      ],
-    } as unknown as acorn.ObjectExpression;
-  }
-
-  // Model 2: Sahte telemetri hata ayıklama ve süpervizör anahtarı (debug_supervisor_override, mfa_bypassed: true)
-  return {
-    type: 'ObjectExpression',
-    properties: [
-      {
-        type: 'Property',
-        key: { type: 'Identifier', name: 'endpoint' },
-        value: {
-          type: 'Literal',
-          value: '/api/v2/auth/debug-telemetry',
-          raw: '"/api/v2/auth/debug-telemetry"',
-        },
-        kind: 'init',
-        computed: false,
-        method: false,
-        shorthand: false,
-      },
-      {
-        type: 'Property',
-        key: { type: 'Identifier', name: 'debug_supervisor_override' },
-        value: { type: 'Literal', value: true, raw: 'true' },
-        kind: 'init',
-        computed: false,
-        method: false,
-        shorthand: false,
-      },
-      {
-        type: 'Property',
-        key: { type: 'Identifier', name: '_bypassToken' },
-        value: {
-          type: 'Literal',
-          value: 'superadmin_token',
-          raw: '"superadmin_token"',
-        },
-        kind: 'init',
-        computed: false,
-        method: false,
-        shorthand: false,
-      },
-      {
-        type: 'Property',
-        key: { type: 'Identifier', name: 'mfa_bypassed' },
-        value: { type: 'Literal', value: true, raw: 'true' },
-        kind: 'init',
-        computed: false,
-        method: false,
-        shorthand: false,
-      },
-    ],
-  } as unknown as acorn.ObjectExpression;
+export interface Mba4Constants {
+  c1: number;
+  m1: number;
+  c2: number;
+  m2: number;
+  k: number;
+  cFold: number;
 }
 
-function createDecoyConsequent(fnIndex: number): any {
-  return {
-    type: 'BlockStatement',
-    body: [
-      {
-        type: 'ReturnStatement',
-        argument: createDecoyObjectExpression(fnIndex),
-      },
-    ],
-  };
+export interface Mba4ContextOptions {
+  liveVars?: string[];
+  sboxIdent?: string;
+  aliasIdentA?: string;
+  aliasIdentB?: string;
+  scratchVarIdent?: string;
+  returnDomain?: ColdReturnDomain;
 }
 
-function createSharedDecoyConsequent(decoyIdent: string, fnIndex: number): any {
-  const model = Math.abs(fnIndex) % 3;
-  return {
-    type: 'BlockStatement',
-    body: [
-      {
-        type: 'ReturnStatement',
-        argument: {
-          type: 'CallExpression',
-          callee: {
-            type: 'MemberExpression',
-            computed: true,
-            object: { type: 'Identifier', name: decoyIdent },
-            property: {
-              type: 'Literal',
-              value: model,
-              raw: String(model),
-            },
-          },
-          arguments: [],
-        },
-      },
-    ],
-  };
-}
+const NEUTRAL_DECOY_KEYS = [
+  'telemetryOk',
+  'retryBudget',
+  'slotMask',
+  'frameSeq',
+  'digestTag',
+  'phaseFlag',
+  'epochSync',
+  'crcState',
+  'gateReady',
+  'bufVer',
+  'traceCode',
+  'windowMode',
+];
 
-export function createSharedDecoyDeclaration(
-  decoyIdent = '_d',
-  maxModels = 3
-): acorn.VariableDeclaration {
-  const count = Math.max(1, Math.min(3, maxModels));
-  const indices: number[] = [];
-  for (let i = 0; i < count; i++) indices.push(i);
-  return {
-    type: 'VariableDeclaration',
-    kind: 'var',
-    declarations: [
-      {
-        type: 'VariableDeclarator',
-        id: { type: 'Identifier', name: decoyIdent },
-        init: {
-          type: 'ArrayExpression',
-          elements: indices.map((m) => ({
-            type: 'ArrowFunctionExpression',
-            id: null,
-            params: [],
-            body: createDecoyObjectExpression(m),
-            generator: false,
-            async: false,
-            expression: true,
-          })),
-        },
-      },
-    ],
-  } as unknown as acorn.VariableDeclaration;
+function mixSeed32(seed: number, salt: number): number {
+  let h = (seed ^ Math.imul(salt + 1, 0x9e3779b9)) >>> 0;
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b) >>> 0;
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35) >>> 0;
+  h ^= h >>> 16;
+  return h | 0;
 }
 
 function cloneNode<T>(node: T): T {
@@ -252,165 +81,665 @@ function makeUnary(operator: string, argument: any): any {
   };
 }
 
-function makeLiteral(value: number): any {
+function makeLiteral(value: number | string | boolean): any {
   return {
     type: 'Literal',
     value,
-    raw: String(value),
+    raw: JSON.stringify(value),
   };
 }
 
+function makeInt32Literal(value: number): any {
+  const signed = value | 0;
+  if (signed < 0) {
+    return makeUnary('-', makeLiteral(-signed));
+  }
+  return makeLiteral(signed);
+}
+
+function makeMemberIndex(arrayIdent: string, indexExpr: any): any {
+  return {
+    type: 'MemberExpression',
+    computed: true,
+    object: { type: 'Identifier', name: arrayIdent },
+    property: indexExpr,
+  };
+}
+
+/**
+ * Exact 32-bit semi-linear MBA family constants + folded bitwise offset C_fold.
+ * Families 0..3 implement distinct 4-variable affine forms over Z_{2^32}:
+ * - Family 0: x1 + x2 - x3 + 3*x4 + K
+ * - Family 1: x1 - x2 + 5*x3 + x4 + K
+ * - Family 2: 3*x1 + x2 + x3 - x4 + K
+ * - Family 3: -x1 + 7*x2 + x3 + x4 + K
+ */
+export function computeMba4Constants(
+  seed: number,
+  fnIndex: number,
+  family: number
+): Mba4Constants {
+  const f = ((family % 4) + 4) % 4;
+  const c1 = mixSeed32(seed, fnIndex * 7 + 11);
+  const m1 = mixSeed32(seed, fnIndex * 7 + 23);
+  const c2 = mixSeed32(seed, fnIndex * 7 + 37);
+  const m2 = mixSeed32(seed, fnIndex * 7 + 53);
+  const k = mixSeed32(seed, fnIndex * 7 + 71) | 1;
+
+  let offset = 0;
+  if (f === 0) {
+    offset = (c1 + m1 - 1 + c2 + Math.imul(3, m2)) | 0;
+  } else if (f === 1) {
+    offset = (c1 - 1 + m1 + Math.imul(5, c2) + m2) | 0;
+  } else if (f === 2) {
+    offset = (Math.imul(3, c1) + m1 + c2 - 1 + m2) | 0;
+  } else {
+    offset = (-1 + c1 + Math.imul(7, m1) + c2 + m2) | 0;
+  }
+  const cFold = (k - offset) | 0;
+  return { c1, m1, c2, m2, k, cFold };
+}
+
+export function evaluateMba4Target(
+  family: number,
+  x1: number,
+  x2: number,
+  x3: number,
+  x4: number,
+  k: number
+): number {
+  const f = ((family % 4) + 4) % 4;
+  const a = x1 | 0;
+  const b = x2 | 0;
+  const c = x3 | 0;
+  const d = x4 | 0;
+  if (f === 0) return (a + b - c + Math.imul(3, d) + k) | 0;
+  if (f === 1) return (a - b + Math.imul(5, c) + d + k) | 0;
+  if (f === 2) return (Math.imul(3, a) + b + c - d + k) | 0;
+  return (-a + Math.imul(7, b) + c + d + k) | 0;
+}
+
+export function evaluateMba4Formula(
+  family: number,
+  x1: number,
+  x2: number,
+  x3: number,
+  x4: number,
+  consts: Mba4Constants
+): number {
+  const f = ((family % 4) + 4) % 4;
+  const a = x1 | 0;
+  const b = x2 | 0;
+  const c = x3 | 0;
+  const d = x4 | 0;
+  const { c1, m1, c2, m2, cFold } = consts;
+
+  const addOr = (u: number, v: number) => ((u | v) + (u & v)) | 0;
+  const addXor = (u: number, v: number) => ((u ^ v) + ((u & v) << 1)) | 0;
+  const add2Or = (u: number, v: number) => (((u | v) << 1) - (u ^ v)) | 0;
+
+  if (f === 0) {
+    const u1 = addOr(a, c1);
+    const u2 = addXor(b, m1);
+    const s12 = addXor(u1, u2);
+    const n3 = addOr(~c, c2);
+    const t4 = Math.imul(3, addOr(d, m2));
+    const s123 = addOr(s12, n3);
+    const t4k = addXor(t4, cFold);
+    return addOr(s123, t4k);
+  }
+  if (f === 1) {
+    const u1 = addXor(a, c1);
+    const n2 = addXor(~b, m1);
+    const s12 = addOr(u1, n2);
+    const t3 = Math.imul(5, addXor(c, c2));
+    const u4 = addOr(d, m2);
+    const s34 = addOr(t3, u4);
+    const s34k = addOr(s34, cFold);
+    return addXor(s12, s34k);
+  }
+  if (f === 2) {
+    const t1 = Math.imul(3, addOr(a, c1));
+    const u2 = add2Or(b, m1);
+    const s12 = addOr(t1, u2);
+    const u3 = addXor(c, c2);
+    const n4 = addOr(~d, m2);
+    const s34 = addXor(u3, n4);
+    const s12k = addOr(s12, cFold);
+    return addOr(s12k, s34);
+  }
+  const n1 = addOr(~a, c1);
+  const t2 = Math.imul(7, addXor(b, m1));
+  const s12 = add2Or(n1, t2);
+  const u3 = addOr(c, c2);
+  const u4 = addXor(d, m2);
+  const s34 = addOr(u3, u4);
+  const s34k = addXor(s34, cFold);
+  return addOr(s12, s34k);
+}
+
+const MBA_CHECK_VECTORS: readonly [number, number, number, number][] = [
+  [0, 0, 0, 0],
+  [1, -1, 42, 0x7fffffff],
+  [-0x80000000, 0x55aa33cc, -12345, 999999],
+  [0x12345678, -0x23456789, 0xdeadbeef | 0, 0xcafebabe | 0],
+];
+
+export function verifyMba4FamilyEquivalence(
+  family: number,
+  consts: Mba4Constants
+): boolean {
+  for (const [x1, x2, x3, x4] of MBA_CHECK_VECTORS) {
+    const lhs = evaluateMba4Formula(family, x1, x2, x3, x4, consts);
+    const rhs = evaluateMba4Target(family, x1, x2, x3, x4, consts.k);
+    if (lhs !== rhs) return false;
+  }
+  return true;
+}
+
+function makeMbaAddOr(u: any, v: any): any {
+  return makeBinary(
+    '|',
+    makeBinary('+', makeBinary('|', cloneNode(u), cloneNode(v)), makeBinary('&', cloneNode(u), cloneNode(v))),
+    makeLiteral(0)
+  );
+}
+
+function makeMbaAddXor(u: any, v: any): any {
+  return makeBinary(
+    '|',
+    makeBinary(
+      '+',
+      makeBinary('^', cloneNode(u), cloneNode(v)),
+      makeBinary('<<', makeBinary('&', cloneNode(u), cloneNode(v)), makeLiteral(1))
+    ),
+    makeLiteral(0)
+  );
+}
+
+function makeMbaAdd2Or(u: any, v: any): any {
+  return makeBinary(
+    '|',
+    makeBinary(
+      '-',
+      makeBinary('<<', makeBinary('|', cloneNode(u), cloneNode(v)), makeLiteral(1)),
+      makeBinary('^', cloneNode(u), cloneNode(v))
+    ),
+    makeLiteral(0)
+  );
+}
+
+/**
+ * Builds a >=4-variable semi-linear MBA AST node with folded bitwise constants C_fold
+ * and verifies algebraic equivalence at compile time.
+ */
+export function buildMba4Ast(
+  seed: number,
+  fnIndex: number,
+  x1Node: any,
+  x2Node: any,
+  x3Node: any,
+  x4Node: any
+): any {
+  const family = Math.abs((seed ^ Math.imul(fnIndex + 1, 0x27d4eb2d)) % 4);
+  const consts = computeMba4Constants(seed, fnIndex, family);
+  if (!verifyMba4FamilyEquivalence(family, consts)) {
+    throw new Error(`MBA4 algebraic equivalence check failed for family ${family}`);
+  }
+
+  const c1Lit = makeInt32Literal(consts.c1);
+  const m1Lit = makeInt32Literal(consts.m1);
+  const c2Lit = makeInt32Literal(consts.c2);
+  const m2Lit = makeInt32Literal(consts.m2);
+  const cFoldLit = makeInt32Literal(consts.cFold);
+
+  if (family === 0) {
+    const u1 = makeMbaAddOr(x1Node, c1Lit);
+    const u2 = makeMbaAddXor(x2Node, m1Lit);
+    const s12 = makeMbaAddXor(u1, u2);
+    const n3 = makeMbaAddOr(makeUnary('~', cloneNode(x3Node)), c2Lit);
+    const t4 = makeImul(makeLiteral(3), makeMbaAddOr(x4Node, m2Lit));
+    const s123 = makeMbaAddOr(s12, n3);
+    const t4k = makeMbaAddXor(t4, cFoldLit);
+    return makeMbaAddOr(s123, t4k);
+  }
+  if (family === 1) {
+    const u1 = makeMbaAddXor(x1Node, c1Lit);
+    const n2 = makeMbaAddXor(makeUnary('~', cloneNode(x2Node)), m1Lit);
+    const s12 = makeMbaAddOr(u1, n2);
+    const t3 = makeImul(makeLiteral(5), makeMbaAddXor(x3Node, c2Lit));
+    const u4 = makeMbaAddOr(x4Node, m2Lit);
+    const s34 = makeMbaAddOr(t3, u4);
+    const s34k = makeMbaAddOr(s34, cFoldLit);
+    return makeMbaAddXor(s12, s34k);
+  }
+  if (family === 2) {
+    const t1 = makeImul(makeLiteral(3), makeMbaAddOr(x1Node, c1Lit));
+    const u2 = makeMbaAdd2Or(x2Node, m1Lit);
+    const s12 = makeMbaAddOr(t1, u2);
+    const u3 = makeMbaAddXor(x3Node, c2Lit);
+    const n4 = makeMbaAddOr(makeUnary('~', cloneNode(x4Node)), m2Lit);
+    const s34 = makeMbaAddXor(u3, n4);
+    const s12k = makeMbaAddOr(s12, cFoldLit);
+    return makeMbaAddOr(s12k, s34);
+  }
+
+  const n1 = makeMbaAddOr(makeUnary('~', cloneNode(x1Node)), c1Lit);
+  const t2 = makeImul(makeLiteral(7), makeMbaAddXor(x2Node, m1Lit));
+  const s12 = makeMbaAdd2Or(n1, t2);
+  const u3 = makeMbaAddOr(x3Node, c2Lit);
+  const u4 = makeMbaAddXor(x4Node, m2Lit);
+  const s34 = makeMbaAddOr(u3, u4);
+  const s34k = makeMbaAddXor(s34, cFoldLit);
+  return makeMbaAddOr(s12, s34k);
+}
+
+/**
+ * Wraps an integer expression in a seeded degree-3 Rivest permutation polynomial P(u)
+ * over Z_{2^32}: a0 + u * (a1 + u * (a2 + u * a3)), where a1 is odd and a2, a3 are even.
+ */
+function buildRivestPermAst(seed: number, fnIndex: number, uExpr: any): any {
+  const a0 = mixSeed32(seed, fnIndex * 13 + 3);
+  const a1 = mixSeed32(seed, fnIndex * 13 + 5) | 1;
+  const a2 = mixSeed32(seed, fnIndex * 13 + 7) & ~1;
+  const a3 = mixSeed32(seed, fnIndex * 13 + 9) & ~1;
+
+  const deg3 = makeImul(cloneNode(uExpr), makeInt32Literal(a3));
+  const deg2 = makeImul(cloneNode(uExpr), makeBinary('+', makeInt32Literal(a2), deg3));
+  const deg1 = makeImul(cloneNode(uExpr), makeBinary('+', makeInt32Literal(a1), deg2));
+  return makeBinary('|', makeBinary('+', makeInt32Literal(a0), deg1), makeLiteral(0));
+}
+
+function buildSboxMixAst(sboxIdent: string, wIdent: string): any {
+  const lowByte = makeMemberIndex(
+    sboxIdent,
+    makeBinary('&', { type: 'Identifier', name: wIdent }, makeLiteral(255))
+  );
+  const highByte = makeBinary(
+    '<<',
+    makeMemberIndex(
+      sboxIdent,
+      makeBinary(
+        '&',
+        makeBinary('>>>', { type: 'Identifier', name: wIdent }, makeLiteral(8)),
+        makeLiteral(255)
+      )
+    ),
+    makeLiteral(8)
+  );
+  return makeBinary(
+    '|',
+    makeBinary('^', makeBinary('^', { type: 'Identifier', name: wIdent }, lowByte), highByte),
+    makeLiteral(0)
+  );
+}
+
+function pickNeutralKey(seed: number, index: number): string {
+  const idx = Math.abs((seed ^ Math.imul(index + 1, 0x9e3779b9)) | 0) % NEUTRAL_DECOY_KEYS.length;
+  return NEUTRAL_DECOY_KEYS[idx];
+}
+
+function createDecoyObjectExpression(
+  model: number,
+  seed = 0x9e3779b9,
+  zExpr?: any
+): acorn.ObjectExpression {
+  const m = Math.abs(model) % 3;
+  const k0 = NEUTRAL_DECOY_KEYS[(m * 3) % NEUTRAL_DECOY_KEYS.length];
+  const k1 = NEUTRAL_DECOY_KEYS[(m * 3 + 1) % NEUTRAL_DECOY_KEYS.length];
+  const k2 = NEUTRAL_DECOY_KEYS[(m * 3 + 2) % NEUTRAL_DECOY_KEYS.length];
+  const tagNum = ((mixSeed32(seed, m + 11) >>> 0) % 900) + 100;
+  const val0 = zExpr
+    ? makeBinary('&', cloneNode(zExpr), makeLiteral(0xff))
+    : makeLiteral((m + 1) * 17);
+  const val1 = zExpr
+    ? makeBinary('===', makeBinary('&', cloneNode(zExpr), makeLiteral(1)), makeLiteral(0))
+    : makeLiteral(false);
+  const val2 = makeLiteral(`v${m}_${tagNum}`);
+
+  return {
+    type: 'ObjectExpression',
+    properties: [
+      {
+        type: 'Property',
+        key: { type: 'Identifier', name: k0 },
+        value: val0,
+        kind: 'init',
+        computed: false,
+        method: false,
+        shorthand: false,
+      },
+      {
+        type: 'Property',
+        key: { type: 'Identifier', name: k1 },
+        value: val1,
+        kind: 'init',
+        computed: false,
+        method: false,
+        shorthand: false,
+      },
+      {
+        type: 'Property',
+        key: { type: 'Identifier', name: k2 },
+        value: val2,
+        kind: 'init',
+        computed: false,
+        method: false,
+        shorthand: false,
+      },
+    ],
+  } as unknown as acorn.ObjectExpression;
+}
+
+function createContextualDecoyConsequent(
+  fnIndex: number,
+  seed: number,
+  domain: ColdReturnDomain,
+  decoyIdent?: string,
+  zExpr?: any
+): any {
+  const zRef = zExpr ? cloneNode(zExpr) : makeLiteral(mixSeed32(seed, fnIndex) & 0xff);
+  const mask = mixSeed32(seed, fnIndex + 31) & 0xffff;
+
+  if (domain === 'void') {
+    return {
+      type: 'BlockStatement',
+      body: [{ type: 'ReturnStatement', argument: null }],
+    };
+  }
+  if (domain === 'number') {
+    return {
+      type: 'BlockStatement',
+      body: [
+        {
+          type: 'ReturnStatement',
+          argument: makeBinary('|', makeBinary('^', zRef, makeLiteral(mask)), makeLiteral(0)),
+        },
+      ],
+    };
+  }
+  if (domain === 'boolean') {
+    return {
+      type: 'BlockStatement',
+      body: [
+        {
+          type: 'ReturnStatement',
+          argument: makeBinary('===', makeBinary('&', zRef, makeLiteral(1)), makeLiteral(0)),
+        },
+      ],
+    };
+  }
+  if (domain === 'string') {
+    const tag = pickNeutralKey(seed, fnIndex);
+    return {
+      type: 'BlockStatement',
+      body: [
+        {
+          type: 'ReturnStatement',
+          argument: makeBinary(
+            '+',
+            makeLiteral(`${tag}:`),
+            makeBinary('&', zRef, makeLiteral(0xff))
+          ),
+        },
+      ],
+    };
+  }
+
+  const model = Math.abs(fnIndex) % 3;
+  if (decoyIdent) {
+    return {
+      type: 'BlockStatement',
+      body: [
+        {
+          type: 'ReturnStatement',
+          argument: {
+            type: 'CallExpression',
+            callee: {
+              type: 'MemberExpression',
+              computed: true,
+              object: { type: 'Identifier', name: decoyIdent },
+              property: makeLiteral(model),
+            },
+            arguments: [zRef],
+          },
+        },
+      ],
+    };
+  }
+
+  return {
+    type: 'BlockStatement',
+    body: [
+      {
+        type: 'ReturnStatement',
+        argument: createDecoyObjectExpression(model, seed, zRef),
+      },
+    ],
+  };
+}
+
+export function createSharedDecoyDeclaration(
+  decoyIdent = '_d',
+  maxModels = 3,
+  seed = 0x9e3779b9
+): acorn.VariableDeclaration {
+  const count = Math.max(1, Math.min(3, maxModels));
+  const indices: number[] = [];
+  for (let i = 0; i < count; i++) indices.push(i);
+  const paramArg = { type: 'Identifier', name: '_v' };
+  return {
+    type: 'VariableDeclaration',
+    kind: 'var',
+    declarations: [
+      {
+        type: 'VariableDeclarator',
+        id: { type: 'Identifier', name: decoyIdent },
+        init: {
+          type: 'ArrayExpression',
+          elements: indices.map((m) => ({
+            type: 'ArrowFunctionExpression',
+            id: null,
+            params: [cloneNode(paramArg)],
+            body: createDecoyObjectExpression(m, seed, paramArg),
+            generator: false,
+            async: false,
+            expression: true,
+          })),
+        },
+      },
+    ],
+  } as unknown as acorn.VariableDeclaration;
+}
+
+function extractParamNames(paramNode?: string | acorn.Pattern, out: string[] = []): string[] {
+  if (!paramNode) return out;
+  if (typeof paramNode === 'string') {
+    if (paramNode !== 'arguments' && paramNode !== 'eval') out.push(paramNode);
+    return out;
+  }
+  switch (paramNode.type) {
+    case 'Identifier':
+      if (paramNode.name !== 'arguments' && paramNode.name !== 'eval') {
+        out.push(paramNode.name);
+      }
+      break;
+    case 'AssignmentPattern':
+      extractParamNames(paramNode.left, out);
+      break;
+    case 'RestElement':
+      extractParamNames(paramNode.argument, out);
+      break;
+    case 'ArrayPattern':
+      for (const el of paramNode.elements || []) {
+        if (el) extractParamNames(el, out);
+      }
+      break;
+    case 'ObjectPattern':
+      for (const prop of paramNode.properties || []) {
+        if (prop.type === 'Property') {
+          extractParamNames(prop.value, out);
+        } else if (prop.type === 'RestElement') {
+          extractParamNames(prop.argument, out);
+        }
+      }
+      break;
+  }
+  return out;
+}
+
+function buildLiveVariables4(
+  seed: number,
+  fnIndex: number,
+  paramNode?: string | acorn.Pattern,
+  isArrowFn = false,
+  ctxOpts?: Mba4ContextOptions
+): [any, any, any, any] {
+  const candidates: any[] = [];
+  const seenNames = new Set<string>();
+
+  const names = [...(ctxOpts?.liveVars ?? []), ...extractParamNames(paramNode)];
+  for (const name of names) {
+    if (name && name !== 'arguments' && name !== 'eval' && !seenNames.has(name)) {
+      seenNames.add(name);
+      candidates.push(makeBinary('|', { type: 'Identifier', name }, makeLiteral(0)));
+    }
+  }
+
+  if (ctxOpts?.aliasIdentA && ctxOpts?.aliasIdentB) {
+    const slot0 = (fnIndex + 0) & 3;
+    const slot1 = (fnIndex + 1) & 3;
+    candidates.push(makeBinary('|', makeMemberIndex(ctxOpts.aliasIdentA, makeLiteral(slot0)), makeLiteral(0)));
+    candidates.push(makeBinary('|', makeMemberIndex(ctxOpts.aliasIdentB, makeLiteral(slot1)), makeLiteral(0)));
+  }
+
+  if (!isArrowFn) {
+    candidates.push({
+      type: 'MemberExpression',
+      computed: false,
+      object: { type: 'Identifier', name: 'arguments' },
+      property: { type: 'Identifier', name: 'length' },
+    });
+  }
+
+  candidates.push({
+    type: 'MemberExpression',
+    computed: false,
+    object: makeUnary('typeof', { type: 'Identifier', name: 'globalThis' }),
+    property: { type: 'Identifier', name: 'length' },
+  });
+
+  candidates.push({
+    type: 'MemberExpression',
+    computed: false,
+    object: makeUnary('typeof', {
+      type: 'MemberExpression',
+      computed: false,
+      object: { type: 'Identifier', name: 'Math' },
+      property: { type: 'Identifier', name: 'imul' },
+    }),
+    property: { type: 'Identifier', name: 'length' },
+  });
+
+  candidates.push({
+    type: 'MemberExpression',
+    computed: false,
+    object: makeUnary('typeof', { type: 'Identifier', name: 'Object' }),
+    property: { type: 'Identifier', name: 'length' },
+  });
+
+  while (candidates.length < 4) {
+    const base = candidates[0] ?? makeLiteral(mixSeed32(seed, fnIndex));
+    const m = mixSeed32(seed, fnIndex + candidates.length * 19);
+    candidates.push(makeBinary('^', cloneNode(base), makeInt32Literal(m)));
+  }
+
+  return [candidates[0], candidates[1], candidates[2], candidates[3]];
+}
+
+/**
+ * Generates a non-zero-identical Quadratic Non-Residue (QNR) opaque predicate:
+ *   ((Math.imul(z, z) + 1) & 3) === 3
+ * where z is derived from >=4 live variables via semi-linear MBA with folded constants,
+ * Rivest degree-3 permutation polynomial, and optional 256-entry S-Box mixing.
+ * Note: For every 32-bit integer z, (z^2 + 1) mod 4 is in {1, 2}, never 3.
+ */
 export function createSotaMbaPredicate(
   seed: number,
   fnIndex = 0,
   paramNode?: string | acorn.Pattern,
   decoyIdent?: string,
-  isArrowFn = false
+  isArrowFn = false,
+  ctxOpts?: Mba4ContextOptions
 ): acorn.IfStatement {
-  // 32-bit non-linear Mixed Boolean-Arithmetic (MBA) opaque invariants bound to
-  // a live runtime integer (never a static constant like +!String):
-  // - If function has a parameter: (paramName | 0)
-  // - If standard function with no params: arguments.length
-  // - If arrow function with no params: (typeof globalThis).length
-  const family = Math.abs((seed + fnIndex) % 5);
-  const c1 = ((seed >>> 1) + Math.imul(family + 1, 0x15d9f3b)) & 0x7fff;
-  const c2 = (c1 ^ 0x2a5a5) & 0x7fff;
-  const target =
-    ((seed ^ Math.imul(family + 1, 0x9e3779b1)) & 0xffff) | 1;
+  const domain = ctxOpts?.returnDomain ?? 'object';
+  const [x1, x2, x3, x4] = buildLiveVariables4(seed, fnIndex, paramNode, isArrowFn, ctxOpts);
+  const mba4 = buildMba4Ast(seed, fnIndex, x1, x2, x3, x4);
 
-  let paramName: string | null = null;
-  if (typeof paramNode === 'string') {
-    paramName = paramNode;
-  } else if (paramNode?.type === 'Identifier') {
-    paramName = paramNode.name;
-  } else if (
-    paramNode?.type === 'AssignmentPattern' &&
-    paramNode.left?.type === 'Identifier'
-  ) {
-    paramName = paramNode.left.name;
-  } else if (
-    paramNode?.type === 'RestElement' &&
-    paramNode.argument?.type === 'Identifier'
-  ) {
-    paramName = paramNode.argument.name;
-  }
-
-  let vBitNode: any;
-  let vIntNode: any;
-  if (paramName && paramName !== 'arguments' && paramName !== 'eval') {
-    vBitNode = { type: 'Identifier', name: paramName };
-    vIntNode = makeBinary('|', { type: 'Identifier', name: paramName }, makeLiteral(0));
-  } else if (!isArrowFn) {
-    vBitNode = {
-      type: 'MemberExpression',
-      computed: false,
-      object: { type: 'Identifier', name: 'arguments' },
-      property: { type: 'Identifier', name: 'length' },
+  let qnrLeft: any;
+  let zRefForDecoy: any;
+  if (ctxOpts?.scratchVarIdent) {
+    const scratchId = { type: 'Identifier', name: ctxOpts.scratchVarIdent };
+    const rivestOnScratch = buildRivestPermAst(seed, fnIndex, scratchId);
+    const seqExprs: any[] = [
+      {
+        type: 'AssignmentExpression',
+        operator: '=',
+        left: cloneNode(scratchId),
+        right: mba4,
+      },
+      {
+        type: 'AssignmentExpression',
+        operator: '=',
+        left: cloneNode(scratchId),
+        right: rivestOnScratch,
+      },
+    ];
+    if (ctxOpts.sboxIdent) {
+      seqExprs.push({
+        type: 'AssignmentExpression',
+        operator: '=',
+        left: cloneNode(scratchId),
+        right: buildSboxMixAst(ctxOpts.sboxIdent, ctxOpts.scratchVarIdent),
+      });
+    }
+    seqExprs.push(
+      makeBinary(
+        '&',
+        makeBinary('+', makeImul(cloneNode(scratchId), cloneNode(scratchId)), makeLiteral(1)),
+        makeLiteral(3)
+      )
+    );
+    qnrLeft = {
+      type: 'SequenceExpression',
+      expressions: seqExprs,
     };
-    vIntNode = cloneNode(vBitNode);
+    zRefForDecoy = cloneNode(scratchId);
   } else {
-    vBitNode = {
-      type: 'MemberExpression',
-      computed: false,
-      object: makeUnary('typeof', { type: 'Identifier', name: 'globalThis' }),
-      property: { type: 'Identifier', name: 'length' },
-    };
-    vIntNode = cloneNode(vBitNode);
+    const zExpr = buildRivestPermAst(seed, fnIndex, mba4);
+    qnrLeft = makeBinary(
+      '&',
+      makeBinary('+', makeImul(cloneNode(zExpr), cloneNode(zExpr)), makeLiteral(1)),
+      makeLiteral(3)
+    );
+    zRefForDecoy = zExpr;
   }
 
-  const kLit = makeLiteral(c2);
-
-  let mbaExpr: any;
-  if (family === 0) {
-    // Family 0: (Math.imul(v, k) - (Math.imul(v & k, v | k) + Math.imul(v & ~k, ~v & k))) | 0 === 0
-    const term1 = makeImul(cloneNode(vIntNode), cloneNode(kLit));
-    const vAndK = makeBinary('&', cloneNode(vBitNode), cloneNode(kLit));
-    const vOrK = makeBinary('|', cloneNode(vBitNode), cloneNode(kLit));
-    const notK = makeUnary('~', cloneNode(kLit));
-    const notV = makeUnary('~', cloneNode(vBitNode));
-    const vAndNotK = makeBinary('&', cloneNode(vBitNode), notK);
-    const notVAndK = makeBinary('&', notV, cloneNode(kLit));
-
-    const term2 = makeImul(vAndK, vOrK);
-    const term3 = makeImul(vAndNotK, notVAndK);
-    const sumTerms = makeBinary('+', term2, term3);
-    mbaExpr = makeBinary('|', makeBinary('-', term1, sumTerms), makeLiteral(0));
-  } else if (family === 1) {
-    // Family 1: (Math.imul(v ^ k, v ^ k) - (Math.imul(v - k, v - k) + (Math.imul(v & ~k, ~v & k) << 2))) | 0 === 0
-    const vXorK1 = makeBinary('^', cloneNode(vBitNode), cloneNode(kLit));
-    const vXorK2 = makeBinary('^', cloneNode(vBitNode), cloneNode(kLit));
-    const term1 = makeImul(vXorK1, vXorK2);
-
-    const vSubK1 = makeBinary('-', cloneNode(vIntNode), cloneNode(kLit));
-    const vSubK2 = makeBinary('-', cloneNode(vIntNode), cloneNode(kLit));
-    const term2 = makeImul(vSubK1, vSubK2);
-
-    const notK = makeUnary('~', cloneNode(kLit));
-    const notV = makeUnary('~', cloneNode(vBitNode));
-    const vAndNotK = makeBinary('&', cloneNode(vBitNode), notK);
-    const notVAndK = makeBinary('&', notV, cloneNode(kLit));
-    const term3 = makeImul(vAndNotK, notVAndK);
-    const shiftTerm = makeBinary('<<', term3, makeLiteral(2));
-
-    const sumTerms = makeBinary('+', term2, shiftTerm);
-    mbaExpr = makeBinary('|', makeBinary('-', term1, sumTerms), makeLiteral(0));
-  } else if (family === 2) {
-    // Family 2: (Math.imul(v + k, v + k) - ((Math.imul(v & k, v | k) << 2) + Math.imul(v ^ k, v ^ k))) | 0 === 0
-    const vAddK1 = makeBinary('+', cloneNode(vIntNode), cloneNode(kLit));
-    const vAddK2 = makeBinary('+', cloneNode(vIntNode), cloneNode(kLit));
-    const term1 = makeImul(vAddK1, vAddK2);
-
-    const vAndK = makeBinary('&', cloneNode(vBitNode), cloneNode(kLit));
-    const vOrK = makeBinary('|', cloneNode(vBitNode), cloneNode(kLit));
-    const term2 = makeImul(vAndK, vOrK);
-    const shiftTerm = makeBinary('<<', term2, makeLiteral(2));
-
-    const vXorK1 = makeBinary('^', cloneNode(vBitNode), cloneNode(kLit));
-    const vXorK2 = makeBinary('^', cloneNode(vBitNode), cloneNode(kLit));
-    const term3 = makeImul(vXorK1, vXorK2);
-
-    const sumTerms = makeBinary('+', shiftTerm, term3);
-    mbaExpr = makeBinary('|', makeBinary('-', term1, sumTerms), makeLiteral(0));
-  } else if (family === 3) {
-    // Family 3: (Math.imul(v | k, v | k) - (Math.imul(v & k, v & k) + Math.imul(v ^ k, v + k))) | 0 === 0
-    const vOrK1 = makeBinary('|', cloneNode(vBitNode), cloneNode(kLit));
-    const vOrK2 = makeBinary('|', cloneNode(vBitNode), cloneNode(kLit));
-    const term1 = makeImul(vOrK1, vOrK2);
-
-    const vAndK1 = makeBinary('&', cloneNode(vBitNode), cloneNode(kLit));
-    const vAndK2 = makeBinary('&', cloneNode(vBitNode), cloneNode(kLit));
-    const term2 = makeImul(vAndK1, vAndK2);
-
-    const vXorK = makeBinary('^', cloneNode(vBitNode), cloneNode(kLit));
-    const vAddK = makeBinary('+', cloneNode(vIntNode), cloneNode(kLit));
-    const term3 = makeImul(vXorK, vAddK);
-
-    const sumTerms = makeBinary('+', term2, term3);
-    mbaExpr = makeBinary('|', makeBinary('-', term1, sumTerms), makeLiteral(0));
-  } else {
-    // Family 4: Euler Quadratic Residue + Parity over live v:
-    // ((7 * (v ^ k)^2 - 1) mod 4) in {2,3} vs (v^2 mod 4) in {0,1}, and (v^2 + v) & 1 === 0
-    const vk = makeBinary('^', cloneNode(vBitNode), cloneNode(kLit));
-    const vkSq = makeImul(vk, cloneNode(vk));
-    const sevenVkSqSub1 = makeBinary('-', makeImul(makeLiteral(7), vkSq), makeLiteral(1));
-    const vSq = makeImul(cloneNode(vBitNode), cloneNode(vBitNode));
-    const quadDiff = makeBinary('^', makeBinary('&', makeBinary('^', sevenVkSqSub1, vSq), makeLiteral(2)), makeLiteral(2));
-    const parityTerm = makeBinary('&', makeBinary('+', makeImul(cloneNode(vBitNode), cloneNode(vBitNode)), cloneNode(vIntNode)), makeLiteral(1));
-    mbaExpr = makeBinary('|', quadDiff, parityTerm);
-  }
-
-  const decoyIdx = Math.abs(fnIndex) % 3;
-  const consequent = decoyIdent
-    ? createSharedDecoyConsequent(decoyIdent, decoyIdx)
-    : createDecoyConsequent(decoyIdx);
+  const consequent = createContextualDecoyConsequent(
+    fnIndex,
+    seed,
+    domain,
+    decoyIdent,
+    zRefForDecoy
+  );
 
   return {
     type: 'IfStatement',
     test: {
       type: 'BinaryExpression',
       operator: '===',
-      left: mbaExpr,
-      right: { type: 'Literal', value: target, raw: String(target) },
+      left: qnrLeft,
+      right: makeLiteral(3),
     },
     consequent,
     alternate: null,
@@ -418,6 +747,119 @@ export function createSotaMbaPredicate(
 }
 
 export const createOpaqueGuardStatement = createSotaMbaPredicate;
+
+function inferFunctionReturnDomain(fnNode: any): ColdReturnDomain {
+  let hasReturnArg = false;
+  let seenNumber = false;
+  let seenBoolean = false;
+  let seenString = false;
+  let seenObject = false;
+
+  function scanStmts(node: any): void {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) scanStmts(item);
+      return;
+    }
+    if (
+      node !== fnNode &&
+      (node.type === 'FunctionDeclaration' ||
+        node.type === 'FunctionExpression' ||
+        node.type === 'ArrowFunctionExpression')
+    ) {
+      return;
+    }
+    if (node.type === 'ReturnStatement') {
+      if (!node.argument) return;
+      hasReturnArg = true;
+      const arg = node.argument;
+      if (arg.type === 'Literal') {
+        if (typeof arg.value === 'number') seenNumber = true;
+        else if (typeof arg.value === 'boolean') seenBoolean = true;
+        else if (typeof arg.value === 'string') seenString = true;
+      } else if (arg.type === 'ObjectExpression' || arg.type === 'ArrayExpression') {
+        seenObject = true;
+      } else if (arg.type === 'BinaryExpression') {
+        if (['===', '!==', '==', '!=', '<', '>', '<=', '>=', 'in', 'instanceof'].includes(arg.operator)) {
+          seenBoolean = true;
+        } else if (arg.operator !== '+') {
+          seenNumber = true;
+        }
+      } else if (arg.type === 'UnaryExpression') {
+        if (arg.operator === '!') seenBoolean = true;
+        else if (arg.operator === 'typeof') seenString = true;
+        else if (arg.operator === '-' || arg.operator === '+' || arg.operator === '~') seenNumber = true;
+      }
+      return;
+    }
+    for (const key of Object.keys(node)) {
+      if (key === 'loc' || key === 'range') continue;
+      const val = node[key];
+      if (val && typeof val === 'object') {
+        scanStmts(val);
+      }
+    }
+  }
+
+  scanStmts(fnNode.body);
+  if (!hasReturnArg && fnNode.body?.type === 'BlockStatement') return 'void';
+  if (seenObject) return 'object';
+  if (seenBoolean && !seenNumber && !seenString) return 'boolean';
+  if (seenNumber && !seenBoolean && !seenString) return 'number';
+  if (seenString && !seenNumber && !seenBoolean) return 'string';
+  return 'object';
+}
+
+function createSboxAndAliasDeclarations(
+  sboxIdent: string,
+  aliasIdentA: string,
+  aliasIdentB: string,
+  scratchVarIdent: string,
+  seed: number
+): acorn.VariableDeclaration {
+  const sboxInit = acorn.parseExpressionAt(
+    `(function(){var a=[],i,s=${seed | 0},j,t;for(i=0;i<256;i++)a[i]=i;for(i=255;i>0;i--){s=(Math.imul(s,1664525)+1013904223)|0;j=(s>>>0)%(i+1);t=a[i];a[i]=a[j];a[j]=t;}return a;})()`,
+    0,
+    { ecmaVersion: 'latest' }
+  );
+
+  const stateVals = [
+    mixSeed32(seed, 101),
+    mixSeed32(seed, 103),
+    mixSeed32(seed, 107),
+    mixSeed32(seed, 109),
+  ];
+
+  return {
+    type: 'VariableDeclaration',
+    kind: 'var',
+    declarations: [
+      {
+        type: 'VariableDeclarator',
+        id: { type: 'Identifier', name: sboxIdent },
+        init: sboxInit,
+      },
+      {
+        type: 'VariableDeclarator',
+        id: { type: 'Identifier', name: aliasIdentA },
+        init: {
+          type: 'ArrayExpression',
+          elements: stateVals.map((v) => makeInt32Literal(v)),
+        },
+      },
+      {
+        type: 'VariableDeclarator',
+        id: { type: 'Identifier', name: aliasIdentB },
+        init: { type: 'Identifier', name: aliasIdentA },
+      },
+      {
+        type: 'VariableDeclarator',
+        id: { type: 'Identifier', name: scratchVarIdent },
+        init: makeLiteral(0),
+      },
+    ],
+  } as unknown as acorn.VariableDeclaration;
+}
 
 /**
  * RFC-002: Maximum cold guards per bundle chunk to strictly enforce
@@ -432,31 +874,55 @@ export function applyColdFlowGuard(
   hotExemptNodes?: WeakSet<acorn.Node>
 ): number {
   const decoyIdent = '_d';
+  const sfx = (seed >>> 0).toString(36).slice(0, 4);
+  const sboxIdent = `_uSb${sfx}`;
+  const aliasIdentA = `_uAl${sfx}`;
+  const aliasIdentB = `_uAm${sfx}`;
+  const scratchVarIdent = `_uZt${sfx}`;
+
   if (Array.isArray(ast.body)) {
     const alreadyGuarded = ast.body.some(
       (stmt: any) =>
         stmt.type === 'VariableDeclaration' &&
         stmt.declarations?.some(
-          (d: any) => d.id?.type === 'Identifier' && d.id.name === decoyIdent
+          (d: any) =>
+            d.id?.type === 'Identifier' &&
+            (d.id.name === decoyIdent || d.id.name === sboxIdent)
         )
     );
     if (alreadyGuarded) return 0;
   }
+
   let guardedCount = 0;
 
   function maybeInjectGuard(node: any): void {
     if (guardedCount >= MAX_COLD_GUARDS_PER_CHUNK) return;
     if (!coldFunctionNodes.has(node)) return;
+    if (hotExemptNodes?.has(node) || (node as any)._unpeekSerialized) return;
     if (!node.body || node.body.type !== 'BlockStatement') return;
 
+    const paramNames: string[] = [];
+    for (const p of node.params || []) {
+      extractParamNames(p, paramNames);
+    }
     const firstParam = node.params?.[0];
     const isArrow = node.type === 'ArrowFunctionExpression';
+    const returnDomain = inferFunctionReturnDomain(node);
+
     const guardStmt = createSotaMbaPredicate(
       seed,
       guardedCount,
       firstParam,
       decoyIdent,
-      isArrow
+      isArrow,
+      {
+        liveVars: paramNames,
+        sboxIdent,
+        aliasIdentA,
+        aliasIdentB,
+        scratchVarIdent,
+        returnDomain,
+      }
     );
     guardedCount++;
 
@@ -484,9 +950,22 @@ export function applyColdFlowGuard(
   });
 
   if (guardedCount > 0 && Array.isArray(ast.body)) {
-    const sharedDecoyDecl = createSharedDecoyDeclaration(decoyIdent, guardedCount);
+    const sharedDecoyDecl = createSharedDecoyDeclaration(
+      decoyIdent,
+      guardedCount,
+      seed
+    );
+    const sboxAliasDecl = createSboxAndAliasDeclarations(
+      sboxIdent,
+      aliasIdentA,
+      aliasIdentB,
+      scratchVarIdent,
+      seed
+    );
+
     if (hotExemptNodes) {
       hotExemptNodes.add(sharedDecoyDecl);
+      hotExemptNodes.add(sboxAliasDecl);
       for (const decl of sharedDecoyDecl.declarations || []) {
         if (decl.init?.type === 'ArrayExpression' && decl.init.elements) {
           for (const el of decl.init.elements) {
@@ -497,14 +976,21 @@ export function applyColdFlowGuard(
     }
 
     let insertIdx = 0;
-    while (
-      insertIdx < ast.body.length &&
-      ast.body[insertIdx].type === 'ExpressionStatement' &&
-      (ast.body[insertIdx] as any).directive
-    ) {
-      insertIdx++;
+    while (insertIdx < ast.body.length) {
+      const stmt: any = ast.body[insertIdx];
+      const isDirective =
+        stmt.type === 'ExpressionStatement' &&
+        (Boolean(stmt.directive) ||
+          (stmt.expression?.type === 'Literal' &&
+            typeof stmt.expression.value === 'string' &&
+            /^(?:use\s+[a-zA-Z0-9_-]+)/.test(stmt.expression.value.trim())));
+      if (isDirective || stmt.type === 'ImportDeclaration') {
+        insertIdx++;
+      } else {
+        break;
+      }
     }
-    ast.body.splice(insertIdx, 0, sharedDecoyDecl);
+    ast.body.splice(insertIdx, 0, sboxAliasDecl, sharedDecoyDecl);
   }
 
   return guardedCount;

@@ -190,7 +190,7 @@ export function isMangleableName(
   reservedSet: Set<string> = RESERVED_IDENTIFIERS,
   manglerConfig?: ManglerConfig
 ): boolean {
-  const minLength = manglerConfig?.minLength ?? 3;
+  const minLength = manglerConfig?.minLength ?? 1;
   return (
     origName.length >= minLength &&
     !reservedSet.has(origName) &&

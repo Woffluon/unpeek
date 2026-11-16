@@ -9,6 +9,25 @@ export const EXCLUDED_DIR_NAMES = new Set([
   '.unpeek-maps',
 ]);
 
+const WORKER_OR_SW_BASENAME_REGEX =
+  /^(?:sw|service-worker|workbox-[^/]+)\.(?:js|mjs|cjs)$|\.worker(?:[.-][^/]+)*\.(?:js|mjs|cjs)$/i;
+
+export function isWorkerOrServiceWorkerFile(filePath: string, rootDir?: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/').split('?')[0];
+  const baseName = path.posix.basename(normalized);
+  if (WORKER_OR_SW_BASENAME_REGEX.test(baseName)) {
+    return true;
+  }
+  if (rootDir) {
+    const rel = path.relative(rootDir, filePath).replace(/\\/g, '/');
+    const relBase = path.posix.basename(rel);
+    if (WORKER_OR_SW_BASENAME_REGEX.test(relBase)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const NEXT_CONFIG_FILES = ['next.config.ts', 'next.config.js', 'next.config.mjs', 'next.config.cjs'];
 const VITE_CONFIG_FILES = ['vite.config.ts', 'vite.config.js', 'vite.config.mjs', 'vite.config.cjs'];
 
@@ -290,6 +309,12 @@ export function scanClientBundles(outDir: string, config?: UnpeekConfig): string
         }
         const ext = path.extname(entry.name).toLowerCase();
         if (allowedExtensions.has(ext)) {
+          if (
+            config?.target !== 'worker' &&
+            isWorkerOrServiceWorkerFile(fullPath, resolvedOutDir)
+          ) {
+            continue;
+          }
           results.push(fullPath);
         }
       }

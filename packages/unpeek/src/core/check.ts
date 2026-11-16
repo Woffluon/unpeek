@@ -5,7 +5,8 @@ import { simple as walkSimple } from 'acorn-walk';
 import type { CheckOptions, CheckResult, CheckViolation } from './types.js';
 import { loadUnpeekConfig } from '../config.js';
 import { detectTargetFramework, hasNextServerSegment, scanClientBundles } from './detector.js';
-import { findMonorepoRoots, SOURCE_MAP_COMMENT_REGEX } from './sourcemap-vault.js';
+import { extractDebugId, findMonorepoRoots, SOURCE_MAP_COMMENT_REGEX } from './sourcemap-vault.js';
+import { safeDecodeURIComponent } from './vlq.js';
 
 function walkPublicMaps(
   currentDir: string,
@@ -122,6 +123,7 @@ export async function checkProject(options: CheckOptions = {}): Promise<CheckRes
     });
   }
 
+  const vaultDir = path.resolve(cwd, privateMapsDir);
   const clientFiles = scanClientBundles(resolvedOutDir, config);
   for (const filePath of clientFiles) {
     const rel = path.relative(resolvedOutDir, filePath).replace(/\\/g, '/');
@@ -138,6 +140,59 @@ export async function checkProject(options: CheckOptions = {}): Promise<CheckRes
         rule: 'sourcemap-comment',
         severity: 'error',
         message: `Residual sourceMappingURL comment found in "${rel}".`,
+        file: rel,
+      });
+    }
+
+    const jsDebugId = extractDebugId(content);
+    const decodedRel = safeDecodeURIComponent(rel);
+    const mapCandidates = [
+      path.join(vaultDir, `${rel}.map`),
+      ...(decodedRel !== rel ? [path.join(vaultDir, `${decodedRel}.map`)] : []),
+    ];
+    const vaultedMapPath = mapCandidates.find((p) => fs.existsSync(p));
+    if (vaultedMapPath) {
+      try {
+        const mapJson = JSON.parse(fs.readFileSync(vaultedMapPath, 'utf8')) as {
+          debugId?: unknown;
+          debug_id?: unknown;
+        };
+        const rawMapDebugId =
+          typeof mapJson.debugId === 'string'
+            ? mapJson.debugId
+            : typeof mapJson.debug_id === 'string'
+              ? mapJson.debug_id
+              : undefined;
+        if (jsDebugId && rawMapDebugId && jsDebugId !== rawMapDebugId) {
+          violations.push({
+            rule: 'debugid-mismatch',
+            severity: 'error',
+            message: `debugId mismatch for "${rel}": JS has "${jsDebugId}" while vaulted map has "${rawMapDebugId}".`,
+            file: rel,
+          });
+        } else if (jsDebugId && !rawMapDebugId) {
+          warnings.push({
+            rule: 'debugid-mismatch',
+            severity: 'warning',
+            message: `JS bundle "${rel}" has debugId "${jsDebugId}" but vaulted source map is missing debugId.`,
+            file: rel,
+          });
+        } else if (!jsDebugId && rawMapDebugId) {
+          warnings.push({
+            rule: 'debugid-mismatch',
+            severity: 'warning',
+            message: `Vaulted source map for "${rel}" has debugId "${rawMapDebugId}" but JS bundle is missing //# debugId=.`,
+            file: rel,
+          });
+        }
+      } catch {
+        // ignore malformed vaulted map JSON
+      }
+    } else if (jsDebugId) {
+      warnings.push({
+        rule: 'debugid-mismatch',
+        severity: 'warning',
+        message: `JS bundle "${rel}" has debugId "${jsDebugId}" but no vaulted source map found at "${rel}.map".`,
         file: rel,
       });
     }
@@ -160,7 +215,6 @@ export async function checkProject(options: CheckOptions = {}): Promise<CheckRes
   }
 
   // 2. .gitignore & .dockerignore check across findMonorepoRoots
-  const vaultDir = path.resolve(cwd, privateMapsDir);
   const relVault = path.relative(cwd, vaultDir).replace(/\\/g, '/');
   const ignoreEntry = relVault && !relVault.startsWith('..') ? `${relVault}/` : '.unpeek-maps/';
   const roots = findMonorepoRoots(cwd);

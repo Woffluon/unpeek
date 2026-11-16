@@ -6,9 +6,14 @@ import { isNodeInExemptSubtree } from './boundary-classifier.js';
 const FILE_URI_USER_RE =
   /file:\/\/\/(?:[A-Za-z]:\/)?(?:Users|home)\/[^/\s"'`]+\/([^\s"'`]+)/gi;
 const FILE_URI_LOCAL_RE = /file:\/\/\/(?:[A-Za-z]:\/)?([^\s"'`]+)/gi;
+const WEBPACK_URI_RE =
+  /webpack(?:-internal)?:\/\/[^/\s"'`]*\/(?:\.\/)?([^\s"'`]+)/gi;
+const TURBOPACK_PROJECT_RE = /\[project\][\\/]([^\s"'`]+)/g;
 const POSIX_USER_PATH_RE = /\/?(?:Users|home)\/[^/\s"'`]+\/([^\s"'`]+)/g;
 const WIN_USER_PATH_RE =
-  /[A-Za-z]:\\{1,2}Users\\{1,2}[^\\\s"'`]+\\{1,2}([^\s"'`]+)/g;
+  /[A-Za-z]:(?:\\{1,2}|\/)Users(?:\\{1,2}|\/)[^\\/\s"'`]+(?:\\{1,2}|\/)([^\s"'`]+)/gi;
+const WIN_DRIVE_PATH_RE =
+  /(^|[\s"'`(\[=,;:])([A-Za-z]:(?:\\{1,2}|\/)([^\s"'`]+))/g;
 const PROTECTED_URL_OR_ASSET_RE =
   /(?:https?:\/\/[^\s"'`]+|(?:\/assets\/|\/_next\/static\/)[^\s"'`]*)/gi;
 
@@ -19,12 +24,18 @@ function escapeTemplateRaw(str: string): string {
     .replace(/\$\{/g, '\\${');
 }
 
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function scrubStringValue(val: string, rootDir?: string): string {
   // Fast-path: avoid regex work on strings with no path/URI markers
   if (
     !val.includes('/') &&
     !val.includes('\\') &&
-    !val.includes('file:')
+    !val.includes('file:') &&
+    !val.includes('webpack:') &&
+    !val.includes('[project]')
   ) {
     return val;
   }
@@ -39,24 +50,38 @@ function scrubStringValue(val: string, rootDir?: string): string {
 
   out = out.replace(FILE_URI_USER_RE, (_m, tail: string) => `[src]/${tail}`);
   out = out.replace(FILE_URI_LOCAL_RE, (_m, tail: string) => `[src]/${tail}`);
-  out = out.replace(POSIX_USER_PATH_RE, (_m, tail: string) => `[src]/${tail}`);
+  out = out.replace(WEBPACK_URI_RE, (_m, tail: string) => `[src]/${tail}`);
   out = out.replace(
-    WIN_USER_PATH_RE,
+    TURBOPACK_PROJECT_RE,
     (_m, tail: string) => `[src]/${tail.replace(/\\+/g, '/')}`
   );
 
   if (rootDir && rootDir.length > 1) {
     const normalizedRoot = rootDir.replace(/\\/g, '/').replace(/\/+$/, '');
     if (normalizedRoot.length > 1) {
-      if (out.includes(normalizedRoot + '/')) {
-        out = out.split(normalizedRoot + '/').join('[src]/');
-      }
-      const winRoot = normalizedRoot.replace(/\//g, '\\');
-      if (out.includes(winRoot + '\\')) {
-        out = out.split(winRoot + '\\').join('[src]/');
-      }
+      const parts = normalizedRoot.split('/').map(escapeRegExp);
+      const sepPattern = '(?:\\\\{1,2}|\\/)';
+      const rootPattern = new RegExp(
+        `${parts.join(sepPattern)}${sepPattern}([^\\s"'\`]+)`,
+        /^[A-Za-z]:/.test(normalizedRoot) ? 'gi' : 'g'
+      );
+      out = out.replace(
+        rootPattern,
+        (_m, tail: string) => `[src]/${tail.replace(/\\+/g, '/')}`
+      );
     }
   }
+
+  out = out.replace(POSIX_USER_PATH_RE, (_m, tail: string) => `[src]/${tail}`);
+  out = out.replace(
+    WIN_USER_PATH_RE,
+    (_m, tail: string) => `[src]/${tail.replace(/\\+/g, '/')}`
+  );
+  out = out.replace(
+    WIN_DRIVE_PATH_RE,
+    (_m, prefix: string, _full: string, tail: string) =>
+      `${prefix}[src]/${tail.replace(/\\+/g, '/')}`
+  );
 
   if (shielded.length > 0) {
     out = out.replace(

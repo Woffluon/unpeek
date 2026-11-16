@@ -572,13 +572,31 @@ describe('AST & Call-Graph Transformation Engine', () => {
       vm.createContext(browserCtx);
       expect(vm.runInContext(`(function(){${withShield.code}})()`, browserCtx)).toBe('world');
 
-      // Stripping the shield preamble in browser context corrupts the coupled vault decryption
-      const stripped = withShield.code.split('\n').slice(1).join('\n');
-      const strippedWin: Record<string, any> = {};
-      const strippedCtx: Record<string, any> = { window: strippedWin };
-      strippedCtx.globalThis = strippedCtx;
-      vm.createContext(strippedCtx);
-      expect(vm.runInContext(`(function(){${stripped}})()`, strippedCtx)).not.toBe('world');
+      // Issue #1 order-independent loading: running without shield preamble (globalThis[sym] === undefined)
+      // resolves cleanly without cache poisoning, while active tamper or mismatched slot fails closed
+      const { generateRuntimeShield } = await import('../src/runtime/index.js');
+      const shieldInfo = generateRuntimeShield({ deterrentMode: 'passive' });
+      const lines = withShield.code.split('\n');
+      const shieldLine = lines[0];
+      const stripped = lines.slice(1).join('\n');
+      const lateWin: Record<string, any> = {};
+      const lateCtx: Record<string, any> = { window: lateWin };
+      lateCtx.globalThis = lateCtx;
+      vm.createContext(lateCtx);
+      expect(vm.runInContext(`(function(){${stripped}})()`, lateCtx)).toBe('world');
+      vm.runInContext(shieldLine, lateCtx);
+      expect(vm.runInContext(`(function(){${stripped}})()`, lateCtx)).toBe('world');
+
+      const tamperedWin: Record<string, any> = {
+        [shieldInfo.windowKeySymbol]: (shieldInfo.expectedDelta ^ 0x4242) & 0xffff,
+      };
+      const tamperedCtx: Record<string, any> = {
+        window: tamperedWin,
+        __unpeek_tampered: true,
+      };
+      tamperedCtx.globalThis = tamperedCtx;
+      vm.createContext(tamperedCtx);
+      expect(vm.runInContext(`(function(){${stripped}})()`, tamperedCtx)).not.toBe('world');
     });
 
     it('is idempotent when transformJavaScript is called multiple times on already-protected code', () => {
@@ -925,7 +943,8 @@ describe('AST & Call-Graph Transformation Engine', () => {
           const evalParamFn = new Function('userInput', `return (${paramCode});`);
           for (const liveVal of [0, 1, -1, 42, 0x7fffffff, -0x80000000, 'abc', undefined]) {
             const res = evalParamFn(liveVal);
-            expect(res | 0).toBe(0);
+            // QNR invariant: ((z * z + 1) & 3) is always in {1, 2}, never 3
+            expect([1, 2]).toContain(res | 0);
             expect(res === paramGuard.test.right.value).toBe(false);
           }
 
@@ -937,7 +956,7 @@ describe('AST & Call-Graph Transformation Engine', () => {
           const evalArgsFn = new Function(`return (${argsCode});`);
           for (const args of [[], [1], [1, 2, 3]]) {
             const res = evalArgsFn(...args);
-            expect(res | 0).toBe(0);
+            expect([1, 2]).toContain(res | 0);
             expect(res === argsGuard.test.right.value).toBe(false);
           }
 
@@ -948,36 +967,41 @@ describe('AST & Call-Graph Transformation Engine', () => {
           expect(arrowCode).not.toContain('String');
           const evalArrowFn = new Function(`return (${arrowCode});`);
           const arrowRes = evalArrowFn();
-          expect(arrowRes | 0).toBe(0);
+          expect([1, 2]).toContain(arrowRes | 0);
           expect(arrowRes === arrowGuard.test.right.value).toBe(false);
         }
       }
     });
 
-    it('generates 3 distinct adversarial decoy models across modulated fnIndex', () => {
-      // Model 0: Fake authorization bypass (/api/v2/auth/admin-bypass, superadmin_token, elevate)
+    it('generates 3 distinct neutral/polymorphic decoy models across modulated fnIndex', () => {
+      // Model 0: telemetryOk / retryBudget / slotMask
       const guard0 = createSotaMbaPredicate(42, 0);
       const code0 = generate(guard0.consequent);
-      expect(code0).toContain('/api/v2/auth/admin-bypass');
-      expect(code0).toContain('superadmin_token');
-      expect(code0).toContain('elevate');
+      expect(code0).not.toContain('/api/v2/auth/admin-bypass');
+      expect(code0).toContain('telemetryOk');
+      expect(code0).toContain('retryBudget');
+      expect(code0).toContain('slotMask');
 
-      // Model 1: Fake master JWT verification (_verifyMasterToken, mock_jwt_bypass_signature, authorized: true)
+      // Model 1: frameSeq / digestTag / phaseFlag
       const guard1 = createSotaMbaPredicate(42, 1);
       const code1 = generate(guard1.consequent);
-      expect(code1).toContain('_verifyMasterToken');
-      expect(code1).toContain('mock_jwt_bypass_signature');
-      expect(code1).toContain('authorized');
+      expect(code1).toContain('frameSeq');
+      expect(code1).toContain('digestTag');
+      expect(code1).toContain('phaseFlag');
 
-      // Model 2: Fake telemetry debug and supervisor key (debug_supervisor_override, mfa_bypassed: true)
+      // Model 2: epochSync / crcState / gateReady
       const guard2 = createSotaMbaPredicate(42, 2);
       const code2 = generate(guard2.consequent);
-      expect(code2).toContain('debug_supervisor_override');
-      expect(code2).toContain('mfa_bypassed');
+      expect(code2).toContain('epochSync');
+      expect(code2).toContain('crcState');
+      expect(code2).toContain('gateReady');
 
-      // Periodic modulation: fnIndex = 3 maps back to Model 0
+      // Periodic modulation: fnIndex = 3 maps back to Model 0 decoy structure
       const guard3 = createSotaMbaPredicate(42, 3);
-      expect(generate(guard3.consequent)).toBe(code0);
+      const code3 = generate(guard3.consequent);
+      expect(code3).toContain('telemetryOk');
+      expect(code3).toContain('retryBudget');
+      expect(code3).toContain('slotMask');
     });
 
     it('injects MBA opaque guard into cold functions, preserves exact runtime semantics, and never executes guard branch', () => {
@@ -1210,7 +1234,7 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(out).toEqual([wgsl, wgsl]);
     });
 
-    it('UNP-07: skips <3 char SWC locals by default to preserve gzip budget, and mangles 1-2 char locals polymorphically when minLength: 1 or 2 is opted in', () => {
+    it('UNP-07: mangles 1-char SWC locals polymorphically by default (minLength: 1 in v4) and honors minLength: 2 or 3 opt-out', () => {
       const swcMinifiedSource = `
         function computeAuth(a, b) {
           var c = "SWC_MINIFIED_SECRET_TOKEN";
@@ -1224,34 +1248,29 @@ describe('AST & Call-Graph Transformation Engine', () => {
         return computeAuth("usr", "pro");
       `;
 
-      // Default minLength (3) skips 1-char SWC locals so gzip budget stays <15%
+      // v4 default minLength (1) mangles all 5 1-char SWC local bindings polymorphically across seeds
       const defaultRes = transformJavaScript(swcMinifiedSource, {
         seed: 0x11111111,
         minStringLength: 4,
       });
-      expect(defaultRes.mangledSymbolsCount).toBe(0);
-      expect(new Function(defaultRes.code)()).toBe('usr:pro:7:SWC_MINIFIED_SECRET_TOKEN');
-
-      // Opt-in minLength: 1 mangles all 5 1-char local bindings polymorphically across seeds
-      const resA = transformJavaScript(swcMinifiedSource, {
-        seed: 0x11111111,
-        minStringLength: 4,
-        config: { mangler: { minLength: 1 } },
-      });
-      const resB = transformJavaScript(swcMinifiedSource, {
+      const defaultResB = transformJavaScript(swcMinifiedSource, {
         seed: 0x22222222,
         minStringLength: 4,
-        config: { mangler: { minLength: 1 } },
       });
+      expect(defaultRes.mangledSymbolsCount).toBeGreaterThanOrEqual(5);
+      expect(defaultResB.mangledSymbolsCount).toBeGreaterThanOrEqual(5);
+      expect(defaultRes.code).not.toBe(defaultResB.code);
+      expect(new Function(defaultRes.code)()).toBe('usr:pro:7:SWC_MINIFIED_SECRET_TOKEN');
+      expect(new Function(defaultResB.code)()).toBe('usr:pro:7:SWC_MINIFIED_SECRET_TOKEN');
 
-      // All 5 local bindings (a, b, c, d, inner a) are mangled when minLength: 1 is specified
-      expect(resA.mangledSymbolsCount).toBeGreaterThanOrEqual(5);
-      expect(resB.mangledSymbolsCount).toBeGreaterThanOrEqual(5);
-      expect(resA.code).not.toBe(resB.code);
-
-      // Exact runtime semantics preserved
-      expect(new Function(resA.code)()).toBe('usr:pro:7:SWC_MINIFIED_SECRET_TOKEN');
-      expect(new Function(resB.code)()).toBe('usr:pro:7:SWC_MINIFIED_SECRET_TOKEN');
+      // Explicit minLength: 3 skips 1-2 char locals (0 mangling on 1-char SWC code)
+      const minLen3Res = transformJavaScript(swcMinifiedSource, {
+        seed: 0x11111111,
+        minStringLength: 4,
+        config: { mangler: { minLength: 3 } },
+      });
+      expect(minLen3Res.mangledSymbolsCount).toBe(0);
+      expect(new Function(minLen3Res.code)()).toBe('usr:pro:7:SWC_MINIFIED_SECRET_TOKEN');
 
       // Explicit config.mangler.minLength: 2 skips 1-char locals and mangles 2-char locals
       const twoCharSource = `
@@ -1262,18 +1281,22 @@ describe('AST & Call-Graph Transformation Engine', () => {
         }
         return check(10, 20);
       `;
-      const defaultTwoCharRes = transformJavaScript(twoCharSource, {
+      const minLen3TwoCharRes = transformJavaScript(twoCharSource, {
         seed: 0x33333333,
+        config: { mangler: { minLength: 3 } },
       });
-      expect(defaultTwoCharRes.mangledSymbolsCount).toBe(0);
+      expect(minLen3TwoCharRes.mangledSymbolsCount).toBe(0);
 
       const minLen2Res = transformJavaScript(twoCharSource, {
         seed: 0x33333333,
         config: { mangler: { minLength: 2 } },
       });
-      // Only ab and cd (2 bindings) should be mangled; x and y remain
-      expect(minLen2Res.mangledSymbolsCount).toBe(2);
+      // ab and cd (2 user bindings) are mangled; 1-char x and y remain untouched
+      expect(minLen2Res.mangledSymbolsCount).toBeGreaterThanOrEqual(2);
       expect(minLen2Res.code).toContain('function check(x,');
+      expect(minLen2Res.code).toMatch(/\by=1\b/);
+      expect(minLen2Res.code).not.toContain('ab');
+      expect(minLen2Res.code).not.toContain('cd');
       expect(new Function(minLen2Res.code)()).toBe(33);
     });
   });

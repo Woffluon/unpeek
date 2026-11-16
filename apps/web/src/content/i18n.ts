@@ -196,7 +196,7 @@ export function validateLicense($k0){
 export const DICTIONARY: Record<Locale, Dictionary> = {
   en: {
     meta: {
-      version: "v3.0.0",
+      version: "v4.0.0",
       license: "MIT License",
     },
     nav: {
@@ -221,8 +221,8 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
       npmCta: "npm",
       ledger: [
         { label: "hot path", value: "left byte for byte" },
-        { label: "cold path", value: "92-char vault + MBA + --aggressive" },
-        { label: "integrity", value: "sync FNV-1a + inline WASM" },
+        { label: "cold path", value: "92-char / 64-bit vault + Rivest MBA" },
+        { label: "integrity", value: "order-free globalThis + host WASM" },
       ],
       tickerSource: "source",
       tickerProtected: "protected",
@@ -244,15 +244,15 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
       hotTitle: "Hot path (TRUE_HOT_60FPS & shallow render)",
       hotBody:
         "Loops, requestAnimationFrame, Three.js useFrame hooks, and direct component render bodies skip transformation cleanly. Nested async event handlers (onSubmit, handleSave) stay cold and protected.",
-      coldTitle: "Cold path & --aggressive Layer 2",
+      coldTitle: "Cold path & Tier 3 @unpeek-critical enclave",
       coldBody:
-        "Auth checks, billing, API clients, and WebGPU shaders. Layer 1 applies a 92-char zero-escape O(1) vault, 4-family MBA guards, and an in-place re-encrypting Uint8Array shader vault; --aggressive adds a Bytecode Micro-VM and inline WASM KDF.",
+        "Auth checks, billing, API clients, and WebGPU shaders. Tier 2 applies a 92-char zero-escape O(1) vault, >=4-var semi-linear MBA + degree-3 Rivest QNR guards, and an in-place Uint8Array shader vault; Tier 3 / --aggressive adds a 43-opcode Micro-VM v2 and shared <1.2 KB host-coupled WASM KDF.",
       stages: [
         { step: "01", title: "Parse", detail: "Acorn builds an AST for each client chunk. Server output is never opened." },
         { step: "02", title: "Classify", detail: "3-tier graph separates TRUE_HOT_60FPS, SHALLOW_RENDER_COMPONENT, and SERIALIZED_WORKER." },
-        { step: "03", title: "Guard", detail: "Cold paths and event handlers receive 4-family contextual MBA guards and shared decoys." },
-        { step: "04", title: "Vault & VM", detail: "Zero-escape 92-char vault + Uint8Array shaders (--aggressive adds Micro-VM + inline WASM KDF)." },
-        { step: "05", title: "Seal", detail: "Synchronous FNV-1a shield attests integrity; source maps move to .unpeek-maps/." },
+        { step: "03", title: "Guard", detail: "Cold paths receive >=4-var MBA, Rivest Z_2^32 QNR predicates, and neutral decoy bridges." },
+        { step: "04", title: "Vault & VM", detail: "92-char / 64-bit salted vault + Uint8Array shaders (--aggressive adds 43-op Micro-VM v2 + singleton WASM)." },
+        { step: "05", title: "Seal", detail: "Order-independent globalThis shield attests integrity; multi-pass maps move to .unpeek-maps/." },
       ],
     },
     lab: {
@@ -284,11 +284,11 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
       columns: { metric: "Dimension", value: "Default / --aggressive", where: "Source" },
       rows: [
         { metric: "Hot-path CPU overhead", value: "under 2% (0% hot loop)", where: "benchmarks/overhead.bench.ts" },
-        { metric: "Gzip bundle delta", value: "+4% to +8% (Layer 1)", where: "src/cli/protect.ts" },
-        { metric: "Cold function transform", value: "92-char vault + MBA + Micro-VM", where: "src/ast" },
+        { metric: "Gzip bundle delta", value: "+4% to +8% (Tier 1/2)", where: "src/core/protect.ts" },
+        { metric: "Cold function transform", value: "Rivest MBA + 43-op Micro-VM v2", where: "src/ast" },
         { metric: "Shader & WebGPU vault", value: "in-place re-encrypting Uint8Array", where: "src/ast/string-vault.ts" },
-        { metric: "Runtime shield", value: "sync FNV-1a + inline WASM KDF", where: "src/runtime & wasm-vault.ts" },
-        { metric: "Client bundle scope", value: "static chunks only", where: "src/bundler/detector.ts" },
+        { metric: "Runtime shield", value: "order-free globalThis + <1.2 KB WASM", where: "src/runtime & wasm-vault.ts" },
+        { metric: "Client bundle scope", value: "static chunks only (workers isolated)", where: "src/core/detector.ts" },
       ],
     },
     comparisonSection: {
@@ -327,7 +327,7 @@ export const DICTIONARY: Record<Locale, Dictionary> = {
         },
         {
           metric: "Integrity check",
-          unpeek: "Sync FNV-1a + inline WASM",
+          unpeek: "Order-free globalThis + singleton WASM",
           legacyObfuscator: "Regex self-defense",
           plainMinifier: "None",
         },
@@ -476,7 +476,7 @@ export default defineConfig({
           {
             title: "Next.js (App Router & Pages Router)",
             body: [
-              "In Next.js projects, unpeek strictly targets `.next/static/chunks` (and `.next/static/` client assets) while leaving `.next/server` completely untouched. This guarantees that React Server Components (RSC), API routes, and Node.js server actions suffer zero startup or execution overhead.",
+              "In Next.js projects, unpeek strictly targets `.next/static/chunks` (discovering entries from `.next/build-manifest.json` and exempting `globalThis.TURBOPACK.push` headers) while leaving `.next/server` completely untouched. Async split chunks resolve cleanly even before the entry shield initializes.",
               "Both `postbuild` CLI execution and the `unpeek/unplugin` adapter are supported.",
             ],
             codeBlocks: [
@@ -520,7 +520,7 @@ export default nextConfig;`,
           {
             title: "Vite & Rollup (CLI or unplugin)",
             body: [
-              "For Vite applications, unpeek automatically detects the `dist/` output directory. If you prefer in-memory bundle transformation during the Vite build phase rather than a postbuild pass, use the first-class `unpeek/vite` plugin or `unpeek/unplugin`.",
+              "For Vite applications, `unpeek/vite` hooks into `enforce: 'post'` `generateBundle` (after esbuild minification) and automatically wires `worker.plugins` for Web Worker bundles.",
             ],
             codeBlocks: [
               {
@@ -548,7 +548,7 @@ export default defineConfig({
           {
             title: "Webpack, Rspack & Vanilla JS Targets",
             body: [
-              "For Webpack 5 or Rspack builds, import `unpeek` from `unpeek/unplugin` (or `unpeek/webpack`, `unpeek/rspack`) or pass `--out-dir build/static/js` to the CLI. For Vanilla JS projects, point `--out-dir` to your public asset folder.",
+              "Webpack 5 and Rspack plugins hook into `processAssets` (`PROCESS_ASSETS_STAGE_OPTIMIZE_INLINE`), esbuild runs in `build.onEnd` (`write: false` and `write: true`), and Rollup handles hash placeholders in `renderChunk`. Service Workers (`sw.js`) and Web Workers (`*.worker.js`) are excluded by default unless `target: 'worker'` is set.",
             ],
             codeBlocks: [
               {
@@ -573,9 +573,9 @@ export default {
       {
         id: "architecture",
         number: "03",
-        title: "Two-Tier Architecture & 3-Tier Hot-Path Engine",
+        title: "Three-Tier Architecture & 3-Tier Hot-Path Engine",
         summary:
-          "How unpeek combines 3-tier call-graph exemption, a 92-char zero-escape string vault, in-place re-encrypting GPU shader buffers, 4-family contextual MBA guards, and Layer 2 --aggressive Micro-VM + inline WASM KDF.",
+          "How unpeek combines 3-tier call-graph exemption, 92-char / 64-bit salted vaults, >=4-var Rivest MBA + QNR guards, order-independent globalThis shield, and Tier 3 Micro-VM v2 + singleton <1.2 KB host-coupled WASM KDF.",
         subsections: [
           {
             title: "3-Tier Call-Graph Exemption (TRUE_HOT_60FPS / Shallow Render / Workers)",
@@ -596,21 +596,21 @@ export default {
             ],
           },
           {
-            title: "Synchronous Self-Shield & Contextual MBA Guards",
+            title: "Order-Independent Shield & Non-Linear Rivest MBA Guards",
             body: [
-              "Entry chunks execute an immediate synchronous FNV-1a integrity IIFE (no `queueMicrotask` race) that hashes the shield body via `Function.prototype.toString()`. It binds a 5-bit key delta into `window[sym]` to authenticate cold-path execution before any string vault decodes.",
-              "Cold functions receive contextual Mixed Boolean-Arithmetic (MBA) opaque predicates across 5 distinct algebraic families—including polynomial identities and Euler Diophantine quadratic residues. These bind into shared module decoys that deter automated symbolic solvers while adding 0% tax to hot loops.",
+              "Entry chunks execute a `WorkerGlobalScope`-safe (`self`/`globalThis`) FNV-1a integrity IIFE with `Reflect.apply` descriptor checks (`Function.prototype.toString`). When async split chunks (such as Next.js 16 Turbopack) execute before the entry shield initializes (`globalThis[sym] === undefined`), decoders return valid plaintext without poisoning cache (`d = -1` removed), failing closed only on active tampering.",
+              "Cold functions (`coldFlow: true`) receive `>=4`-variable semi-linear MBA predicates paired with degree-3 Rivest $\\mathbb{Z}_{2^{32}}$ permutation polynomials, a 256-entry seeded S-Box, QNR conditions (`((Math.imul(z, z) + 1) & 3) === 3`), and neutral return-domain-aligned decoy bridges without mutating application branches or leaking source identifiers.",
             ],
           },
           {
-            title: "Tier 2 Deep-Dive: Bytecode Micro-VM, Inline WASM KDF & Salted Vault",
+            title: "Tier 3 Deep-Dive: Micro-VM v2, Singleton Host-Coupled WASM KDF & 64-Bit Vault",
             body: [
-              "Passing `--aggressive` activates Layer 2 defense for maximum reverse-engineering resistance without risking application runtime crashes or violating CSP restrictions:",
+              "Passing `--aggressive` or `--profile strict` activates Tier 3 enclave defense (prioritizing `@unpeek-critical` annotations and `critical.include` patterns) without risking application crashes or violating strict CSP:",
             ],
             bullets: [
-              "`Bytecode Micro-VM`: Virtualizes selected cold functions into a compact (<1.2 KB) 24-opcode stack interpreter. It runs purely on standard JavaScript control flow without `eval()` or `new Function()`, preserving compliance with strict `script-src` Content Security Policies while fully supporting `async/await` yields, `try/catch` unwinding, and lexical scope closures.",
-              "`Inline WebAssembly KDF (<512 B)`: Synthesizes a minimal (<512 B) WebAssembly binary to execute cryptographic key derivation via `((fnId ^ seed) * 0x01000193) ^ ((callSiteSalt + shieldHash) * 0x045d9f3b)`. It leaves zero persistent heap keys and falls back synchronously to hardened algebraic JavaScript when WebAssembly compilation is blocked.",
-              "`Idempotent Call-Site Salted Vault`: Replaces static plaintext strings with call-site salted decoders. Unlike legacy stateful decryptors that drift during interrupted renders, each call site resolves via `_uD(stringIndex, callSiteSalt)`. This guarantees complete idempotence and thread safety under React 19 Concurrent Mode interruptions and re-renders.",
+              "`Bytecode Micro-VM v2 (43 Opcodes)`: Pre-VM lowering supports `&&`/`||`/`??`, `?:`, `for`/`while`/`do..while`, `try`/`throw`, `this`, `new`, `obj.arguments`, and closures across an `[8, 400]` AST node window using a `$step` direct-threaded closure trampoline and inter-block `$f.ac` accumulator ratchet—zero `eval()` or `new Function()`.",
+              "`Singleton Host-Coupled WASM KDF (<1.2 KB)`: Synthesizes a `371 B` WebAssembly binary importing `env.g`/`env.m` host hooks, compiled once into a shared `globalThis` singleton across split chunks, with a bit-identical non-linear Rivest + S-Box JavaScript fallback when WebAssembly is blocked by CSP.",
+              "`64-Bit Call-Site Salted Vault`: Replaces sequential counters with 31-bit salts derived via 64-bit mixing (`_uD(stringIndex, callSiteSalt)`), guaranteeing complete idempotence under React 19 Concurrent Mode and StrictMode.",
             ],
             codeBlocks: [
               {
@@ -661,9 +661,9 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
               "unpeek resolves this dilemma automatically during `unpeek protect`:",
             ],
             bullets: [
-              "Scans the target build directory recursively for all `*.map` files.",
-              "Relocates them into `.unpeek-maps/` (preserving relative directory structure) outside your publicly served web root.",
-              "Strips `//# sourceMappingURL=...` and `/*# sourceMappingURL=... */` directives from the end of every public `.js` file so browsers never request `.map` URLs.",
+              "Scans the target build directory recursively for all `*.map` files, flattening ECMA-426 `.sections` index maps automatically.",
+              "Composes multi-pass $M_1 \\circ M_2$ VLQ mappings (`chainSourceMaps`) with preamble line shifting and decodes URL-encoded Next.js segments (`%28public%29`, `%5Bparam%5D`) plus Windows paths.",
+              "Stamps an identical deterministic SHA-256 `debugId` onto both the protected JS bundle and vaulted `.map` (verified by `unpeek check` via `debugid-mismatch`), relocates maps to `.unpeek-maps/`, and strips `//# sourceMappingURL=...` directives.",
             ],
           },
           {
@@ -712,11 +712,12 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
           "Complete specification for the unpeek CLI binary, Node.js programmatic functions, and TypeScript interfaces exported from packages/unpeek/src/types.ts.",
         subsections: [
           {
-            title: "CLI Commands & Defense Tiers (Tier 1 vs Tier 2)",
+            title: "CLI Commands & Defense Tiers (Tier 1 / Tier 2 / Tier 3)",
             body: [
-              "The `unpeek` binary supports `init`, `protect`, `check`, and `symbolicate` commands across two distinct defense tiers:",
-              "Tier 1 (Default): Zero-config call-graph aware protection with <2% runtime CPU overhead and <15% Gzip size delta, applying 92-character involutory string vaulting and non-linear MBA cold-flow guards.",
-              "Tier 2 (--aggressive): Maximum tamper-resistance compiling selected cold functions to a <1.2 KB 24-opcode Bytecode Micro-VM backed by inline WebAssembly KDF and call-site salted decoders for zero plaintext exposure.",
+              "The `unpeek` binary supports `init`, `protect`, `check`, and `symbolicate` commands across three defense tiers:",
+              "Tier 1 (`--profile minimal`): Fast baseline with `coldFlow: false`, `mangler.minLength: 1`, hot-path exemption, and order-independent `globalThis` shield (<2% CPU, <15% Gzip).",
+              "Tier 2 (`--profile recommended` / Default): Adds 92-char zero-escape string vaulting, `>=4`-var semi-linear MBA + degree-3 Rivest QNR cold-flow guards, and in-place `Uint8Array` shader vaulting.",
+              "Tier 3 (`--profile strict` / `--aggressive`): Targets `@unpeek-critical` enclaves and `critical.include` functions with the 43-opcode Micro-VM v2, shared `<1.2 KB` host-coupled WASM KDF, 64-bit call-site salted decoders, and CWE-540 path scrubbing.",
             ],
             codeBlocks: [
               {
@@ -812,9 +813,9 @@ const summary: ProtectSummary = await protectProject({
             bullets: [
               "`hotPath`: Configure `customAnimationCalls` (e.g. `['requestAnimationFrame', 'useFrame']`), `customHooks` (e.g. `['useSpring', 'useGesture']`), `arrayHofMethods`, `hocWrappers`, and `maxPipelineCallers` (default `2`) for transitive exemption.",
               "`vault`: Configure `minStringLength` (default `4`), `cssFramework` (`'tailwind'` | `'unocss'` | `'none'`), `customDirectives`, `reservedProps`, `semanticAnchors`, `polymorphicDecoys` (default `true`), and `fragmented` / `fragmentCount`.",
-              "`mangler`: Specify `reservedIdentifiers` (e.g. `['__NEXT_DATA__', 'process']`), `excludePrefixes`, and `excludePatterns` (RegExp array) to prevent mangling critical runtime globals.",
-              "`sourcemaps`: Set `keepPrivate` (default `true`), `vaultDir` (default `'.unpeek-maps'`), and `stripComments` (default `true`) for private symbol management.",
-              "`scrubPaths`: Strip local filesystem paths and residual dev metadata (CWE-540).",
+              "`critical` / `tier` / `coldFlow`: Select `'Tier 1' | 'Tier 2' | 'Tier 3'`, toggle `coldFlow`, and target `@unpeek-critical` annotations or `critical.include` patterns (up to `maxFunctionsPerChunk`, default `12`).",
+              "`mangler`: Set `minLength` (default `1` across presets) plus `reservedIdentifiers`, `excludePrefixes`, and `excludePatterns` (RegExp array) to protect critical runtime globals.",
+              "`scrubPaths`: Strip local filesystem paths (`rootDir`, `[project]/`, `webpack://`, Windows `C:\\`) and residual dev metadata (CWE-540).",
               "`next` / `vite`: Specify `next.distDir` for custom Next.js output directories, or `vite.outDir` / `vite.assetsDir` for custom Vite distributions.",
             ],
             codeBlocks: [
@@ -961,7 +962,7 @@ unpeek protect --out-dir .next/static/chunks --passive --seed 0x7f4a2c`,
           {
             title: "Threat model",
             body: [
-              "unpeek raises the cost of reading a client bundle. String literals move into seeded zero-escape or call-site salted vaults, local bindings take compact polymorphic names, and cold functions receive 4-family contextual MBA predicates or Micro-VM bytecode compilation under `--aggressive`.",
+              "unpeek raises the cost of reading a client bundle. String literals move into 92-char zero-escape or 64-bit call-site salted vaults, local bindings take compact `minLength: 1` polymorphic names, and cold functions receive `>=4`-var Rivest MBA QNR predicates or 43-opcode Micro-VM v2 bytecode compilation under `--aggressive` / `--profile strict`.",
               "It is not a cryptographic boundary. Any code the browser can execute can be executed by anyone who receives it. Treat the output as a deterrent against casual inspection and automated AST solvers, not as a secret store.",
             ],
             bullets: [
@@ -971,10 +972,10 @@ unpeek protect --out-dir .next/static/chunks --passive --seed 0x7f4a2c`,
             ],
           },
           {
-            title: "Synchronous shield & defense tiers",
+            title: "Order-independent shield & defense tiers",
             body: [
-              "The injected entry shield synchronously hashes its own source via `Function.prototype.toString()` and writes a 5-bit key component before string vaults decode, eliminating async microtask races.",
-              "`--passive` dispatches `CustomEvent('unpeek:tamper')` without mutating `console`, while `deterrentMode: 'gradual'` corrupts vault state and quiets console inspection. Add `--aggressive` when high-value IP justifies Bytecode Micro-VM execution and inline WASM KDF.",
+              "The injected entry shield hashes its own source via `Function.prototype.toString()` with `Reflect.apply` descriptor checks and writes `globalThis[sym]` safely across browsers and `WorkerGlobalScope`, without poisoning async split chunks that execute early.",
+              "`--passive` dispatches `CustomEvent('unpeek:tamper')` without mutating `console`, while `deterrentMode: 'gradual'` fails closed and quiets console inspection. Add `--aggressive` or `--profile strict` when high-value `@unpeek-critical` enclaves justify Micro-VM v2 execution and singleton host-coupled WASM KDF.",
             ],
             codeBlocks: [
               {
@@ -1015,7 +1016,7 @@ unpeek protect --no-shield`,
   },
   tr: {
     meta: {
-      version: "v3.0.0",
+      version: "v4.0.0",
       license: "MIT Lisansı",
     },
     nav: {
@@ -1040,8 +1041,8 @@ unpeek protect --no-shield`,
       npmCta: "npm",
       ledger: [
         { label: "sıcak yol", value: "bayt bayt olduğu gibi" },
-        { label: "soğuk yol", value: "92-karakter kasa + MBA + --aggressive" },
-        { label: "bütünlük", value: "senkron FNV-1a + satıriçi WASM" },
+        { label: "soğuk yol", value: "92-karakter / 64-bit kasa + Rivest MBA" },
+        { label: "bütünlük", value: "sıra-bağımsız globalThis + konak WASM" },
       ],
       tickerSource: "kaynak",
       tickerProtected: "korumalı",
@@ -1063,15 +1064,15 @@ unpeek protect --no-shield`,
       hotTitle: "Sıcak yol (TRUE_HOT_60FPS ve sığ render)",
       hotBody:
         "Döngüler, requestAnimationFrame, Three.js useFrame kancaları ve doğrudan bileşen render gövdeleri dönüşümü sıfır ek yükle atlar. İç içe async olay işleyicileri (onSubmit, handleSave) soğuk korumaya alınır.",
-      coldTitle: "Soğuk yol ve --aggressive Katman 2",
+      coldTitle: "Soğuk yol ve Tier 3 @unpeek-critical kalesi",
       coldBody:
-        "Doğrulama, ödeme, API istemcileri ve WebGPU gölgelendiricileri. Katman 1 92 karakterli kaçışsız O(1) kasa, 4 aileli MBA koruyucuları ve yerinde yeniden şifrelenen Uint8Array shader kasası uygular; --aggressive ise Bytecode Micro-VM ve satıriçi WASM KDF ekler.",
+        "Doğrulama, ödeme, API istemcileri ve WebGPU gölgelendiricileri. Tier 2 92 karakterli kaçışsız O(1) kasa, >=4-değişkenli yarı-lineer MBA + derece-3 Rivest QNR koruyucuları ve yerinde şifrelenen Uint8Array shader kasası uygular; Tier 3 / --aggressive ise 43-komutlu Micro-VM v2 ve paylaşımlı <1.2 KB konak-bağlı WASM KDF ekler.",
       stages: [
         { step: "01", title: "Ayrıştır", detail: "Acorn her istemci paketi için AST kurar. Sunucu çıktısı hiç açılmaz." },
         { step: "02", title: "Sınıflandır", detail: "3 katmanlı graf TRUE_HOT_60FPS, SHALLOW_RENDER_COMPONENT ve SERIALIZED_WORKER ayırır." },
-        { step: "03", title: "Koru", detail: "Soğuk fonksiyonlar ve olay işleyicileri 4 aileli bağlamsal MBA ve paylaşımlı tuzak dizisi alır." },
-        { step: "04", title: "Kasa & VM", detail: "Kaçışsız 92 karakter kasa + Uint8Array shader kasası (--aggressive: Micro-VM + WASM KDF)." },
-        { step: "05", title: "Mühürle", detail: "Senkron FNV-1a kalkanı bütünlüğü doğrular; kaynak haritaları .unpeek-maps/ içine alınır." },
+        { step: "03", title: "Koru", detail: "Soğuk yollar >=4-değişkenli MBA, Rivest Z_2^32 QNR koşulları ve nötr tuzak köprüleri alır." },
+        { step: "04", title: "Kasa & VM", detail: "92-karakter / 64-bit tuzlu kasa + Uint8Array shader kasası (--aggressive: 43-komut Micro-VM v2 + tekil WASM)." },
+        { step: "05", title: "Mühürle", detail: "Sıra-bağımsız globalThis kalkanı bütünlüğü doğrular; çok geçişli haritalar .unpeek-maps/ içine alınır." },
       ],
     },
     lab: {
@@ -1103,11 +1104,11 @@ unpeek protect --no-shield`,
       columns: { metric: "Boyut", value: "Varsayılan / --aggressive", where: "Kaynak" },
       rows: [
         { metric: "Sıcak yol CPU maliyeti", value: "%2 altında (%0 sıcak döngü)", where: "benchmarks/overhead.bench.ts" },
-        { metric: "Gzip paket artışı", value: "%4 ile %8 arası (Katman 1)", where: "src/cli/protect.ts" },
-        { metric: "Soğuk fonksiyon dönüşümü", value: "92-karakter kasa + MBA + Micro-VM", where: "src/ast" },
+        { metric: "Gzip paket artışı", value: "%4 ile %8 arası (Tier 1/2)", where: "src/core/protect.ts" },
+        { metric: "Soğuk fonksiyon dönüşümü", value: "Rivest MBA + 43-komut Micro-VM v2", where: "src/ast" },
         { metric: "Shader & WebGPU kasası", value: "yerinde yeniden şifrelenen Uint8Array", where: "src/ast/string-vault.ts" },
-        { metric: "Çalışma zamanı kalkanı", value: "senkron FNV-1a + satıriçi WASM KDF", where: "src/runtime & wasm-vault.ts" },
-        { metric: "İstemci paketi kapsamı", value: "yalnızca statik paketler", where: "src/bundler/detector.ts" },
+        { metric: "Çalışma zamanı kalkanı", value: "sıra-bağımsız globalThis + <1.2 KB WASM", where: "src/runtime & wasm-vault.ts" },
+        { metric: "İstemci paketi kapsamı", value: "yalnızca statik paketler (Worker ayrı)", where: "src/core/detector.ts" },
       ],
     },
     comparisonSection: {
@@ -1146,7 +1147,7 @@ unpeek protect --no-shield`,
         },
         {
           metric: "Bütünlük kontrolü",
-          unpeek: "Senkron FNV-1a + satıriçi WASM",
+          unpeek: "Sıra-bağımsız globalThis + tekil WASM",
           legacyObfuscator: "Regex savunması",
           plainMinifier: "Yok",
         },
@@ -1295,7 +1296,7 @@ export default defineConfig({
           {
             title: "Next.js (App Router & Pages Router)",
             body: [
-              "Next.js projelerinde unpeek yalnızca `.next/static/chunks` (istemci tarafı paketleri) dizinini hedef alır ve `.next/server` klasörüne kesinlikle dokunmaz. Bu sayede React Server Components (RSC), API rotaları ve Server Actions tarafında sıfır başlangıç veya çalışma zamanı yükü oluşur.",
+              "Next.js projelerinde unpeek yalnızca `.next/static/chunks` dizinini hedef alır (`.next/build-manifest.json` girişlerini okur ve `globalThis.TURBOPACK.push` başlıklarını muaf tutar), `.next/server` klasörüne kesinlikle dokunmaz. Asenkron yüklenen parçalar giriş kalkanından önce çalışsa bile zehirlenmeden düzgün çözülür.",
               "Hem `postbuild` CLI kullanımı hem de `unpeek/unplugin` eklentisi tam desteklenir.",
             ],
             codeBlocks: [
@@ -1339,7 +1340,7 @@ export default nextConfig;`,
           {
             title: "Vite & Rollup (CLI veya unplugin)",
             body: [
-              "Vite uygulamalarında unpeek `dist/` çıktı klasörünü otomatik algılar. Dönüşümü postbuild aşaması yerine doğrudan Vite paketleme aşamasında bellek içinde yapmak isterseniz `unpeek/vite` veya `unpeek/unplugin` eklentisini kullanabilirsiniz.",
+              "Vite uygulamalarında `unpeek/vite`, esbuild küçültmesi sonrasındaki `enforce: 'post'` `generateBundle` kancasında çalışır ve Web Worker paketleri için `worker.plugins` ayarını otomatik bağlar.",
             ],
             codeBlocks: [
               {
@@ -1367,7 +1368,7 @@ export default defineConfig({
           {
             title: "Webpack, Rspack & Vanilla JS Hedefleri",
             body: [
-              "Webpack 5 veya Rspack projelerinde `unpeek/unplugin` (veya `unpeek/webpack`, `unpeek/rspack`) üzerinden eklentiyi içe aktarabilir ya da CLI'a `--out-dir build/static/js` parametresi geçebilirsiniz. Vanilla JS projelerinde `--out-dir` ile statik JS klasörünüzü belirtmeniz yeterlidir.",
+              "Webpack 5 ve Rspack eklentileri `processAssets` (`PROCESS_ASSETS_STAGE_OPTIMIZE_INLINE`) aşamasına bağlanır; esbuild `build.onEnd` (`write: false` ve `write: true`) üzerinde çalışır ve Rollup `renderChunk` içinde hash yer tutucularını yönetir. Service Worker (`sw.js`) ve Web Worker (`*.worker.js`) dosyaları `target: 'worker'` belirtilmedikçe varsayılan olarak ayrı tutulur.",
             ],
             codeBlocks: [
               {
@@ -1392,9 +1393,9 @@ export default {
       {
         id: "architecture",
         number: "03",
-        title: "İki Katmanlı Mimari & 3 Katmanlı Hot-Path Motoru",
+        title: "Üç Katmanlı Mimari & 3 Kademeli Hot-Path Motoru",
         summary:
-          "3 katmanlı çağrı grafiği muafiyeti, 92 karakterli kaçışsız string kasası, yerinde yeniden şifrelenen GPU shader tamponları, 4 aileli bağlamsal MBA koruyucuları ve Katman 2 --aggressive Micro-VM + satıriçi WASM KDF mimarisi.",
+          "3 katmanlı çağrı grafiği muafiyeti, 92-karakter / 64-bit tuzlu kasalar, >=4-değişkenli Rivest MBA + QNR koruyucuları, sıra-bağımsız globalThis kalkanı ve Tier 3 Micro-VM v2 + tekil <1.2 KB konak-bağlı WASM KDF mimarisi.",
         subsections: [
           {
             title: "3 Katmanlı Çağrı Grafiği Muafiyeti (TRUE_HOT_60FPS / Sığ Render / Worker)",
@@ -1415,21 +1416,21 @@ export default {
             ],
           },
           {
-            title: "Senkron Öz-İmza Kalkanı ve Bağlamsal MBA Koruyucuları",
+            title: "Sıra-Bağımsız Kalkan ve Non-Lineer Rivest MBA Koruyucuları",
             body: [
-              "Giriş paketleri `queueMicrotask` yarış durumunu (race condition) ortadan kaldıran senkron FNV-1a IIFE kalkanı taşır; kalkan gövdesini `Function.prototype.toString()` ile özetler ve herhangi bir metin kasası çözülmeden önce soğuk yol yürütmesini doğrulamak üzere `window[sym]` üzerine 5-bitlik anahtar farkını yazar.",
-              "Soğuk fonksiyonlar; polinom özdeşlikleri ve Euler Diophantine karesel kalanları da dahil olmak üzere 5 ayrı cebirsel aileye yayılan bağlamsal Karışık Boole-Aritmetik (MBA - Mixed Boolean-Arithmetic) opak koşul koruyucuları alır. Bunlar sıcak döngülere %0 ek yük getirirken otomatik sembolik çözücüleri caydırmak için paylaşımlı modül tuzaklarıyla birleşir.",
+              "Giriş paketleri, `WorkerGlobalScope` uyumlu (`self`/`globalThis`) FNV-1a bütünlük IIFE'i ile `Function.prototype.toString()` ve `Reflect.apply` tanımlayıcı kontrolleri çalıştırır. Asenkron ayrık parçalar (ör. Next.js 16 Turbopack) giriş kalkanından önce çalışsa bile (`globalThis[sym] === undefined`), çözücüler önbelleği zehirlemeden (`d = -1` kaldırıldı) geçerli düz metni döndürür; yalnızca aktif kurcalamada önbelleğe yazmadan kapalı başarısız olur.",
+              "Soğuk fonksiyonlar (`coldFlow: true`); `>=4`-değişkenli yarı-lineer MBA koşullarını derece-3 Rivest $\\mathbb{Z}_{2^{32}}$ permütasyon polinomları, 256-girişli tohum S-Box'ı, QNR koşulu (`((Math.imul(z, z) + 1) & 3) === 3`) ve uygulama dallarına dokunmayan, kaynak değişken adı sızdırmayan nötr tuzak köprüleriyle birleştirir.",
             ],
           },
           {
-            title: "Katman 2 Derinlemesine: Bytecode Micro-VM, Satıriçi WASM KDF ve Tuzlu Kasa",
+            title: "Tier 3 Derinlemesine: Micro-VM v2, Tekil Konak-Bağlı WASM KDF ve 64-Bit Kasa",
             body: [
-              "`--aggressive` bayrağı etkinleştirildiğinde unpeek, çalışma zamanı çökmelerine yol açmadan ve CSP kısıtlamalarını ihlal etmeden en üst düzey tersine mühendislik direnci sunmak için Katman 2 savunmasını devreye alır:",
+              "`--aggressive` veya `--profile strict` etkinleştirildiğinde unpeek, `@unpeek-critical` işaretli fonksiyonları ve `critical.include` desenlerini katı CSP kurallarını bozmadan Tier 3 kalesiyle korur:",
             ],
             bullets: [
-              "`Bytecode Micro-VM`: Seçili soğuk fonksiyonları kompakt (<1.2 KB) 24-komutlu (opcode) yığın yorumlayıcısına derler. `eval()` veya `new Function()` olmadan saf JavaScript akışıyla çalışır; katı `script-src` İçerik Güvenlik İlkeleri (CSP - Content Security Policy) ile tam uyum sağlarken `async/await` yürütmelerini, `try/catch` hata çözme akışını ve sözcüksel kapsam kapanışlarını (lexical closures) eksiksiz yürütür.",
-              "`Satıriçi WebAssembly KDF (<512 B)`: Kriptografik anahtar türetimini (`((fnId ^ seed) * 0x01000193) ^ ((callSiteSalt + shieldHash) * 0x045d9f3b)`) yürütmek için minimal (<512 B) bir WebAssembly ikilisi derler. Bellekte (heap) kalıcı anahtar bırakmaz; WebAssembly derlemesinin engellendiği çalışma zamanlarında cebirsel senkron JavaScript yedeğine (fallback) başvurur.",
-              "`İdempotent Çağrı-Noktası Tuzlu Kasa (Call-Site Salted Vault)`: İstemci paketlerindeki statik düz metin (plaintext) dizgilerini çağrı noktasına özel tuzlu çözücülerle değiştirir. Kesintili render sırasında sapan eski durum bilgili çözücülerin aksine, her çağrı noktası `_uD(stringIndex, callSiteSalt)` üzerinden çözümlenir. Bu sayede React 19 Eşzamanlı Mod (Concurrent Mode) kesintileri ve yeniden render döngülerinde tam idempotent ve iş parçacığı güvenli çalışır.",
+              "`Bytecode Micro-VM v2 (43 Komut)`: Pre-VM düşürmesiyle `&&`/`||`/`??`, `?:`, `for`/`while`/`do..while`, `try`/`throw`, `this`, `new`, `obj.arguments` ve kapanışları `[8, 400]` AST düğüm penceresinde `$step` direct-threaded trambolini ve bloklar arası `$f.ac` akümülatör çarkıyla çalıştırır (`eval()` veya `new Function()` yok).",
+              "`Tekil Konak-Bağlı WASM KDF (<1.2 KB)`: `env.g`/`env.m` konak kancalarını içe aktaran `371 B` WebAssembly ikilisini ayrık parçalar arasında tek bir `globalThis` tekil yuvasında paylaşır; CSP WebAssembly'i engellerse bit-özdeş non-lineer Rivest + S-Box JavaScript yedeğine geçer.",
+              "`64-Bit Çağrı-Noktası Tuzlu Kasa`: Sıralı sayaçlar yerine 64-bit karıştırmadan türetilen 31-bit tuzlar (`_uD(stringIndex, callSiteSalt)`) kullanır; React 19 Eşzamanlı Mod ve StrictMode altında tam idempotent çalışır.",
             ],
             codeBlocks: [
               {
@@ -1480,9 +1481,9 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
               "unpeek bu ikilemi `unpeek protect` aşamasında otomatik olarak çözer:",
             ],
             bullets: [
-              "Hedef derleme dizinindeki tüm `*.map` dosyalarını özyinelemeli olarak tarar.",
-              "Dosyaları bağıl klasör yapısını koruyarak dışarıya sunulmayan `.unpeek-maps/` kasasına taşır.",
-              "Tarayıcıların `.map` ağ isteği göndermemesi için tüm genel `.js` dosyalarının sonundaki `//# sourceMappingURL=...` direktiflerini temizler.",
+              "Hedef derleme dizinindeki tüm `*.map` dosyalarını tarar ve ECMA-426 `.sections` indeks haritalarını otomatik düzleştirir.",
+              "Ön ek satır kaydırmalı çok geçişli $M_1 \\circ M_2$ VLQ bileşimini (`chainSourceMaps`) hesaplar; URL kodlu Next.js parçalarını (`%28public%29`, `%5Bsayi%5D`) ve Windows yollarını çözer.",
+              "Korumalı JS paketine ve `.unpeek-maps/` kasasındaki `.map` dosyasına aynı deterministik SHA-256 `debugId` imzasını basar (`unpeek check` `debugid-mismatch` kuralıyla doğrular) ve `//# sourceMappingURL=...` direktiflerini temizler.",
             ],
           },
           {
@@ -1531,11 +1532,12 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
           "unpeek CLI ikili dosyası, Node.js programatik fonksiyonları ve packages/unpeek/src/types.ts içinden dışa aktarılan TypeScript arayüzlerinin tam referansı.",
         subsections: [
           {
-            title: "CLI Komutları & Savunma Kademeleri (Tier 1 vs Tier 2)",
+            title: "CLI Komutları & Savunma Kademeleri (Tier 1 / Tier 2 / Tier 3)",
             body: [
-              "`unpeek` komut satırı aracı `init`, `protect`, `check` ve `symbolicate` komutlarını iki ayrı savunma kademesiyle sunar:",
-              "Katman 1 (Varsayılan): <%2 çalışma zamanı CPU ek yükü ve <%15 Gzip boyutu delta bütçesiyle çağrı grafiği duyarlı muafiyet, 92-karakter involutory string kasası ve non-lineer MBA soğuk akış koruması.",
-              "Katman 2 (--aggressive): Seçili soğuk fonksiyonları <1.2 KB 24-komutlu Bytecode Micro-VM'e derleyen, satıriçi WebAssembly KDF ve çağrı noktası tuzlu tembel kasayla sıfır düz metin maruziyeti sağlayan üst düzey koruma profili.",
+              "`unpeek` komut satırı aracı `init`, `protect`, `check` ve `symbolicate` komutlarını üç savunma kademesiyle sunar:",
+              "Tier 1 (`--profile minimal`): `coldFlow: false`, `mangler.minLength: 1`, sıcak yol muafiyeti ve sıra-bağımsız `globalThis` kalkanıyla hızlı temel koruma (<%2 CPU, <%15 Gzip).",
+              "Tier 2 (`--profile recommended` / Varsayılan): 92-karakter kaçışsız metin kasası, `>=4`-değişkenli yarı-lineer MBA + derece-3 Rivest QNR koruması ve yerinde `Uint8Array` shader kasası ekler.",
+              "Tier 3 (`--profile strict` / `--aggressive`): `@unpeek-critical` kalelerini ve `critical.include` desenlerini 43-komutlu Micro-VM v2, paylaşımlı `<1.2 KB` konak-bağlı WASM KDF, 64-bit çağrı-noktası tuzlu kasa ve CWE-540 yol temizliğiyle korur.",
             ],
             codeBlocks: [
               {
@@ -1631,9 +1633,9 @@ const summary: ProtectSummary = await protectProject({
             bullets: [
               "`hotPath`: Geçişken muafiyet için `customAnimationCalls` (ör. `['requestAnimationFrame', 'useFrame']`), `customHooks` (ör. `['useSpring', 'useGesture']`), `arrayHofMethods`, `hocWrappers` ve `maxPipelineCallers` (varsayılan `2`) seçeneklerini belirler.",
               "`vault`: `minStringLength` (varsayılan `4`), `cssFramework` (`'tailwind'` | `'unocss'` | `'none'`), `customDirectives`, `reservedProps`, `semanticAnchors`, `polymorphicDecoys` (varsayılan `true`) ve `fragmented` / `fragmentCount` kurallarını yapılandırır.",
-              "`mangler`: Kritik çalışma zamanı global değişkenlerinin bozulmaması için `reservedIdentifiers` (ör. `['__NEXT_DATA__', 'process']`), `excludePrefixes` ve `excludePatterns` (RegExp dizisi) tanımlar.",
-              "`sourcemaps`: Özel sembol yönetimi için `keepPrivate` (varsayılan `true`), `vaultDir` (varsayılan `'.unpeek-maps'`) ve `stripComments` (varsayılan `true`) değerlerini belirler.",
-              "`scrubPaths`: Yerel dosya sistemi yollarını ve artık geliştirme meta verilerini temizler (CWE-540).",
+              "`critical` / `tier` / `coldFlow`: `'Tier 1' | 'Tier 2' | 'Tier 3'` katmanını seçer, `coldFlow` geçişini ayarlar ve `@unpeek-critical` veya `critical.include` desenlerini hedefler (`maxFunctionsPerChunk` varsayılan: `12`).",
+              "`mangler`: `minLength` (tüm hazır profillerde varsayılan `1`) ile `reservedIdentifiers`, `excludePrefixes` ve `excludePatterns` (RegExp dizisi) kurallarını tanımlar.",
+              "`scrubPaths`: Yerel dosya sistemi yollarını (`rootDir`, `[project]/`, `webpack://`, Windows `C:\\`) ve artık geliştirme meta verilerini temizler (CWE-540).",
               "`next` / `vite`: Özel Next.js çıktı dizinleri için `next.distDir`, özel Vite dağıtımları için `vite.outDir` / `vite.assetsDir` geçersiz kılmalarını tanımlar.",
             ],
             codeBlocks: [
@@ -1780,7 +1782,7 @@ unpeek protect --out-dir .next/static/chunks --passive --seed 0x7f4a2c`,
           {
             title: "Tehdit modeli",
             body: [
-              "unpeek istemci paketini okumanın maliyetini yükseltir. String sabitleri kaçışsız veya çağrı-noktası tuzlu kasalara taşınır, yerel bağlar kompakt polimorfik adlar alır ve soğuk fonksiyonlar 4 aileli bağlamsal MBA koruyucuları veya `--aggressive` ile Micro-VM baytkod derlemesi kazanır.",
+              "unpeek istemci paketini okumanın maliyetini yükseltir. String sabitleri 92-karakter kaçışsız veya 64-bit çağrı-noktası tuzlu kasalara taşınır, yerel bağlar `minLength: 1` kompakt polimorfik adlar alır ve soğuk fonksiyonlar `>=4`-değişkenli Rivest MBA QNR koruyucuları veya `--aggressive` / `--profile strict` ile 43-komutlu Micro-VM v2 baytkod derlemesi kazanır.",
               "Bu bir kriptografik sınır değildir. Tarayıcının çalıştırabildiği her kodu, onu teslim alan herkes çalıştırabilir. Çıktıyı gizli bilgi kasası değil, meraklı gözle bakmaya ve otomatik AST çözücülere karşı caydırıcı olarak değerlendirin.",
             ],
             bullets: [
@@ -1790,10 +1792,10 @@ unpeek protect --out-dir .next/static/chunks --passive --seed 0x7f4a2c`,
             ],
           },
           {
-            title: "Senkron kalkan & koruma katmanları",
+            title: "Sıra-bağımsız kalkan & koruma katmanları",
             body: [
-              "Enjekte edilen kalkan `Function.prototype.toString()` üzerinden kendi kaynağını senkron biçimde özetler ve string kasaları çözülmeden önce 5-bitlik anahtar bileşenini `window[sym]` üzerine yazar; böylece asenkron microtask yarışını kapatır.",
-              "`--passive` yalnızca `CustomEvent('unpeek:tamper')` olayını tetiklerken, `deterrentMode: 'gradual'` kasa anahtarını zehirler ve konsolu susturur. Yüksek değerli istemci mantığı için Bytecode Micro-VM ve satıriçi WASM KDF'i `--aggressive` ile açın.",
+              "Enjekte edilen kalkan `Function.prototype.toString()` ve `Reflect.apply` tanımlayıcı kontrolleriyle kendi kaynağını doğrular ve `globalThis[sym]` üzerine tarayıcı ile `WorkerGlobalScope` uyumlu biçimde yazar; erken çalışan asenkron parçaları zehirlemez.",
+              "`--passive` yalnızca `CustomEvent('unpeek:tamper')` olayını tetiklerken, `deterrentMode: 'gradual'` kapalı başarısız olur ve konsolu susturur. Yüksek değerli `@unpeek-critical` kaleleri için Micro-VM v2 ve tekil konak-bağlı WASM KDF'i `--aggressive` veya `--profile strict` ile açın.",
             ],
             codeBlocks: [
               {

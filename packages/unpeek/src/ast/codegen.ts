@@ -12,9 +12,47 @@ export type PolymorphicRole =
   | 'windowKey'
   | string;
 
+const IDENT_START_CHARS =
+  'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_$';
+const IDENT_CONT_CHARS =
+  '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_$';
+const DISALLOWED_IDENTS = new Set([
+  'as',
+  'do',
+  'if',
+  'in',
+  'of',
+  'for',
+  'int',
+  'let',
+  'new',
+  'try',
+  'var',
+  'NaN',
+  'Map',
+  'Set',
+  'URL',
+  'top',
+  'get',
+  'set',
+  'void',
+  'case',
+  'else',
+  'enum',
+  'null',
+  'this',
+  'true',
+  'with',
+  'Date',
+  'JSON',
+  'Math',
+  'eval',
+]);
+
 /**
- * Deterministically derives a short, collision-free, minify-friendly identifier
- * (_a0, $b1, etc.) for a given seed and role, eliminating fixed _uC and _u$ prefixes.
+ * Deterministically derives a short, collision-free, valid JS identifier
+ * from seed and role with a randomized first character ([a-zA-Z_$]),
+ * avoiding fixed role prefixes (_a/$b/_z etc.) and reserved words.
  */
 export function derivePolymorphicIdent(seed: number, role: PolymorphicRole): string {
   let h = (0x811c9dc5 ^ (seed >>> 0)) >>> 0;
@@ -22,19 +60,30 @@ export function derivePolymorphicIdent(seed: number, role: PolymorphicRole): str
     h ^= role.charCodeAt(i);
     h = Math.imul(h, 0x01000193) >>> 0;
   }
-  const rolePrefixes: Record<string, string> = {
-    vault: '_a',
-    shield: '$b',
-    decoy: '_d',
-    shader: '_s',
-    vm: '_m',
-    wasm: '_w',
-    salted: '_k',
-    windowKey: '_z',
-  };
-  const prefix = rolePrefixes[role] ?? `_${String.fromCharCode(97 + (h % 26))}`;
-  const suffix = ((h >>> 4) % 1296).toString(36).padStart(2, '0');
-  return `${prefix}${suffix}`;
+  // Murmur3 avalanche mix so every bit of seed/role affects the first character & suffix
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b) >>> 0;
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35) >>> 0;
+  h ^= h >>> 16;
+
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const c0 = IDENT_START_CHARS[h % IDENT_START_CHARS.length];
+    const c1 = IDENT_CONT_CHARS[(h >>> 6) % IDENT_CONT_CHARS.length];
+    const c2 = IDENT_CONT_CHARS[(h >>> 12) % IDENT_CONT_CHARS.length];
+    const c3 = IDENT_CONT_CHARS[(h >>> 18) % IDENT_CONT_CHARS.length];
+    const ident = `${c0}${c1}${c2}${c3}`;
+    if (
+      !DISALLOWED_IDENTS.has(ident) &&
+      !ident.startsWith('__') &&
+      !ident.startsWith('_u') &&
+      !ident.startsWith('_0')
+    ) {
+      return ident;
+    }
+    h = Math.imul(h ^ (0x9e3779b9 + attempt), 0x85ebca6b) >>> 0;
+  }
+  return `_${(h >>> 0).toString(36).slice(0, 3).padStart(3, '0')}`;
 }
 
 const OPERATOR_PRECEDENCE: Record<string, number> = {
@@ -138,21 +187,197 @@ function formatSequence(state: any, expressions: any[]): void {
   }
 }
 
-function expressionStartsWith(node: any, char: '+' | '-'): boolean {
-  if (!node) return false;
-  if (node.type === 'UnaryExpression' && node.prefix) {
-    return node.operator === char;
+function getLeadingNode(
+  state: any,
+  node: any,
+  parentNode?: any,
+  isRightHand = false
+): any {
+  let cur = node;
+  let parent = parentNode;
+  let right = isRightHand;
+  for (let depth = 0; cur && depth < 32; depth++) {
+    if (parent && state && expressionNeedsParenthesis(state, cur, parent, right)) {
+      return null;
+    }
+    if (cur.type === 'BinaryExpression') {
+      if (cur.operator === 'in') return null;
+      parent = cur;
+      cur = cur.left;
+      right = false;
+    } else if (cur.type === 'LogicalExpression' || cur.type === 'AssignmentExpression') {
+      parent = cur;
+      cur = cur.left;
+      right = false;
+    } else if (cur.type === 'ConditionalExpression') {
+      const prec = state?.expressionsPrecedence?.[cur.test?.type];
+      if (
+        prec === NEEDS_PARENTHESES ||
+        prec <= state?.expressionsPrecedence?.ConditionalExpression
+      ) {
+        return null;
+      }
+      parent = cur;
+      cur = cur.test;
+      right = false;
+    } else if (cur.type === 'MemberExpression') {
+      const prec = state?.expressionsPrecedence?.[cur.object?.type];
+      if (
+        prec === NEEDS_PARENTHESES ||
+        prec < state?.expressionsPrecedence?.MemberExpression
+      ) {
+        return null;
+      }
+      parent = cur;
+      cur = cur.object;
+      right = false;
+    } else if (cur.type === 'CallExpression') {
+      const prec = state?.expressionsPrecedence?.[cur.callee?.type];
+      if (
+        prec === NEEDS_PARENTHESES ||
+        prec < state?.expressionsPrecedence?.CallExpression
+      ) {
+        return null;
+      }
+      parent = cur;
+      cur = cur.callee;
+      right = false;
+    } else if (cur.type === 'ChainExpression') {
+      parent = cur;
+      cur = cur.expression;
+      right = false;
+    } else if (cur.type === 'TaggedTemplateExpression') {
+      const prec = state?.expressionsPrecedence?.[cur.tag?.type];
+      if (
+        prec === NEEDS_PARENTHESES ||
+        prec < state?.expressionsPrecedence?.CallExpression
+      ) {
+        return null;
+      }
+      parent = cur;
+      cur = cur.tag;
+      right = false;
+    } else if (cur.type === 'UpdateExpression' && !cur.prefix) {
+      parent = cur;
+      cur = cur.argument;
+      right = false;
+    } else {
+      return cur;
+    }
   }
-  if (node.type === 'UpdateExpression' && node.prefix) {
-    return node.operator[0] === char;
+  return cur;
+}
+
+function getTrailingNode(
+  state: any,
+  node: any,
+  parentNode?: any,
+  isRightHand = false
+): any {
+  let cur = node;
+  let parent = parentNode;
+  let right = isRightHand;
+  for (let depth = 0; cur && depth < 32; depth++) {
+    if (parent && state && expressionNeedsParenthesis(state, cur, parent, right)) {
+      return null;
+    }
+    if (cur.type === 'BinaryExpression') {
+      if (cur.operator === 'in') return null;
+      parent = cur;
+      cur = cur.right;
+      right = true;
+    } else if (cur.type === 'LogicalExpression' || cur.type === 'AssignmentExpression') {
+      parent = cur;
+      cur = cur.right;
+      right = true;
+    } else if (cur.type === 'ConditionalExpression') {
+      parent = cur;
+      cur = cur.alternate;
+      right = true;
+    } else if (cur.type === 'ChainExpression') {
+      parent = cur;
+      cur = cur.expression;
+      right = false;
+    } else if (cur.type === 'UnaryExpression' && cur.prefix) {
+      parent = cur;
+      cur = cur.argument;
+      right = true;
+    } else if (cur.type === 'UpdateExpression' && cur.prefix) {
+      parent = cur;
+      cur = cur.argument;
+      right = true;
+    } else if (cur.type === 'AwaitExpression') {
+      parent = cur;
+      cur = cur.argument;
+      right = true;
+    } else {
+      return cur;
+    }
+  }
+  return cur;
+}
+
+function expressionStartsWith(
+  node: any,
+  char: '+' | '-' | '/',
+  state?: any,
+  parentNode?: any,
+  isRightHand = false
+): boolean {
+  const leading = state ? getLeadingNode(state, node, parentNode, isRightHand) : node;
+  if (!leading) return false;
+  if (leading.type === 'UnaryExpression' && leading.prefix) {
+    return leading.operator === char;
+  }
+  if (leading.type === 'UpdateExpression' && leading.prefix) {
+    return leading.operator[0] === char;
+  }
+  if (
+    char === '-' &&
+    leading.type === 'Literal' &&
+    typeof leading.value === 'number' &&
+    leading.value < 0
+  ) {
+    return true;
+  }
+  if (char === '/' && isRegExp(leading)) {
+    return true;
   }
   return false;
 }
 
-function expressionEndsWith(node: any, char: '+' | '-'): boolean {
-  if (!node) return false;
-  if (node.type === 'UpdateExpression' && !node.prefix) {
-    return node.operator[0] === char;
+function leadingIsUnaryOrUpdate(
+  state: any,
+  node: any,
+  parentNode?: any,
+  isRightHand = false
+): boolean {
+  const leading = getLeadingNode(state, node, parentNode, isRightHand);
+  if (!leading) return false;
+  if (
+    leading.type === 'UnaryExpression' &&
+    leading.prefix &&
+    '+-!~'.includes(leading.operator)
+  ) {
+    return true;
+  }
+  if (leading.type === 'UpdateExpression' && leading.prefix) {
+    return true;
+  }
+  return false;
+}
+
+function expressionEndsWith(
+  node: any,
+  char: '+' | '-',
+  state?: any,
+  parentNode?: any,
+  isRightHand = false
+): boolean {
+  const trailing = state ? getTrailingNode(state, node, parentNode, isRightHand) : node;
+  if (!trailing) return false;
+  if (trailing.type === 'UpdateExpression' && !trailing.prefix) {
+    return trailing.operator[0] === char;
   }
   return false;
 }
@@ -182,16 +407,17 @@ export const compactGenerator: Generator = Object.assign({}, baseGenerator, {
     } else {
       if (
         (op === '+' || op === '-') &&
-        expressionEndsWith(node.left, op as '+' | '-') &&
-        !expressionNeedsParenthesis(state, node.left, node, false)
+        expressionEndsWith(node.left, op as '+' | '-', state, node, false)
       ) {
         spaceBefore = true;
       }
       if (
         ((op === '+' || op === '-') &&
-          expressionStartsWith(node.right, op as '+' | '-') &&
-          !expressionNeedsParenthesis(state, node.right, node, true)) ||
-        (op === '/' && isRegExp(node.right))
+          (expressionStartsWith(node.right, op as '+' | '-', state, node, true) ||
+            leadingIsUnaryOrUpdate(state, node.right, node, true))) ||
+        (op === '/' &&
+          (isRegExp(node.right) ||
+            expressionStartsWith(node.right, '/', state, node, true)))
       ) {
         spaceAfter = true;
       }
@@ -206,6 +432,49 @@ export const compactGenerator: Generator = Object.assign({}, baseGenerator, {
     }
   },
 
+  UnaryExpression(this: any, node: any, state: any) {
+    if (node.prefix) {
+      const { operator, argument } = node;
+      state.write(operator);
+      const needsParentheses = expressionNeedsParenthesis(
+        state,
+        argument,
+        node,
+        true
+      );
+      if (needsParentheses) {
+        state.write(operator.length > 1 ? ' (' : '(');
+        this[argument.type](argument, state);
+        state.write(')');
+      } else {
+        if (
+          operator.length > 1 ||
+          ('+-!~'.includes(operator) &&
+            leadingIsUnaryOrUpdate(state, argument, node, true))
+        ) {
+          state.write(' ');
+        }
+        this[argument.type](argument, state);
+      }
+    } else {
+      this[node.argument.type](node.argument, state);
+      state.write(node.operator);
+    }
+  },
+
+  UpdateExpression(this: any, node: any, state: any) {
+    if (node.prefix) {
+      state.write(node.operator);
+      if (leadingIsUnaryOrUpdate(state, node.argument, node, true)) {
+        state.write(' ');
+      }
+      this[node.argument.type](node.argument, state);
+    } else {
+      this[node.argument.type](node.argument, state);
+      state.write(node.operator);
+    }
+  },
+
   LogicalExpression(node: any, state: State) {
     formatExpression(state, node.left, node, false);
     state.write(node.operator);
@@ -216,9 +485,10 @@ export const compactGenerator: Generator = Object.assign({}, baseGenerator, {
     this[node.left.type](node.left, state);
     const op = node.operator;
     if (
-      (op.endsWith('+') && expressionStartsWith(node.right, '+')) ||
-      (op.endsWith('-') && expressionStartsWith(node.right, '-')) ||
-      (op.endsWith('/') && isRegExp(node.right))
+      (op.endsWith('+') && expressionStartsWith(node.right, '+', state, node, true)) ||
+      (op.endsWith('-') && expressionStartsWith(node.right, '-', state, node, true)) ||
+      (op.endsWith('/') &&
+        (isRegExp(node.right) || expressionStartsWith(node.right, '/', state, node, true)))
     ) {
       state.write(op + ' ');
     } else {
@@ -435,6 +705,30 @@ export const compactGenerator: Generator = Object.assign({}, baseGenerator, {
   },
 } as any);
 
+export interface CompactJsMapResult {
+  code: string;
+  mappings: string;
+  names: string[];
+  sources: string[];
+}
+
+const VLQ_BASE64_CHARS =
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function encodeVlq(value: number): string {
+  let vlq = value < 0 ? (-value << 1) + 1 : value << 1;
+  let encoded = '';
+  do {
+    let digit = vlq & 0x1f;
+    vlq >>>= 5;
+    if (vlq > 0) {
+      digit |= 0x20;
+    }
+    encoded += VLQ_BASE64_CHARS[digit];
+  } while (vlq > 0);
+  return encoded;
+}
+
 /**
  * Generates compact, single-line JavaScript using custom astring rules to eliminate
  * redundant whitespace while preserving string literal contents and language semantics.
@@ -447,4 +741,139 @@ export function generateCompactJs(
     indent: '',
     lineEnd: '',
   });
+}
+
+/**
+ * Generates compact JavaScript alongside an M2 Source Map v3 VLQ mapping
+ * derived from Acorn AST node `.loc` start positions (0-based lines/columns).
+ */
+export function generateCompactJsWithMap(
+  ast: acorn.Program | Omit<acorn.Node, 'start' | 'end'>,
+  fileName?: string
+): CompactJsMapResult {
+  const sourceName = fileName || 'input.js';
+  const sources = [sourceName];
+  const names: string[] = [];
+  const nameToIndex = new Map<string, number>();
+
+  interface RawSegment {
+    genCol: number;
+    srcIdx: number;
+    origLine: number;
+    origCol: number;
+    nameIdx?: number;
+  }
+
+  const lines: RawSegment[][] = [];
+  const chunks: string[] = [];
+  let curLine = 0;
+  let curCol = 0;
+  let prevWriteLine = 0;
+  let prevWriteCol = 0;
+  let lastMappedLine = -1;
+  let lastMappedCol = -1;
+
+  const outputStream = {
+    write(chunk: string) {
+      prevWriteLine = curLine;
+      prevWriteCol = curCol;
+      if (chunk.length > 0) {
+        chunks.push(chunk);
+        for (let i = 0; i < chunk.length; i++) {
+          if (chunk.charCodeAt(i) === 10) {
+            curLine++;
+            curCol = 0;
+          } else {
+            curCol++;
+          }
+        }
+      }
+    },
+  };
+
+  const sourceMapSink = {
+    file: sourceName,
+    addMapping(mapping: {
+      original: { line: number; column: number } | null;
+      name?: string;
+    }) {
+      if (!mapping.original) return;
+      const origLine = (mapping.original.line | 0) - 1;
+      const origCol = mapping.original.column | 0;
+      if (origLine < 0 || origCol < 0) return;
+
+      const genLine = prevWriteLine;
+      const genCol = prevWriteCol;
+      if (genLine === lastMappedLine && genCol === lastMappedCol) {
+        return;
+      }
+      lastMappedLine = genLine;
+      lastMappedCol = genCol;
+
+      while (lines.length <= genLine) {
+        lines.push([]);
+      }
+
+      let nameIdx: number | undefined;
+      if (typeof mapping.name === 'string' && mapping.name.length > 0) {
+        let existing = nameToIndex.get(mapping.name);
+        if (existing === undefined) {
+          existing = names.length;
+          names.push(mapping.name);
+          nameToIndex.set(mapping.name, existing);
+        }
+        nameIdx = existing;
+      }
+
+      lines[genLine].push({
+        genCol,
+        srcIdx: 0,
+        origLine,
+        origCol,
+        nameIdx,
+      });
+    },
+  };
+
+  generate(ast as Parameters<typeof generate>[0], {
+    generator: compactGenerator,
+    indent: '',
+    lineEnd: '',
+    output: outputStream as unknown as NonNullable<Parameters<typeof generate>[1]>['output'],
+    sourceMap: sourceMapSink as unknown as NonNullable<Parameters<typeof generate>[1]>['sourceMap'],
+  });
+
+  let prevSrcIdx = 0;
+  let prevOrigLine = 0;
+  let prevOrigCol = 0;
+  let prevNameIdx = 0;
+
+  const encodedLines = lines.map((segs) => {
+    let prevGenCol = 0;
+    const encodedSegs: string[] = [];
+    for (const seg of segs) {
+      let s =
+        encodeVlq(seg.genCol - prevGenCol) +
+        encodeVlq(seg.srcIdx - prevSrcIdx) +
+        encodeVlq(seg.origLine - prevOrigLine) +
+        encodeVlq(seg.origCol - prevOrigCol);
+      prevGenCol = seg.genCol;
+      prevSrcIdx = seg.srcIdx;
+      prevOrigLine = seg.origLine;
+      prevOrigCol = seg.origCol;
+      if (seg.nameIdx !== undefined) {
+        s += encodeVlq(seg.nameIdx - prevNameIdx);
+        prevNameIdx = seg.nameIdx;
+      }
+      encodedSegs.push(s);
+    }
+    return encodedSegs.join(',');
+  });
+
+  return {
+    code: chunks.join(''),
+    mappings: encodedLines.join(';'),
+    names,
+    sources,
+  };
 }

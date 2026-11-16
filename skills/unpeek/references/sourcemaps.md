@@ -4,13 +4,15 @@ Deploying production `.map` files publicly allows attackers to reconstruct 100% 
 
 ---
 
-## 1. Vaulting Mechanism (`relocateSourceMaps`)
+## 1. Vaulting, Multi-Pass Composition & `debugId`
 
-When unpeek protects a project (`unpeek protect` or `relocateSourceMaps`):
+When unpeek protects a project (`protectProject` / `unpeek protect`):
 
 1. **Physical Relocation**: All `.js.map` and `.mjs.map` files in the client output folder are moved into `.unpeek-maps/` (or `--private-maps-dir`).
-2. **Comment Stripping**: Public `.js` bundles are parsed and any `//# sourceMappingURL=...` or `/*# sourceMappingURL=... */` references are stripped.
-3. **Directory Mirroring**: Subdirectory structures (e.g., `dist/assets/chunk.js.map`) are mirrored inside `.unpeek-maps/assets/chunk.js.map`.
+2. **Multi-Pass $M_1 \circ M_2$ Composition & ECMA-426 `.sections`**: `vlq.ts` automatically flattens ECMA-426 `.sections` index maps, shifts lines for any injected preamble (`shiftSourceMapLines`), and composes the bundler's $M_1$ map with unpeek's $M_2$ compact codegen map (`chainSourceMaps`) so line/column mappings stay exact.
+3. **Deterministic SHA-256 `debugId` Sync**: Stamps an identical SHA-256 UUIDv4 `debugId` onto both the protected JS bundle footer and the vaulted `.map` file (checked by `unpeek check` via the `debugid-mismatch` rule).
+4. **Comment Stripping & Path Decoding**: Public `.js` bundles have `//# sourceMappingURL=...` stripped. `symbolicateStackTrace` decodes URL-encoded App Router segments (`%28public%29` -> `(public)`, `%5Bparam%5D` -> `[param]`) and Windows `\` paths.
+5. **Directory Mirroring**: Subdirectory structures (e.g., `dist/assets/chunk.js.map`) are mirrored inside `.unpeek-maps/assets/chunk.js.map`.
 
 ---
 

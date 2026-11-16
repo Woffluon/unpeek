@@ -62,14 +62,14 @@ flowchart TD
 
 1. **Call-Graph Hot-Path Exemption (`<2%` CPU Budget)**
    Before modifying an AST node, [`detectHotPaths`](packages/unpeek/src/ast/index.ts) traverses the file call graph bidirectionally. Functions containing loops (`for`, `while`, `do-while`, `for-of`), array higher-order callbacks (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` tickers, React/UI render components (`useState`, `useEffect`, `createElement`), and all helper callees invoked from hot loops are flagged as hot paths. `unpeek` exempts hot loops and their callees from both opaque control-flow predicates and string vault rewriting, while protecting cold functions (such as license checks, request signers, and auth validators). V8 JIT optimization inside hot loops remains untouched.
-2. **O(1) Const-Array String Vault & Tamper Entanglement (`<15%` Gzip Budget)**
-   Cold string literals (`minStringLength >= 4`) are encrypted at build time with a period-2 polymorphic XOR stream cipher keyed by a per-build 32-bit seed that preserves LZ77/Gzip compressibility. At module initialization, the injected `const _uC` vault decodes strings once into a V8 `kConst` array slot so every subsequent read resolves in O(1) constant time via direct array indexing, while dual-entangling the XOR key with both the runtime integrity state (`String.prototype._u`) and self-verifying decoder formatting (`/\n/.test(f)`).
-3. **Self-Defending `Function.prototype.toString()` Integrity and Deterrent Modes**
-   When an analyst formats a protected chunk using DevTools Pretty-Print (`{}`) or edits a branch instruction in the Sources panel, the formatted source alters `Function.prototype.toString()`. [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts) validates a seeded 32-bit FNV-1a checksum against the function source representation with zero false positives on untouched minified code. The response is governed by `deterrentMode`:
-   - `passive` (default for both CLI `protect` and `unplugin`): Dispatches a tamper telemetry event (`unpeek:tamper`) to `window` with zero console muting or audible breakage, enabling covert telemetry.
+2. **O(1) Const-Array & 64-Bit Salted String Vaults (`<15%` Gzip Budget)**
+   Cold string literals (`minStringLength >= 4`) are encoded with a seed-shuffled 92-character involutory ASCII permutation (`P[P[c]] = c`) or 64-bit call-site salted decoders (`computeCallSiteSalt64`) backed by a shared singleton `<1.2 KB` host-coupled WASM KDF (`env.g`/`env.m`, with a bit-identical non-linear Rivest + S-Box JS fallback). Async split chunks executing before entry shield initialization resolve cleanly without cache poisoning (`d = -1` removed), while active tampering fails closed without caching.
+3. **Order-Independent `globalThis` Shield, Non-Linear MBA & Tier 3 Micro-VM v2**
+   Entry chunks inject an order-independent, `WorkerGlobalScope`-safe (`self`/`globalThis`) integrity IIFE using `Function.prototype.toString()` and `Reflect.apply` descriptor checks (`verifyCodeIntegrity`). Cold paths (`coldFlow: true`) receive `>=4`-variable semi-linear MBA + degree-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR predicates (`((z^2 + 1) & 3) === 3`) and neutral decoy bridges; Tier 3 / `--aggressive` prioritizes `@unpeek-critical` functions into a 43-opcode direct-threaded Micro-VM v2 (`$step` trampoline + inter-block `$f.ac` ratchet, zero `eval()`). The response on tamper is governed by `deterrentMode`:
+   - `passive` (default for both CLI `protect` and `unplugin`): Dispatches a tamper telemetry event (`unpeek:tamper`) to `self`/`globalThis` with zero console muting or audible breakage, enabling covert telemetry.
    - `gradual` (opt-in via `--gradual` or `deterrentMode: 'gradual'`): Progressively corrupts internal runtime lookups and silences `console` output, neutralizing attackers without providing an immediate crash trace to patch.
-4. **Automatic Source Map Vault (`.unpeek-maps/`)**
-   Leaving `.js.map` files in a public build directory reconstructs your original TypeScript project tree inside DevTools. [`protectProject`](packages/unpeek/src/cli/protect.ts) extracts `.map` files from your public build directory into a private `.unpeek-maps/` folder and strips `//# sourceMappingURL=` comments from every client bundle so you can upload maps to Sentry or Datadog without serving them to end users.
+4. **Multi-Pass Source Map Vault (`.unpeek-maps/`) & SHA-256 `debugId`**
+   Leaving `.js.map` files in a public build directory reconstructs your original TypeScript project tree inside DevTools. [`protectProject`](packages/unpeek/src/core/protect.ts) flattens ECMA-426 `.sections` index maps, composes multi-pass $M_1 \circ M_2$ VLQ mappings (`chainSourceMaps`), stamps deterministic SHA-256 `debugId` values across JS bundles and vaulted `.map` files (verified by `unpeek check`), relocates `.map` files into `.unpeek-maps/`, and strips `//# sourceMappingURL=` comments.
 
 ---
 
@@ -122,11 +122,12 @@ npx unpeek protect
 | `-v, --version` | Show CLI version number | |
 
 > [!NOTE]
-> **Protection Tiers:**
-> - **Tier 1 (Default):** Call-graph hot-path exemption (<2% CPU overhead, <15% Gzip budget), polymorphic O(1) `kConst` string vault, identifier mangling, and 32-bit FNV-1a checksum runtime shield.
-> - **Tier 2 (`--aggressive`):** Bytecode Micro-VM virtualization and inline WebAssembly Key Derivation Function (WASM KDF) for security-critical functions.
+> **Protection Tiers & Presets:**
+> - **Tier 1 (`--profile minimal`):** Call-graph hot-path exemption (`coldFlow: false`), `mangler.minLength: 1`, and order-independent `globalThis` runtime shield (`<2%` CPU overhead, `<15%` Gzip budget).
+> - **Tier 2 (`--profile recommended` / Default):** Adds 92-char zero-escape string vault, `>=4`-var semi-linear MBA + degree-3 Rivest QNR predicates, and in-place `Uint8Array` shader vault.
+> - **Tier 3 (`--profile strict` / `--aggressive`):** Targets `@unpeek-critical` enclaves and `critical.include` patterns with the 43-opcode direct-threaded Micro-VM v2, shared `<1.2 KB` host-coupled WASM KDF (with bit-identical JS fallback), 64-bit call-site salted decoders, and CWE-540 path scrubbing.
 >
-> Programmatic execution through `protectProject(options)` supports additional fine-grained options, including `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, `aggressive`, and `cwd`.
+> Programmatic execution through `protectProject(options)` supports `tier`, `critical`, `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, `aggressive`, `scrubPaths`, and `cwd`. Bundler plugins run at lifecycle-safe post-minify hooks (Vite `enforce: 'post'` `generateBundle` + `worker.plugins`, Webpack/Rspack `processAssets`, esbuild `onEnd`, Rollup `renderChunk`, Next.js `.next/build-manifest.json`), and Service Workers / Web Workers (`sw.js`, `*.worker.js`) are isolated by default unless `target: 'worker'`.
 
 > [!IMPORTANT]
 > **Native CommonJS & ESM Dual-Package Support:**
@@ -267,6 +268,17 @@ export default defineConfig({
   // Target environment ('browser' | 'worker' | 'universal')
   target: 'browser',
 
+  // Protection preset ('minimal' | 'recommended' | 'strict') & tier ('Tier 1' | 'Tier 2' | 'Tier 3')
+  profile: 'recommended',
+  tier: 'Tier 2',
+  coldFlow: true,
+
+  // Tier 3 critical enclave targeting (@unpeek-critical / include patterns)
+  critical: {
+    annotation: '@unpeek-critical',
+    maxFunctionsPerChunk: 12,
+  },
+
   // Explicit client output directory override (auto-detected if omitted)
   outDir: '.next/static/chunks',
 
@@ -317,6 +329,8 @@ export default defineConfig({
 
   // Identifier and symbol mangler configuration
   mangler: {
+    // Minimum local identifier length eligible for mangling (default: 1)
+    minLength: 1,
     // Top-level identifiers preserved from name mangling
     reservedIdentifiers: ['__NEXT_DATA__', '__PRELOADED_STATE__'],
     // Property prefixes to preserve

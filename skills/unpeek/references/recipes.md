@@ -112,5 +112,15 @@ Or programmatically in `package.json`:
 
 ### Adjusting String Vault Minimum Length
 The default `--min-string-length` is `4`. Short strings (`"ok"`, `""`, `"id"`) create slight overhead when encrypted:
-- To minimize bundle size on mobile web: `--min-string-length 8`
+- To minimize bundle size on mobile web: `--min-string-length 8` or `--profile minimal` (`Tier 1`, `coldFlow: false`)
 - To encrypt virtually all identifiers: `--min-string-length 3`
+
+---
+
+## 6. Targeting Tier 3 Enclaves (`@unpeek-critical`) & Worker Bundles
+
+### Prioritizing Sensitive Functions for Micro-VM v2
+Annotate critical cold functions with `// @unpeek-critical` (or `/* @unpeek-critical */`) or match them via `critical.include` in `unpeek.config.js` when running `--aggressive` / `--profile strict`. Hot-path functions remain exempt, and up to `maxFunctionsPerChunk` (default `12`) cold functions per chunk are compiled into the 43-opcode Micro-VM v2.
+
+### Standalone Web Worker Protection
+Service Workers and Web Workers (`sw.js`, `*.worker.js`) are excluded by default under `target: 'browser'` so worker registration stays safe. For dedicated worker builds, set `target: 'worker'` in `unpeek.config.js` (or rely on `unpeek/vite`, which wires `worker.plugins` automatically); the `globalThis`/`self` runtime shield operates cleanly in `WorkerGlobalScope`.

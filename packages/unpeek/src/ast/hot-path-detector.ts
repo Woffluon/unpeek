@@ -85,32 +85,51 @@ export interface HotPathAnalysis {
   coldFunctionNodes: WeakSet<acorn.Node>;
   hotExemptNodes: WeakSet<acorn.Node>;
   serializedFunctionNodes: WeakSet<acorn.Node>;
+  criticalFunctionNodes?: WeakSet<acorn.Node>;
+}
+
+export interface ParseAstOptions {
+  locations?: boolean;
 }
 
 export function parseJavaScriptAst(
   code: string,
-  comments?: acorn.Comment[]
+  comments?: acorn.Comment[],
+  opts?: ParseAstOptions
 ): acorn.Program | null {
+  const locations = opts?.locations !== false;
+  const collectedComments: acorn.Comment[] = comments ?? [];
+  let ast: acorn.Program | null = null;
   try {
-    return acorn.parse(code, {
+    ast = acorn.parse(code, {
       ecmaVersion: 'latest',
       sourceType: 'module',
       allowReturnOutsideFunction: true,
-      ...(comments ? { onComment: comments } : {}),
+      locations,
+      onComment: collectedComments,
     });
   } catch {
-    if (comments) comments.length = 0;
+    collectedComments.length = 0;
     try {
-      return acorn.parse(code, {
+      ast = acorn.parse(code, {
         ecmaVersion: 'latest',
         sourceType: 'script',
         allowReturnOutsideFunction: true,
-        ...(comments ? { onComment: comments } : {}),
+        locations,
+        onComment: collectedComments,
       });
     } catch {
       return null;
     }
   }
+  if (ast) {
+    Object.defineProperty(ast, '__unpeekComments', {
+      value: collectedComments,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  return ast;
 }
 
 function isHocCall(callNode: any, hocWrappers?: Set<string>): boolean {
@@ -311,6 +330,7 @@ export function analyzeAstHotPaths(
   const coldFunctionNodes = new WeakSet<acorn.Node>();
   const hotExemptNodes = new WeakSet<acorn.Node>();
   const serializedFunctionNodes = new WeakSet<acorn.Node>();
+  const criticalFunctionNodes = new WeakSet<acorn.Node>();
 
   const serializedWorkerNodes = new Set<acorn.Node>();
   const trueHotNodes = new Set<acorn.Node>();
@@ -319,7 +339,7 @@ export function analyzeAstHotPaths(
   const directHotNodes = new Set<acorn.Node>();
 
   const serializerHelperNodes = new Set<acorn.Node>();
-  const allFunctions: { node: acorn.Node; name: string }[] = [];
+  const allFunctions: { node: acorn.Node; name: string; anchorStart: number }[] = [];
   const fnByName = new Map<string, acorn.Node>();
   const scopeFunctions = new Map<acorn.Node, Map<string, acorn.Node>>();
   const fnScopeChain = new Map<acorn.Node, acorn.Node[]>();
@@ -461,9 +481,37 @@ export function analyzeAstHotPaths(
     hotExemptNodes.add(node);
   }
 
+  function computeFunctionAnchorStart(node: any, ancestors: acorn.Node[]): number {
+    let anchorStart = typeof node.start === 'number' ? node.start : 0;
+    for (let i = ancestors.length - 2; i >= 0; i--) {
+      const anc = ancestors[i] as any;
+      const child = ancestors[i + 1] as any;
+      if (!anc || typeof anc.start !== 'number') break;
+      if (anc.type === 'VariableDeclarator' && anc.init === child) {
+        anchorStart = Math.min(anchorStart, anc.start);
+      } else if (anc.type === 'VariableDeclaration' && anc.declarations?.[0] === child) {
+        anchorStart = Math.min(anchorStart, anc.start);
+      } else if (
+        (anc.type === 'ExportNamedDeclaration' || anc.type === 'ExportDefaultDeclaration') &&
+        anc.declaration === child
+      ) {
+        anchorStart = Math.min(anchorStart, anc.start);
+      } else if ((anc.type === 'Property' || anc.type === 'MethodDefinition') && anc.value === child) {
+        anchorStart = Math.min(anchorStart, anc.start);
+      } else if (anc.type === 'AssignmentExpression' && anc.right === child) {
+        anchorStart = Math.min(anchorStart, anc.start);
+      } else if (anc.type === 'ExpressionStatement' && anc.expression === child) {
+        anchorStart = Math.min(anchorStart, anc.start);
+      } else {
+        break;
+      }
+    }
+    return anchorStart;
+  }
+
   function registerFunctionNode(node: any, ancestors: acorn.Node[]): void {
     const name = getFunctionLabel(node, ancestors, hocWrappers);
-    allFunctions.push({ node, name });
+    allFunctions.push({ node, name, anchorStart: computeFunctionAnchorStart(node, ancestors) });
     fnByName.set(name, node);
 
     const paramSet = new Set<string>();
@@ -962,7 +1010,11 @@ export function analyzeAstHotPaths(
   // - event handlers (isEventHandlerName(fn.name, eventHandlerRegex))
   // unless they contain loops or 60fps animation frames or are shallow components/hooks
   for (const fn of allFunctions) {
-    if (!trueHotNodes.has(fn.node) && !containsLoopOrAnimation(fn.node, animationCalls)) {
+    if (
+      !serializedWorkerNodes.has(fn.node) &&
+      !trueHotNodes.has(fn.node) &&
+      !containsLoopOrAnimation(fn.node, animationCalls)
+    ) {
       if (!shallowComponentNodes.has(fn.node)) {
         if (
           (fn.node as any).async === true ||
@@ -975,7 +1027,7 @@ export function analyzeAstHotPaths(
   }
 
   // 1. Top-down propagation (1A lexical downward and 1B call-graph downward):
-  // - SERIALIZED_WORKER: full subtree (1A + 1B)
+  // - SERIALIZED_WORKER: full subtree (1A + 1B), never overridden by coldForcedNodes
   // - TRUE_HOT_60FPS: call-graph downward (1B: renderFrame -> lerp -> stepParticles) is fully preserved
   // - SHALLOW_RENDER_COMPONENT: 1A and 2 are turned off!
   let forwardChanged = true;
@@ -984,15 +1036,15 @@ export function analyzeAstHotPaths(
 
     // 1A. Lexical downward propagation:
     for (const fn of allFunctions) {
-      if (coldForcedNodes.has(fn.node)) continue;
       const chain = fnScopeChain.get(fn.node);
       if (!chain) continue;
 
       for (const anc of chain) {
         if (anc === fn.node) continue;
 
-        // Serialized worker propagates downward 1A
+        // Serialized worker propagates downward 1A regardless of coldForcedNodes
         if (serializedWorkerNodes.has(anc)) {
+          coldForcedNodes.delete(fn.node);
           if (!serializedWorkerNodes.has(fn.node)) {
             (fn.node as any)._unpeekSerialized = true;
             serializedWorkerNodes.add(fn.node);
@@ -1003,6 +1055,8 @@ export function analyzeAstHotPaths(
           }
           break;
         }
+
+        if (coldForcedNodes.has(fn.node)) continue;
 
         // True hot 60fps propagates downward 1A only if not inside a component
         // and not from a module container / root bundle function (chain length <= 1)
@@ -1020,17 +1074,14 @@ export function analyzeAstHotPaths(
     }
 
     // 1B. Call-graph downward propagation:
-    // Serialized worker callees
+    // Serialized worker callees (never blocked by coldForcedNodes)
     for (const callerNode of Array.from(serializedWorkerNodes)) {
       const calleeNames = callerToCallees.get(callerNode);
       if (!calleeNames) continue;
       for (const cName of calleeNames) {
         const targetNode = resolveCalleeNode(callerNode, cName);
-        if (
-          targetNode &&
-          !serializedWorkerNodes.has(targetNode) &&
-          !coldForcedNodes.has(targetNode)
-        ) {
+        if (targetNode && !serializedWorkerNodes.has(targetNode)) {
+          coldForcedNodes.delete(targetNode);
           (targetNode as any)._unpeekSerialized = true;
           serializedWorkerNodes.add(targetNode);
           serializedFunctionNodes.add(targetNode);
@@ -1115,6 +1166,77 @@ export function analyzeAstHotPaths(
     hotExemptNodes.delete(node);
   }
 
+  const astComments: acorn.Comment[] =
+    ((ast as any)?.__unpeekComments as acorn.Comment[] | undefined) ??
+    ((ast as any)?.comments as acorn.Comment[] | undefined) ??
+    [];
+  const criticalComments = astComments.filter(
+    (c) => typeof c?.value === 'string' && c.value.includes('@unpeek-critical')
+  );
+  const criticalCommentNodes = new Set<acorn.Node>();
+  if (criticalComments.length > 0 && allFunctions.length > 0) {
+    const stmtRanges: { start: number; end: number }[] = [];
+    walk.full(ast, (n: any) => {
+      if (
+        n &&
+        typeof n.start === 'number' &&
+        typeof n.end === 'number' &&
+        n.type !== 'Program' &&
+        n.type !== 'BlockStatement' &&
+        (n.type.endsWith('Statement') ||
+          n.type === 'VariableDeclaration' ||
+          n.type === 'FunctionDeclaration' ||
+          n.type === 'ClassDeclaration' ||
+          n.type === 'ImportDeclaration' ||
+          n.type === 'ExportNamedDeclaration' ||
+          n.type === 'ExportDefaultDeclaration')
+      ) {
+        stmtRanges.push({ start: n.start, end: n.end });
+      }
+    });
+    const sortedFns = [...allFunctions].sort(
+      (a, b) => ((a.node as any).start ?? 0) - ((b.node as any).start ?? 0)
+    );
+    for (const c of criticalComments) {
+      const cEnd = typeof c.end === 'number' ? c.end : 0;
+      const target = sortedFns.find(
+        (fn) => typeof (fn.node as any).start === 'number' && (fn.node as any).start >= cEnd
+      );
+      if (!target) continue;
+      const fnStart = (target.node as any).start as number;
+      const fnEnd = (target.node as any).end as number;
+      const blockedByStmt = stmtRanges.some(
+        (s) =>
+          !(s.start <= fnStart && fnEnd <= s.end) &&
+          s.end > cEnd &&
+          s.end <= target.anchorStart
+      );
+      if (!blockedByStmt) {
+        criticalCommentNodes.add(target.node);
+      }
+    }
+  }
+
+  const rawCriticalInclude = (config as any)?.critical?.include;
+  const criticalIncludeList = Array.isArray(rawCriticalInclude)
+    ? rawCriticalInclude
+    : rawCriticalInclude !== undefined
+      ? [rawCriticalInclude]
+      : [];
+  const criticalIncludeMatchers: ((name: string) => boolean)[] = [];
+  for (const pat of criticalIncludeList) {
+    if (pat instanceof RegExp) {
+      criticalIncludeMatchers.push((name) => pat.test(name));
+    } else if (typeof pat === 'string' && pat.length > 0) {
+      try {
+        const re = new RegExp(pat);
+        criticalIncludeMatchers.push((name) => re.test(name));
+      } catch {
+        criticalIncludeMatchers.push((name) => name.includes(pat));
+      }
+    }
+  }
+
   const hotFunctionsSkipped: string[] = [];
   const coldFunctionsProtected: string[] = [];
 
@@ -1124,6 +1246,12 @@ export function analyzeAstHotPaths(
     } else {
       coldFunctionNodes.add(fn.node);
       coldFunctionsProtected.push(fn.name);
+      if (
+        criticalCommentNodes.has(fn.node) ||
+        criticalIncludeMatchers.some((match) => match(fn.name))
+      ) {
+        criticalFunctionNodes.add(fn.node);
+      }
     }
   }
 
@@ -1137,6 +1265,7 @@ export function analyzeAstHotPaths(
     coldFunctionNodes,
     hotExemptNodes,
     serializedFunctionNodes,
+    criticalFunctionNodes,
   };
 }
 

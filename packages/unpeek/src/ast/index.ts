@@ -15,7 +15,10 @@ import {
 import { applyStringVault } from './string-vault.js';
 import { applyPolymorphicMangler } from './polymorphic-mangler.js';
 import { applyColdFlowGuard } from './cold-flow-guard.js';
-import { generateCompactJs, derivePolymorphicIdent } from './codegen.js';
+import {
+  generateCompactJs,
+  generateCompactJsWithMap,
+} from './codegen.js';
 import { applyMicroVm } from './micro-vm.js';
 import { applySaltedStringVault } from './salted-vault.js';
 import { generateRuntimeShield } from '../runtime/index.js';
@@ -37,9 +40,40 @@ export {
 };
 export type { UnpeekErrorCode, BoundaryClassification, ChunkBoundaryKind };
 
+function containsUnpeekShieldMarker(node: any, depth = 0): boolean {
+  if (!node || typeof node !== 'object' || depth > 24) return false;
+  if (
+    node.type === 'Identifier' &&
+    node.name === '__unpeek_tampered'
+  ) {
+    return true;
+  }
+  if (
+    node.type === 'Literal' &&
+    typeof node.value === 'string' &&
+    (node.value === '__unpeek_tampered' ||
+      node.value === 'unpeek:tamper' ||
+      node.value.startsWith('__upk_v4_'))
+  ) {
+    return true;
+  }
+  for (const key of Object.keys(node)) {
+    if (key === 'loc' || key === 'start' || key === 'end') continue;
+    const val = node[key];
+    if (Array.isArray(val)) {
+      for (const item of val) {
+        if (containsUnpeekShieldMarker(item, depth + 1)) return true;
+      }
+    } else if (val && typeof val === 'object' && typeof val.type === 'string') {
+      if (containsUnpeekShieldMarker(val, depth + 1)) return true;
+    }
+  }
+  return false;
+}
+
 function isAstAlreadyProtected(ast: acorn.Program): boolean {
   if (!ast || !Array.isArray(ast.body)) return false;
-  return ast.body.some((stmt) => {
+  return ast.body.some((stmt: any) => {
     if (stmt.type === 'VariableDeclaration' && Array.isArray(stmt.declarations)) {
       for (const d of stmt.declarations) {
         const name = d.id?.type === 'Identifier' ? d.id.name : undefined;
@@ -51,17 +85,40 @@ function isAstAlreadyProtected(ast: acorn.Program): boolean {
             name.startsWith('_uS') ||
             name.startsWith('_uVm') ||
             name.startsWith('_wKdf') ||
+            name.startsWith('_uP') ||
+            name.startsWith('_uCache') ||
+            name.startsWith('_uDc') ||
             name.startsWith('_m') ||
             name.startsWith('_w') ||
             name.startsWith('_k') ||
-            (name.startsWith('_a') &&
-              d.init?.type === 'CallExpression' &&
+            (d.init?.type === 'CallExpression' &&
               d.init.callee?.type === 'FunctionExpression' &&
-              d.init.callee?.id?.name === 'f')
+              d.init.callee?.id?.name === 'f' &&
+              d.init.arguments?.[0]?.type === 'ArrayExpression') ||
+            (d.init?.type === 'CallExpression' &&
+              d.init.callee?.type === 'MemberExpression' &&
+              d.init.callee.object?.type === 'Identifier' &&
+              d.init.callee.object.name === 'Symbol' &&
+              d.init.callee.property?.type === 'Identifier' &&
+              d.init.callee.property.name === 'for' &&
+              typeof d.init.arguments?.[0]?.value === 'string' &&
+              d.init.arguments[0].value.startsWith('__upk_v4_'))
           ) {
             return true;
           }
         }
+      }
+    }
+    if (stmt.type === 'FunctionDeclaration' && stmt.id?.type === 'Identifier') {
+      const fnName = stmt.id.name;
+      if (
+        typeof fnName === 'string' &&
+        (fnName.startsWith('_uD') ||
+          fnName.startsWith('_uVm') ||
+          fnName.startsWith('_wKdf') ||
+          fnName.startsWith('_hX'))
+      ) {
+        return true;
       }
     }
     if (
@@ -76,7 +133,8 @@ function isAstAlreadyProtected(ast: acorn.Program): boolean {
           (name.startsWith('_u$') ||
             name.startsWith('_$') ||
             name.startsWith('_s') ||
-            name.startsWith('$b'))
+            name.startsWith('$b') ||
+            containsUnpeekShieldMarker(callee.body))
         ) {
           return true;
         }
@@ -162,19 +220,31 @@ export function transformJavaScript(
   const boundary = classifyChunkBoundary(ast);
   attachMagicComments(boundary.importExpressions, comments);
 
+  const effectiveConfig = options.critical
+    ? { ...(options.config ?? {}), critical: options.critical }
+    : options.config;
+  const effectiveProfile = options.profile ?? effectiveConfig?.profile;
+
   // 1. Detect hot paths (loops, array HOF callbacks, rAF, UI components, and their callees)
+  const hotRes = analyzeAstHotPaths(ast, effectiveConfig);
   const {
     report: hotPathReport,
     coldFunctionNodes,
     hotFunctionNodes,
     hotExemptNodes,
     serializedFunctionNodes,
-  } = analyzeAstHotPaths(ast, options.config);
+  } = hotRes;
+  const criticalFunctionNodes = (
+    hotRes as { criticalFunctionNodes?: WeakSet<acorn.Node> }
+  ).criticalFunctionNodes;
 
-  if (options.scrubPaths || options.config?.scrubPaths) {
+  if (options.scrubPaths || effectiveConfig?.scrubPaths) {
     scrubResidualPaths(
       ast,
-      { scrubPaths: true },
+      {
+        scrubPaths: true,
+        rootDir: internalOptions.rootDir ?? options.rootDir ?? process.cwd(),
+      },
       hotExemptNodes,
       boundary.exemptSubtreeRoots
     );
@@ -183,9 +253,9 @@ export function transformJavaScript(
   const shieldCoupled =
     internalOptions.shieldCoupled ?? Boolean(internalOptions.injectRuntimeShield);
   const deterrentMode =
-    internalOptions.deterrentMode ?? internalOptions.config?.shield?.deterrentMode ?? 'passive';
+    internalOptions.deterrentMode ?? effectiveConfig?.shield?.deterrentMode ?? 'passive';
   const detectHeadless =
-    internalOptions.detectHeadless ?? internalOptions.config?.shield?.detectHeadless ?? false;
+    internalOptions.detectHeadless ?? effectiveConfig?.shield?.detectHeadless ?? false;
   const sym = shieldCoupled
     ? internalOptions.windowKeySymbol ?? deriveWindowKeySymbol(seed)
     : undefined;
@@ -202,26 +272,60 @@ export function transformJavaScript(
 
   let virtualizedFunctionsCount = 0;
   if (isAggressive) {
-    const vmRes = applyMicroVm(
-      ast,
-      coldFunctionNodes,
-      serializedFunctionNodes,
-      seed,
-      sym,
-      shieldDelta
-    );
+    const extraVmOpts =
+      criticalFunctionNodes || effectiveConfig?.critical?.maxFunctionsPerChunk !== undefined
+        ? {
+            ...(criticalFunctionNodes ? { criticalFunctionNodes } : {}),
+            ...(effectiveConfig?.critical?.maxFunctionsPerChunk !== undefined
+              ? { maxFunctionsPerChunk: effectiveConfig.critical.maxFunctionsPerChunk }
+              : {}),
+          }
+        : undefined;
+    const vmRes = extraVmOpts
+      ? (
+          applyMicroVm as (
+            a: acorn.Program,
+            b?: Set<acorn.Node> | WeakSet<acorn.Node>,
+            c?: WeakSet<acorn.Node>,
+            d?: number,
+            e?: string,
+            f?: number,
+            g?: {
+              criticalFunctionNodes?: WeakSet<acorn.Node>;
+              maxFunctionsPerChunk?: number;
+            }
+          ) => { virtualizedCount: number }
+        )(
+          ast,
+          coldFunctionNodes,
+          serializedFunctionNodes,
+          seed,
+          sym,
+          shieldDelta,
+          extraVmOpts
+        )
+      : applyMicroVm(
+          ast,
+          coldFunctionNodes,
+          serializedFunctionNodes,
+          seed,
+          sym,
+          shieldDelta
+        );
     virtualizedFunctionsCount = vmRes.virtualizedCount;
   }
 
-  // 2. Inject polymorphic opaque guards only on cold functions (<2% runtime CPU budget)
-  applyColdFlowGuard(ast, coldFunctionNodes, seed, hotExemptNodes);
+  // 2. Inject polymorphic opaque guards only on cold functions (<2% runtime CPU budget), skipped in Tier 1 minimal
+  if (effectiveProfile !== 'minimal' && effectiveConfig?.coldFlow !== false) {
+    applyColdFlowGuard(ast, coldFunctionNodes, seed, hotExemptNodes);
+  }
 
   // 3. Mangle local parameters & function-scoped variables safely
   const mangledSymbolsCount = applyPolymorphicMangler(
     ast,
     seed,
     serializedFunctionNodes,
-    options.config
+    effectiveConfig
   );
 
   let encryptedStringsCount = 0;
@@ -234,7 +338,7 @@ export function transformJavaScript(
       seed,
       minStringLength,
       hotExemptNodes,
-      options.config,
+      effectiveConfig,
       sym,
       shieldDelta,
       deterrentMode,
@@ -253,7 +357,7 @@ export function transformJavaScript(
       sym,
       shieldDelta,
       deterrentMode,
-      options.config,
+      effectiveConfig,
       shieldCoupled,
       detectHeadless,
       boundary.exemptSubtreeRoots
@@ -263,8 +367,32 @@ export function transformJavaScript(
     shaderBuffersCount = vaultRes.shaderBuffersCount ?? 0;
   }
 
-  // 5. Generate compact single-line JavaScript output
-  const outputCode = generateCompactJs(ast);
+  // 5. Generate compact JavaScript output (and optional M2 source map)
+  const wantMap = Boolean(internalOptions.generateMap || options.map);
+  let outputCode: string;
+  let generatedMap:
+    | {
+        version: number;
+        file?: string;
+        sources: string[];
+        names: string[];
+        mappings: string;
+      }
+    | undefined;
+
+  if (wantMap) {
+    const mapped = generateCompactJsWithMap(ast, options.filename);
+    outputCode = mapped.code;
+    generatedMap = {
+      version: 3,
+      ...(options.filename ? { file: options.filename } : {}),
+      sources: mapped.sources,
+      names: mapped.names,
+      mappings: mapped.mappings,
+    };
+  } else {
+    outputCode = generateCompactJs(ast);
+  }
 
   let finalCode = outputCode;
   if (internalOptions.injectRuntimeShield && !internalOptions.skipShieldPreamble) {
@@ -278,6 +406,10 @@ export function transformJavaScript(
     });
     if (shield.preambleCode) {
       finalCode = `${shield.preambleCode}\n${finalCode}`;
+      if (generatedMap && generatedMap.mappings) {
+        const preambleLines = shield.preambleCode.split('\n').length;
+        generatedMap.mappings = ';'.repeat(preambleLines) + generatedMap.mappings;
+      }
     }
   }
 
@@ -289,6 +421,7 @@ export function transformJavaScript(
     integrityToken,
     virtualizedFunctionsCount,
     shaderBuffersCount,
+    ...(generatedMap ? { sourceMap: generatedMap } : {}),
   };
   return finalResult;
 }

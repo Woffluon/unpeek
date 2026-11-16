@@ -6,15 +6,29 @@ import { UnpeekError } from '../shared/errors.js';
 import { hasNextServerSegment, scanClientBundles } from './detector.js';
 
 export const SOURCE_MAP_COMMENT_REGEX =
-  /(?:^\s*\/\/[#@]\s*sourceMappingURL=.*$|\/\*[#@]\s*sourceMappingURL=[\s\S]*?\*\/)\s*/gm;
+  /[ \t]*(?:\/\/[#@]\s*sourceMappingURL=[^\r\n]*|\/\*[#@]\s*sourceMappingURL=[\s\S]*?\*\/)[ \t]*(?:\r?\n)?/g;
 
 export const DEBUG_ID_COMMENT_REGEX =
   /(?:\/\/[#@]\s*debugId=([^\s*]+)|\/\*[#@]\s*debugId=([^\s*]+)\s*\*\/)/;
+
+const DEBUG_ID_LINE_REGEX =
+  /[ \t]*(?:\/\/[#@]\s*debugId=[^\r\n]*|\/\*[#@]\s*debugId=[\s\S]*?\*\/)[ \t]*(?:\r?\n)?/g;
 
 export function extractDebugId(code: string): string | undefined {
   const match = code.match(DEBUG_ID_COMMENT_REGEX);
   const id = match?.[1] ?? match?.[2];
   return id ? id.trim() : undefined;
+}
+
+export function stripDebugIdComments(code: string): string {
+  DEBUG_ID_LINE_REGEX.lastIndex = 0;
+  return code.replace(DEBUG_ID_LINE_REGEX, '');
+}
+
+export function replaceOrAppendDebugId(code: string, debugId: string): string {
+  const cleaned = stripDebugIdComments(code);
+  const suffix = cleaned.length > 0 && !cleaned.endsWith('\n') ? '\n' : '';
+  return `${cleaned}${suffix}//# debugId=${debugId}\n`;
 }
 
 export function stripSourceMapComments(code: string): {

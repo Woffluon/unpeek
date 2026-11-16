@@ -5,9 +5,17 @@ export type UnpeekFramework = 'nextjs' | 'vite' | 'webpack' | 'vanilla';
 
 export type ConfigTarget = 'browser' | 'worker' | 'universal';
 
+export type UnpeekTier = 'Tier 1' | 'Tier 2' | 'Tier 3';
+
 export type PatternInput = RegExp | string;
 
 export type { UnpeekProfile };
+
+export interface CriticalConfig {
+  include?: PatternInput[];
+  annotation?: string;
+  maxFunctionsPerChunk?: number;
+}
 
 export interface FilterConfig {
   include?: string[];
@@ -73,12 +81,15 @@ export interface UnpeekConfig {
   framework?: UnpeekFramework;
   target?: ConfigTarget;
   profile?: UnpeekProfile;
+  tier?: UnpeekTier;
+  coldFlow?: boolean;
   outDir?: string;
   extensions?: string[];
   publicDirs?: string[];
   scrubPaths?: boolean;
   filter?: FilterConfig;
   hotPath?: HotPathConfig;
+  critical?: CriticalConfig;
   vault?: VaultConfig;
   mangler?: ManglerConfig;
   shield?: ShieldOptionsConfig;
@@ -102,6 +113,10 @@ export interface BaseProtectionOptions {
   aggressive?: boolean;
   /** Protection preset profile */
   profile?: UnpeekProfile;
+  /** Explicit protection tier override */
+  tier?: UnpeekTier;
+  /** Tier 3 enclave targeting configuration (@unpeek-critical / include patterns) */
+  critical?: CriticalConfig;
   /** Optional Unpeek configuration */
   config?: UnpeekConfig;
 }

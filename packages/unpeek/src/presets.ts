@@ -5,13 +5,15 @@ export type UnpeekProfile = 'minimal' | 'recommended' | 'strict';
 export const PRESETS: Record<UnpeekProfile, UnpeekConfig> = {
   minimal: {
     profile: 'minimal',
+    tier: 'Tier 1',
     target: 'browser',
+    coldFlow: false,
     vault: {
       minStringLength: Number.MAX_SAFE_INTEGER,
       polymorphicDecoys: false,
     },
     mangler: {
-      minLength: 3,
+      minLength: 1,
     },
     shield: {
       detectHeadless: false,
@@ -26,7 +28,9 @@ export const PRESETS: Record<UnpeekProfile, UnpeekConfig> = {
   },
   recommended: {
     profile: 'recommended',
+    tier: 'Tier 2',
     target: 'browser',
+    coldFlow: true,
     vault: {
       minStringLength: 4,
       cssFramework: 'tailwind',
@@ -36,7 +40,7 @@ export const PRESETS: Record<UnpeekProfile, UnpeekConfig> = {
       polymorphicDecoys: true,
     },
     mangler: {
-      minLength: 3,
+      minLength: 1,
     },
     shield: {
       detectHeadless: false,
@@ -51,7 +55,12 @@ export const PRESETS: Record<UnpeekProfile, UnpeekConfig> = {
   },
   strict: {
     profile: 'strict',
+    tier: 'Tier 3',
     target: 'browser',
+    coldFlow: true,
+    critical: {
+      annotation: '@unpeek-critical',
+    },
     vault: {
       minStringLength: 4,
       cssFramework: 'tailwind',
@@ -63,7 +72,7 @@ export const PRESETS: Record<UnpeekProfile, UnpeekConfig> = {
       fragmentCount: 4,
     },
     mangler: {
-      minLength: 3,
+      minLength: 1,
     },
     shield: {
       detectHeadless: true,

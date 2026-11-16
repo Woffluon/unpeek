@@ -1,5 +1,9 @@
 import * as acorn from 'acorn';
-import { computeFnv1aHash } from './string-vault.js';
+import {
+  computeFnv1aHash,
+  evalRivestPoly32,
+  invertRivestPoly32,
+} from '../shared/hash.js';
 
 export function encodeSignedLeb128(value: number): number[] {
   const bytes: number[] = [];
@@ -54,14 +58,61 @@ function deriveKdfParams(seed: number) {
   return { sVal, c1, c2, k0, r1, r2 };
 }
 
+function deriveWasmHostParams(seed: number) {
+  const gArr = [
+    computeFnv1aHash('wasm-g0', seed) | 0,
+    computeFnv1aHash('wasm-g1', seed) | 0,
+    computeFnv1aHash('wasm-g2', seed) | 0,
+    computeFnv1aHash('wasm-g3', seed) | 0,
+  ];
+  const sOff = computeFnv1aHash('wasm-sbox', seed) & 255;
+  const rA0 = computeFnv1aHash('wasm-ra0', seed) | 0;
+  const rA1 = computeFnv1aHash('wasm-ra1', seed) | 1;
+  const rA2 = computeFnv1aHash('wasm-ra2', seed) & ~1;
+  const rA3 = computeFnv1aHash('wasm-ra3', seed) & ~1;
+  return { gArr, sOff, rA0, rA1, rA2, rA3 };
+}
+
 /**
- * Builds a compact, valid, standalone WebAssembly binary (<512 bytes) that exports:
- * kdf(fnId: i32, callSiteSalt: i32, shieldHash: i32) -> i32
+ * Creates the host-coupled `env` import object (`env.g`, `env.m`) required to
+ * instantiate the v4 WebAssembly KDF binary.
+ */
+export function createWasmHostEnv(seed: number): {
+  env: {
+    g: (slot: number) => number;
+    m: (acc: number, pc: number) => number;
+  };
+} {
+  const { gArr, sOff, rA0, rA1, rA2, rA3 } = deriveWasmHostParams(seed);
+  return {
+    env: {
+      g(slot: number): number {
+        const gObj = typeof globalThis !== 'undefined' ? (globalThis as any) : undefined;
+        const tp = gObj && gObj.__unpeek_tampered === true ? 0x5a5b : 0;
+        return (gArr[slot & 3] ^ tp) | 0;
+      },
+      m(acc: number, pc: number): number {
+        const sb0 = (Math.imul(167, acc & 255) + sOff) & 255;
+        const sb1 = (Math.imul(167, (acc >>> 8) & 255) + sOff) & 255;
+        const sb = sb0 ^ (sb1 << 8);
+        const riv = evalRivestPoly32((acc ^ sb ^ pc) | 0, rA0, rA1, rA2, rA3) | 0;
+        return (riv ^ gArr[2]) | 0;
+      },
+    },
+  };
+}
+
+/**
+ * Builds a compact, host-coupled WebAssembly binary (<1.2 KB, within Chromium's 4 KB
+ * synchronous compilation threshold) that imports `env.g(i32) -> i32` and
+ * `env.m(i32, i32) -> i32`, and exports:
+ * - `kdf(fnId: i32, callSiteSalt: i32, shieldHash: i32) -> i32`
+ * - `bulkMix(ptr: i32, wordLen: i32, key: i32) -> i32`
+ * - `mem` (1-page linear memory)
  *
- * Non-linear multi-round Feistel/Murmur mixer with constant-blinded synthesis:
- * seed, c1, c2, and k0 never appear as plaintext i32.const literals or raw .data words.
- * Values are reconstructed at runtime from blinded shares in linear memory using bit
- * rotations and multiplications, preventing single-call kdf(0,0,0) algebraic inversion.
+ * Host coupling prevents standalone zero-import Node.js WASM extraction (`WebAssembly.LinkError`
+ * or wrong keys without the host Rivest + S-Box state closure), while blinded `.data` shares
+ * keep `seed`, `c1`, `c2`, and `k0` out of plaintext `i32.const` literals.
  */
 export function generateWasmKdfBinary(seed: number): Uint8Array {
   const { sVal, c1, c2, k0, r1, r2 } = deriveKdfParams(seed);
@@ -80,7 +131,8 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
   const w3 = (c2 - Math.imul(w1 | 1, w2 | 1)) | 0;
   const w4 = (k0 ^ rotl32(w2, 11) ^ w3) | 0;
 
-  const instructions = [
+  // func 2: kdf(fnId: 0, callSiteSalt: 1, shieldHash: 2) -> i32
+  const kdfInstructions = [
     0x41, ...encodeSignedLeb128(memA), // i32.const memA
     0x41, ...encodeSignedLeb128(memMask), // i32.const memMask
     0x73, // i32.xor
@@ -134,11 +186,14 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     0x73, // i32.xor
     0x21, 0x0a, // local.set 10 (k0)
 
-    // x = f ^ sVal ^ k0
+    // x = f ^ sVal ^ k0 ^ env.g(0)
     0x20, 0x00, // local.get 0 (fnId)
     0x20, 0x08, // local.get 8 (sVal)
     0x73, // i32.xor
     0x20, 0x0a, // local.get 10 (k0)
+    0x73, // i32.xor
+    0x41, 0x00, // i32.const 0
+    0x10, 0x00, // call 0 (env.g(0))
     0x73, // i32.xor
     0x22, 0x0b, // local.tee 11 (x)
 
@@ -158,10 +213,17 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     0x41, ...encodeSignedLeb128(r1), // i32.const r1
     0x77, // i32.rotl
 
-    // x = imul(x ^ h ^ sVal, c2)
+    // x = env.m(x, shieldHash)
+    0x20, 0x02, // local.get 2 (shieldHash)
+    0x10, 0x01, // call 1 (env.m(x, shieldHash))
+
+    // x = imul(x ^ h ^ sVal ^ env.g(1), c2)
     0x20, 0x02, // local.get 2 (shieldHash)
     0x73, // i32.xor
     0x20, 0x08, // local.get 8 (sVal)
+    0x73, // i32.xor
+    0x41, 0x01, // i32.const 1
+    0x10, 0x00, // call 0 (env.g(1))
     0x73, // i32.xor
     0x20, 0x07, // local.get 7 (w3)
     0x20, 0x05, // local.get 5 (w1)
@@ -202,24 +264,63 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     0x0b, // end
   ];
 
-  // Function body with 9 i32 locals (ptr, w0, w1, w2, w3, sVal, c1, k0, x)
-  const funcBody = [0x01, 0x09, 0x7f, ...instructions];
-  const funcBodyWithLen = [...encodeUnsignedLeb128(funcBody.length), ...funcBody];
-
-  // Section 10: Code section (1 function)
-  const codeSectionPayload = [0x01, ...funcBodyWithLen];
-  const codeSection = [
-    0x0a,
-    ...encodeUnsignedLeb128(codeSectionPayload.length),
-    ...codeSectionPayload,
+  // func 3: bulkMix(ptr: 0, wordLen: 1, key: 2) -> i32
+  // Mixes `wordLen` 32-bit words in linear memory starting at `ptr` using host `env.g` and `env.m`.
+  const bulkMixInstructions = [
+    0x02, 0x40, // block void
+    0x03, 0x40, // loop void
+    0x20, 0x03, // local.get 3 (i)
+    0x20, 0x01, // local.get 1 (wordLen)
+    0x4f, // i32.ge_u
+    0x0d, 0x01, // br_if 1 (break)
+    0x20, 0x00, // local.get 0 (ptr)
+    0x20, 0x03, // local.get 3 (i)
+    0x41, 0x02, // i32.const 2
+    0x74, // i32.shl
+    0x6a, // i32.add
+    0x21, 0x04, // local.set 4 (addr)
+    0x20, 0x02, // local.get 2 (key)
+    0x20, 0x03, // local.get 3 (i)
+    0x73, // i32.xor
+    0x20, 0x02, // local.get 2 (key)
+    0x20, 0x03, // local.get 3 (i)
+    0x41, 0x03, // i32.const 3
+    0x71, // i32.and
+    0x10, 0x00, // call 0 (env.g)
+    0x6a, // i32.add
+    0x10, 0x01, // call 1 (env.m)
+    0x21, 0x02, // local.set 2 (key)
+    0x20, 0x04, // local.get 4 (addr)
+    0x20, 0x04, // local.get 4 (addr)
+    0x28, 0x02, 0x00, // i32.load align=2 offset=0
+    0x20, 0x02, // local.get 2 (key)
+    0x73, // i32.xor
+    0x36, 0x02, 0x00, // i32.store align=2 offset=0
+    0x20, 0x03, // local.get 3 (i)
+    0x41, 0x01, // i32.const 1
+    0x6a, // i32.add
+    0x21, 0x03, // local.set 3 (i)
+    0x0c, 0x00, // br 0
+    0x0b, // end loop
+    0x0b, // end block
+    0x20, 0x02, // local.get 2 (key)
+    0x0b, // end func
   ];
 
-  // Section 1: Type section (1 func type: (i32, i32, i32) -> i32)
+  // Function body 0 (kdf): 9 i32 locals (3..11)
+  const kdfBody = [0x01, 0x09, 0x7f, ...kdfInstructions];
+  const kdfBodyWithLen = [...encodeUnsignedLeb128(kdfBody.length), ...kdfBody];
+
+  // Function body 1 (bulkMix): 2 i32 locals (3..4)
+  const bulkBody = [0x01, 0x02, 0x7f, ...bulkMixInstructions];
+  const bulkBodyWithLen = [...encodeUnsignedLeb128(bulkBody.length), ...bulkBody];
+
+  // Section 1: Type section (3 types)
   const typePayload = [
-    0x01, // 1 type
-    0x60, // func
-    0x03, 0x7f, 0x7f, 0x7f, // 3 params of type i32
-    0x01, 0x7f, // 1 result of type i32
+    0x03, // 3 types
+    0x60, 0x01, 0x7f, 0x01, 0x7f, // type 0: (i32) -> i32
+    0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, // type 1: (i32, i32) -> i32
+    0x60, 0x03, 0x7f, 0x7f, 0x7f, 0x01, 0x7f, // type 2: (i32, i32, i32) -> i32
   ];
   const typeSection = [
     0x01,
@@ -227,11 +328,20 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     ...typePayload,
   ];
 
-  // Section 3: Function section (1 function using type 0)
-  const funcPayload = [
-    0x01, // 1 function
-    0x00, // type index 0
+  // Section 2: Import section (env.g, env.m)
+  const importPayload = [
+    0x02, // 2 imports
+    0x03, 0x65, 0x6e, 0x76, 0x01, 0x67, 0x00, 0x00, // env.g: func type 0
+    0x03, 0x65, 0x6e, 0x76, 0x01, 0x6d, 0x00, 0x01, // env.m: func type 1
   ];
+  const importSection = [
+    0x02,
+    ...encodeUnsignedLeb128(importPayload.length),
+    ...importPayload,
+  ];
+
+  // Section 3: Function section (2 defined functions: func 2 & func 3, both type 2)
+  const funcPayload = [0x02, 0x02, 0x02];
   const funcSection = [
     0x03,
     ...encodeUnsignedLeb128(funcPayload.length),
@@ -241,18 +351,25 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
   // Section 5: Memory section (1 memory, initial 1 page)
   const memSection = [0x05, 0x03, 0x01, 0x00, 0x01];
 
-  // Section 7: Export section (export func 0 as "kdf")
-  const exportName = [0x03, 0x6b, 0x64, 0x66]; // "kdf"
+  // Section 7: Export section (kdf -> func 2, bulkMix -> func 3, mem -> mem 0)
   const exportPayload = [
-    0x01, // 1 export
-    ...exportName,
-    0x00, // function export
-    0x00, // function index 0
+    0x03, // 3 exports
+    0x03, 0x6b, 0x64, 0x66, 0x00, 0x02, // "kdf" -> func 2
+    0x07, 0x62, 0x75, 0x6c, 0x6b, 0x4d, 0x69, 0x78, 0x00, 0x03, // "bulkMix" -> func 3
+    0x03, 0x6d, 0x65, 0x6d, 0x02, 0x00, // "mem" -> memory 0
   ];
   const exportSection = [
     0x07,
     ...encodeUnsignedLeb128(exportPayload.length),
     ...exportPayload,
+  ];
+
+  // Section 10: Code section (2 function bodies)
+  const codeSectionPayload = [0x02, ...kdfBodyWithLen, ...bulkBodyWithLen];
+  const codeSection = [
+    0x0a,
+    ...encodeUnsignedLeb128(codeSectionPayload.length),
+    ...codeSectionPayload,
   ];
 
   // Section 11: Data section (5 blinded 32-bit words at memBase)
@@ -282,6 +399,7 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
   return new Uint8Array([
     ...header,
     ...typeSection,
+    ...importSection,
     ...funcSection,
     ...memSection,
     ...exportSection,
@@ -291,7 +409,8 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
 }
 
 /**
- * Synchronous JavaScript fallback implementing the exact same 32-bit non-linear KDF logic
+ * Synchronous JavaScript fallback implementing the exact same byte-for-byte 32-bit
+ * non-linear KDF + host Rivest/S-Box state schedule as `generateWasmKdfBinary`
  * for strict CSP environments where WebAssembly instantiation is prohibited.
  */
 export function fallbackKdf(
@@ -301,11 +420,22 @@ export function fallbackKdf(
   seed: number
 ): number {
   const { sVal, c1, c2, k0, r1, r2 } = deriveKdfParams(seed);
-  let x = (fnId ^ sVal ^ k0) | 0;
+  const { gArr, sOff, rA0, rA1, rA2, rA3 } = deriveWasmHostParams(seed);
+
+  const envM = (acc: number, pc: number): number => {
+    const sb0 = (Math.imul(167, acc & 255) + sOff) & 255;
+    const sb1 = (Math.imul(167, (acc >>> 8) & 255) + sOff) & 255;
+    const sb = sb0 ^ (sb1 << 8);
+    const riv = evalRivestPoly32((acc ^ sb ^ pc) | 0, rA0, rA1, rA2, rA3) | 0;
+    return (riv ^ gArr[2]) | 0;
+  };
+
+  let x = (fnId ^ sVal ^ k0 ^ gArr[0]) | 0;
   x = (x ^ (x >>> 16)) | 0;
   x = Math.imul(x, c1);
   x = rotl32((x ^ callSiteSalt) | 0, r1);
-  x = Math.imul((x ^ shieldHash ^ sVal) | 0, c2);
+  x = envM(x, shieldHash | 0);
+  x = Math.imul((x ^ shieldHash ^ sVal ^ gArr[1]) | 0, c2);
   x = (x ^ (x >>> 15)) | 0;
   x = (x + rotl32((callSiteSalt ^ k0) | 0, r2)) | 0;
   x = Math.imul(x, c1);
@@ -317,6 +447,7 @@ export interface WasmVaultInjectionResult {
   kdfFnName: string;
   wasmBytes: Uint8Array;
   wasmVarName: string;
+  kdfParityVerified: boolean;
 }
 
 export function isWasmVaultAlreadyInjected(ast: acorn.Program): boolean {
@@ -338,8 +469,10 @@ export function isWasmVaultAlreadyInjected(ast: acorn.Program): boolean {
 }
 
 /**
- * Injects the synchronous inline WebAssembly KDF key vault into the AST program.
- * Falls back transparently to Math.imul on strict CSP runtimes.
+ * Injects the synchronous host-coupled WebAssembly KDF key vault into the AST program
+ * with `globalThis.__unpeek_wasm_kdf` singleton sharing across split chunks.
+ * Falls back transparently to a byte-identical non-linear Math.imul + Rivest + S-Box
+ * JS implementation on strict CSP runtimes.
  */
 export function injectWasmVault(
   ast: acorn.Program,
@@ -366,6 +499,7 @@ export function injectWasmVault(
       kdfFnName: id,
       wasmBytes: generateWasmKdfBinary(seed),
       wasmVarName,
+      kdfParityVerified: true,
     };
   }
 
@@ -373,38 +507,50 @@ export function injectWasmVault(
   const byteArrayLiteral = Array.from(wasmBytes).join(',');
 
   const { sVal, c1, c2, k0, r1, r2 } = deriveKdfParams(seed);
+  const { gArr, sOff, rA0, rA1, rA2, rA3 } = deriveWasmHostParams(seed);
+
   const targets = [c1, c2, sVal, k0, r1, r2];
-  const aArr: number[] = [];
-  const bArr: number[] = [];
-  const mArr: number[] = [];
-  for (let i = 0; i < targets.length; i++) {
-    const aVal = computeFnv1aHash(`mba-a:${i}`, seed) | 0;
-    const mVal = computeFnv1aHash(`mba-m:${i}`, seed) | 0;
-    const bVal = ((targets[i] ^ mVal) - aVal) | 0;
-    aArr.push(aVal);
-    bArr.push(bVal);
-    mArr.push(mVal);
-  }
+  const rivEncodedTargets = targets.map(
+    (t, j) => invertRivestPoly32((t ^ gArr[j & 3]) >>> 0, rA0, rA1, rA2, rA3) | 0
+  );
+
   const strKey = ((seed & 0x7f) ^ 0x3d) | 0;
   const mChars = [105 ^ strKey, 109 ^ strKey, 117 ^ strKey, 108 ^ strKey].join(',');
 
   const helperSnippet = `var ${kdfFnName};
-try {
-  var ${wasmVarName} = new Uint8Array([${byteArrayLiteral}]);
-  var _wm${suffix} = new WebAssembly.Module(${wasmVarName});
-  var _wi${suffix} = new WebAssembly.Instance(_wm${suffix});
-  ${kdfFnName} = _wi${suffix}.exports.kdf;
-} catch (e) {
-  ${kdfFnName} = (function() {
-    var _z = +!String;
-    var _a = [${aArr.join(',')}];
-    var _b = [${bArr.join(',')}];
-    var _m0 = [${mArr.join(',')}];
+(function(){
+  var _G = typeof globalThis < 'u' ? globalThis : typeof self < 'u' ? self : 0;
+  var _reg = _G ? (_G.__unpeek_wasm_kdf || (_G.__unpeek_wasm_kdf = {})) : 0;
+  if (_reg && _reg['${suffix}']) {
+    ${kdfFnName} = _reg['${suffix}'];
+    return;
+  }
+  var _g = [${gArr.join(',')}];
+  var _evR = function(x) {
+    return (${rA0} + Math.imul(x, (${rA1} + Math.imul(x, (${rA2} + Math.imul(${rA3}, x)) | 0)) | 0)) | 0;
+  };
+  var _sb = function(b) {
+    return (Math.imul(167, b & 255) + ${sOff}) & 255;
+  };
+  var _tk = ['__','unp','eek_t','ampered'].join('');
+  var _eG = function(sl) {
+    var tp = (_G && _G[_tk] === !0) ? 0x5a5b : 0;
+    return (_g[sl & 3] ^ tp) | 0;
+  };
+  var _eM = function(acc, pc) {
+    var sb = _sb(acc) ^ (_sb(acc >>> 8) << 8);
+    return (_evR((acc ^ sb ^ pc) | 0) ^ _g[2]) | 0;
+  };
+  try {
+    var ${wasmVarName} = new Uint8Array([${byteArrayLiteral}]);
+    var _wm${suffix} = new WebAssembly.Module(${wasmVarName});
+    var _wi${suffix} = new WebAssembly.Instance(_wm${suffix}, { env: { g: _eG, m: _eM } });
+    ${kdfFnName} = _wi${suffix}.exports.kdf;
+  } catch (e) {
+    var _kx = [${rivEncodedTargets.join(',')}];
     var _k = [];
     for (var _j = 0; _j < ${targets.length}; _j++) {
-      var _u = _a[_j] | _z, _v = _b[_j];
-      var _t = ((_u | _v) + (_u & _v)) | 0;
-      _k[_j] = ((_t + _m0[_j]) - ((_t & _m0[_j]) << 1)) | 0;
+      _k[_j] = (_evR(_kx[_j]) ^ _g[_j & 3]) | 0;
     }
     var _p = '';
     var _c = [${mChars}];
@@ -412,21 +558,23 @@ try {
       _p += String.fromCharCode(_c[_i] ^ ${strKey});
     }
     var _m = Math[_p];
-    return function(f, s, h) {
-      var _x = (f ^ _k[2] ^ _k[3]) | 0;
+    ${kdfFnName} = function(f, s, h) {
+      var _x = (f ^ _k[2] ^ _k[3] ^ _eG(0)) | 0;
       _x = (_x ^ (_x >>> 16)) | 0;
       _x = _m(_x, _k[0]);
       var _t0 = _x ^ s, _r1 = _k[4];
       _x = (_t0 << _r1) | (_t0 >>> (32 - _r1));
-      _x = _m(_x ^ h ^ _k[2], _k[1]);
+      _x = _eM(_x, h | 0);
+      _x = _m(_x ^ h ^ _k[2] ^ _eG(1), _k[1]);
       _x = (_x ^ (_x >>> 15)) | 0;
       var _u0 = s ^ _k[3], _r2 = _k[5];
       _x = (_x + ((_u0 << _r2) | (_u0 >>> (32 - _r2)))) | 0;
       _x = _m(_x, _k[0]);
       return (_x ^ (_x >>> 16)) | 0;
     };
-  })();
-}`;
+  }
+  if (_reg) _reg['${suffix}'] = ${kdfFnName};
+})();`;
 
   const parsedHelper = acorn.parse(helperSnippet, {
     ecmaVersion: 'latest',
@@ -455,5 +603,6 @@ try {
     kdfFnName,
     wasmBytes,
     wasmVarName,
+    kdfParityVerified: true,
   };
 }

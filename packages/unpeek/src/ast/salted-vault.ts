@@ -4,6 +4,10 @@ import type { DeterrentMode } from '../runtime/types.js';
 import type { UnpeekConfig } from '../config.js';
 import {
   computeFnv1aHash,
+  computeCallSiteSalt64,
+  invertRivestPoly32,
+} from '../shared/hash.js';
+import {
   SAFE_ALPHA,
   DIRECTIVE_STRINGS,
   isReservedProp,
@@ -24,19 +28,38 @@ export interface SaltedVaultResult {
 }
 
 /**
- * Computes deterministic 5-bit call-site salt for lazy string resolution.
+ * Computes deterministic 31-bit positive call-site salt using full 64-bit mixing
+ * for lazy string resolution.
  */
 export function computeCallSiteSalt(seed: number, idx: number): number {
-  return (
-    ((Math.imul((seed ^ idx) >>> 0, 0x9e3779b1) ^
-      Math.imul((idx + 1) >>> 0, 0x45d9f3b)) &
-      31) >>>
-    0
-  );
+  const [lo, hi] = computeCallSiteSalt64(seed >>> 0, idx >>> 0, seed >>> 0);
+  return (((lo ^ hi) & 0x7fffffff) | 1) >>> 0;
+}
+
+/**
+ * Builds a non-linear Rivest degree-3 permutation polynomial runtime expression
+ * that reconstructs the 16-bit expectedDelta without embedding raw delta or `maskA ^ maskB` literals.
+ */
+function buildRivestDeltaExpr(seed: number, expectedDelta: number, varName = '_ed'): string {
+  const s = seed >>> 0;
+  const rA0 = computeFnv1aHash(`riv-a0:${s}`, s) | 0;
+  const rA1 = computeFnv1aHash(`riv-a1:${s}`, s) | 1;
+  const rA2 = computeFnv1aHash(`riv-a2:${s}`, s) & ~1;
+  const rA3 = computeFnv1aHash(`riv-a3:${s}`, s) & ~1;
+  const hiTag = (computeFnv1aHash(`riv-hi:${s}`, s) & 0xffff) << 16;
+  const target32 = (hiTag | (expectedDelta & 0xffff)) >>> 0;
+  const xEnc = invertRivestPoly32(target32, rA0, rA1, rA2, rA3);
+  const xMask = computeFnv1aHash(`riv-xm:${s}`, s) >>> 0;
+  const xMasked = (xEnc ^ xMask) | 0;
+  return `var _rx=(${xMasked}^${xMask | 0})|0,${varName}=(${rA0}+Math.imul(_rx,(${rA1}+Math.imul(_rx,(${rA2}+Math.imul(${rA3},_rx))|0))|0))&65535;`;
 }
 
 /**
  * Creates the compact lazy-memoized decryptor function AST for Layer 1 on-demand resolution.
+ * Uses an order-independent, non-poisoning state machine:
+ * - `globalThis[sym] === undefined`: resolves valid plaintext without writing cache (Issue #1 safe).
+ * - `globalThis[sym] === expectedDelta` and untampered: resolves and memoizes in O(1).
+ * - Tampered (`__unpeek_tampered === true`, `status === 2`, or mismatched delta): fails closed without caching.
  */
 export function createSaltedDecryptorFnAst(
   seed: number,
@@ -45,52 +68,59 @@ export function createSaltedDecryptorFnAst(
   windowKeySymbol: string,
   safeAlpha = SAFE_ALPHA,
   shieldCoupled = true,
-  browserOnly = false
+  _browserOnly = false
 ): any {
   const propAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(windowKeySymbol)
     ? `.${windowKeySymbol}`
     : `[${JSON.stringify(windowKeySymbol)}]`;
+  const stateSym = `${windowKeySymbol}_s`;
+  const stateAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(stateSym)
+    ? `.${stateSym}`
+    : `[${JSON.stringify(stateSym)}]`;
+  const flagSym = `${windowKeySymbol}_t`;
+  const flagAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(flagSym)
+    ? `.${flagSym}`
+    : `[${JSON.stringify(flagSym)}]`;
+  const tkExpr = `['__','unp','eek_t','ampered'].join('')`;
 
   let fBody: string;
   if (!shieldCoupled) {
     fBody =
-      `var m=[],c=Function.prototype.toString.call(f);` +
+      `var m=[],c=Function.prototype.toString.call(f),_tk=${tkExpr};` +
       `for(var h=0x811c9dc5,j=0;j<c.length;j++)h=Math.imul(h^c.charCodeAt(j),0x01000193)>>>0;` +
-      `var q=(h^(""._u||a._u||0))>>>0,A="${safeAlpha}",P="${pChars}";` +
-      `return function(i,s){if(i in m)return m[i];var p=a[i],o="";` +
-      `if(p)for(var t=q^s^Math.imul(i+1,0x01000193),j=0;j<p.length;j++){` +
-      `t=Math.imul(t^j+1,0x01000193)^0x811c9dc5;` +
-      `var c=p[j],k=A.indexOf(c);` +
-      `o+=k<0?c:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92];` +
-      `}return m[i]=o;};`;
-  } else if (browserOnly) {
-    fBody =
-      `var m=[],c=Function.prototype.toString.call(f);` +
-      `for(var h=0x811c9dc5,j=0;j<c.length;j++)h=Math.imul(h^c.charCodeAt(j),0x01000193)>>>0;` +
-      `var q,A="${safeAlpha}",P="${pChars}";` +
+      `var A="${safeAlpha}",P="${pChars}";` +
       `return function(i,s){` +
-      `if(q===void 0){var w=typeof window<"u"?window:typeof self<"u"?self:0,G=typeof globalThis<"u"?globalThis:w||this,d=G&&G${propAccess}!=null?G${propAccess}:w&&w${propAccess}!=null?w${propAccess}:w?-1:0;q=(h^(""._u||a._u||0)^d)>>>0;}` +
-      `if(i in m)return m[i];var p=a[i],o="";` +
+      `var G=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof self<"u"?self:this;` +
+      `var w=typeof window<"u"?window:typeof self<"u"?self:0;` +
+      `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||((""._u||a._u||0)!==0);` +
+      `if(!tm&&(i in m))return m[i];` +
+      `var d=tm?(((Math.imul(i+1,0x9e3779b1)^0x5a5b)&65535)|1):0;` +
+      `var q=(h^(""._u||a._u||0)^d)>>>0,p=a[i],o="";` +
       `if(p)for(var t=q^s^Math.imul(i+1,0x01000193),j=0;j<p.length;j++){` +
       `t=Math.imul(t^j+1,0x01000193)^0x811c9dc5;` +
-      `var c=p[j],k=A.indexOf(c);` +
-      `o+=k<0?c:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92];` +
-      `}return m[i]=o;};`;
+      `var ch=p[j],k=A.indexOf(ch);` +
+      `o+=k<0?ch:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92];` +
+      `}if(!tm)m[i]=o;return o;};`;
   } else {
-    const maskA = (computeFnv1aHash('delta-a', seed) & 0xffff) | 1;
-    const maskB = ((expectedDelta & 0xffff) ^ maskA) & 0xffff;
+    const edInit = buildRivestDeltaExpr(seed, expectedDelta, '_ed');
     fBody =
-      `var m=[],c=Function.prototype.toString.call(f);` +
+      `var m=[],c=Function.prototype.toString.call(f),_tk=${tkExpr};` +
       `for(var h=0x811c9dc5,j=0;j<c.length;j++)h=Math.imul(h^c.charCodeAt(j),0x01000193)>>>0;` +
-      `var q,A="${safeAlpha}",P="${pChars}";` +
+      `var A="${safeAlpha}",P="${pChars}";${edInit}` +
       `return function(i,s){` +
-      `if(q===void 0){var w=typeof window<"u"?window:typeof self<"u"?self:0,G=typeof globalThis<"u"?globalThis:w||this,d=G&&G${propAccess}!=null?G${propAccess}:w&&w${propAccess}!=null?w${propAccess}:w?-1:(${maskA}^${maskB});q=(h^(""._u||a._u||0)^d)>>>0;}` +
-      `if(i in m)return m[i];var p=a[i],o="";` +
+      `var G=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof self<"u"?self:this;` +
+      `var w=typeof window<"u"?window:typeof self<"u"?self:0;` +
+      `var sv=G&&G${propAccess}!==void 0?G${propAccess}:w&&w${propAccess}!==void 0?w${propAccess}:void 0;` +
+      `var sr=G&&G${stateAccess}?G${stateAccess}:w&&w${stateAccess}?w${stateAccess}:void 0;` +
+      `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||(sr&&sr[0]===2)||((""._u||a._u||0)!==0)||(sv!==void 0&&sv!==_ed);` +
+      `if(!tm&&sv===_ed&&(i in m))return m[i];` +
+      `var d=tm?((_ed^(((Math.imul(i+1,0x9e3779b1)^0x5a5b)&65535)|1))&65535):_ed;` +
+      `var q=(h^(""._u||a._u||0)^d)>>>0,p=a[i],o="";` +
       `if(p)for(var t=q^s^Math.imul(i+1,0x01000193),j=0;j<p.length;j++){` +
       `t=Math.imul(t^j+1,0x01000193)^0x811c9dc5;` +
-      `var c=p[j],k=A.indexOf(c);` +
-      `o+=k<0?c:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92];` +
-      `}return m[i]=o;};`;
+      `var ch=p[j],k=A.indexOf(ch);` +
+      `o+=k<0?ch:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92];` +
+      `}if(!tm&&sv===_ed)m[i]=o;return o;};`;
   }
 
   return (
@@ -314,8 +344,12 @@ export function applySaltedStringVault(
       if (isSvgPathString(node.value, parent)) return;
 
       const callSiteIdx = targetsToReplace.length;
-      const localSalt =
-        (computeFnv1aHash(`salt:${seed}:${callSiteIdx}`, seed) & 0x7fffffff) | 1;
+      const [saltLo, saltHi] = computeCallSiteSalt64(
+        seed >>> 0,
+        callSiteIdx >>> 0,
+        seed >>> 0
+      );
+      const localSalt = (((saltLo ^ saltHi) & 0x7fffffff) | 1) >>> 0;
 
       targetsToReplace.push({
         node,
@@ -347,7 +381,6 @@ export function applySaltedStringVault(
   const decryptFnName = `_uD${suffix}`;
 
   const sym = windowKeySymbol ?? deriveWindowKeySymbol(seed);
-  const browserOnly = config?.target === 'browser';
   let expDelta = expectedDelta;
   if (shieldCoupled && expDelta === undefined) {
     const shield = generateRuntimeShield({
@@ -362,39 +395,67 @@ export function applySaltedStringVault(
   const propAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(sym)
     ? `.${sym}`
     : `[${JSON.stringify(sym)}]`;
+  const stateSym = `${sym}_s`;
+  const stateAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(stateSym)
+    ? `.${stateSym}`
+    : `[${JSON.stringify(stateSym)}]`;
+  const flagSym = `${sym}_t`;
+  const flagAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(flagSym)
+    ? `.${flagSym}`
+    : `[${JSON.stringify(flagSym)}]`;
+  const tkExpr = `['__','unp','eek_t','ampered'].join('')`;
+  const dkExpr = `['__','unp','eek_d','elta'].join('')`;
 
-  let shieldDeltaExpr: string;
+  let helperFnSnippet: string;
   if (!shieldCoupled) {
-    shieldDeltaExpr =
-      `var dv=(G&&G.__unpeek_delta!=null?G.__unpeek_delta:0)|0;` +
-      `${dCacheVarName}=((h|0)^dv)|0;`;
+    helperFnSnippet = `function ${decryptFnName}(i,s){` +
+      `var G=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof self<"u"?self:this;` +
+      `var w=typeof window<"u"?window:typeof self<"u"?self:0,_tk=${tkExpr},_dk=${dkExpr};` +
+      `var dv=(G&&G[_dk]!=null?G[_dk]:w&&w[_dk]!=null?w[_dk]:0)|0;` +
+      `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||((""._u||0)!==0)||(dv!==0);` +
+      `if(!tm&&${cacheVarName}[i]!==void 0)return ${cacheVarName}[i];` +
+      `if(${dCacheVarName}===void 0){` +
+      `var c=Function.prototype.toString.call(${decryptFnName}),h=0x811c9dc5;` +
+      `for(var l=0;l<c.length;l++)h=Math.imul(h^c.charCodeAt(l),0x01000193)>>>0;` +
+      `${dCacheVarName}=h|0;` +
+      `}` +
+      `var effD=tm?((${dCacheVarName}^(((Math.imul(i+1,0x9e3779b1)^0x5a5b)&65535)|1))|0):${dCacheVarName};` +
+      `var k=${kdfFnName}(i,s,effD);` +
+      `var p=${vaultVarName}[i],o="",rk=k|0;` +
+      `for(var j=0;j<p.length;j++){` +
+      `rk=(Math.imul(rk^(j+1),0x45d9f3b)+0x9e3779b9)|0;` +
+      `o+=String.fromCharCode(p.charCodeAt(j)^(((rk>>>16)&127)|1));` +
+      `}` +
+      `if(!tm)${cacheVarName}[i]=o;` +
+      `return o;` +
+      `}`;
   } else {
-    const fallbackExpr = browserOnly
-      ? '0'
-      : `(${((computeFnv1aHash('salted-a', seed) & 0xffff) | 1)}^${((((expDelta ?? 0) & 0xffff) ^ ((computeFnv1aHash('salted-a', seed) & 0xffff) | 1)) & 0xffff)})`;
-    shieldDeltaExpr =
-      `var w=typeof window<"u"?window:typeof self<"u"?self:0;` +
-      `var sv=G&&G${propAccess}!=null?G${propAccess}:w&&w${propAccess}!=null?w${propAccess}:w?-1:${fallbackExpr};` +
-      `var dv=(G&&G.__unpeek_delta!=null?G.__unpeek_delta:w&&w.__unpeek_delta!=null?w.__unpeek_delta:0)|0;` +
-      `${dCacheVarName}=((h|0)^(sv|0)^dv)|0;`;
+    const edInit = buildRivestDeltaExpr(seed, (expDelta ?? 0) & 0xffff, '_ed');
+    helperFnSnippet = `function ${decryptFnName}(i,s){` +
+      `var G=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof self<"u"?self:this;` +
+      `var w=typeof window<"u"?window:typeof self<"u"?self:0,_tk=${tkExpr},_dk=${dkExpr};` +
+      `${edInit}` +
+      `var sv=G&&G${propAccess}!==void 0?G${propAccess}:w&&w${propAccess}!==void 0?w${propAccess}:void 0;` +
+      `var sr=G&&G${stateAccess}?G${stateAccess}:w&&w${stateAccess}?w${stateAccess}:void 0;` +
+      `var dv=(G&&G[_dk]!=null?G[_dk]:w&&w[_dk]!=null?w[_dk]:0)|0;` +
+      `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||(sr&&sr[0]===2)||((""._u||0)!==0)||(dv!==0)||(sv!==void 0&&sv!==_ed);` +
+      `if(!tm&&sv===_ed&&${cacheVarName}[i]!==void 0)return ${cacheVarName}[i];` +
+      `if(${dCacheVarName}===void 0){` +
+      `var c=Function.prototype.toString.call(${decryptFnName}),h=0x811c9dc5;` +
+      `for(var l=0;l<c.length;l++)h=Math.imul(h^c.charCodeAt(l),0x01000193)>>>0;` +
+      `${dCacheVarName}=((h|0)^_ed)|0;` +
+      `}` +
+      `var effD=tm?((${dCacheVarName}^(((Math.imul(i+1,0x9e3779b1)^0x5a5b)&65535)|1))|0):${dCacheVarName};` +
+      `var k=${kdfFnName}(i,s,effD);` +
+      `var p=${vaultVarName}[i],o="",rk=k|0;` +
+      `for(var j=0;j<p.length;j++){` +
+      `rk=(Math.imul(rk^(j+1),0x45d9f3b)+0x9e3779b9)|0;` +
+      `o+=String.fromCharCode(p.charCodeAt(j)^(((rk>>>16)&127)|1));` +
+      `}` +
+      `if(!tm&&sv===_ed)${cacheVarName}[i]=o;` +
+      `return o;` +
+      `}`;
   }
-
-  const helperFnSnippet = `function ${decryptFnName}(i,s){` +
-    `if(${cacheVarName}[i]!==void 0)return ${cacheVarName}[i];` +
-    `if(${dCacheVarName}===void 0){` +
-    `var G=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof self<"u"?self:this;` +
-    `var c=Function.prototype.toString.call(${decryptFnName}),h=0x811c9dc5;` +
-    `for(var l=0;l<c.length;l++)h=Math.imul(h^c.charCodeAt(l),0x01000193)>>>0;` +
-    `${shieldDeltaExpr}` +
-    `}` +
-    `var k=${kdfFnName}(i,s,${dCacheVarName});` +
-    `var p=${vaultVarName}[i],o="",rk=k|0;` +
-    `for(var j=0;j<p.length;j++){` +
-    `rk=(Math.imul(rk^(j+1),0x45d9f3b)+0x9e3779b9)|0;` +
-    `o+=String.fromCharCode(p.charCodeAt(j)^(((rk>>>16)&127)|1));` +
-    `}` +
-    `return (${cacheVarName}[i]=o);` +
-    `}`;
 
   const parsedFn = acorn.parse(helperFnSnippet, {
     ecmaVersion: 'latest',
