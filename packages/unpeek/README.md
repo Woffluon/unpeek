@@ -518,8 +518,8 @@ powershell -File scripts/stage-release.ps1
 ### Benchmark Output Reference ([`packages/unpeek/benchmarks/overhead.bench.ts`](packages/unpeek/benchmarks/overhead.bench.ts))
 
 - **Build / Transform Time:** `< 3000 ms`
-- **Gzip Size Delta:** `< 15%` on production application bundles
-- **Runtime CPU Overhead:** `< 2.00%` (interleaved multi-round V8 JIT benchmark)
+- **Gzip Size Delta:** `< 15%` on Tier 1 & Tier 2 production application bundles
+- **Runtime CPU Overhead:** `< 2.00%` on Tier 1 & Tier 2 hot paths (interleaved multi-round V8 JIT benchmark)
 - **Plaintext Leak Rate:** `0%` for string literals meeting `minStringLength`
 
 ## License

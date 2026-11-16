@@ -13,12 +13,12 @@
 Sıfır yapılandırma gerektiren, çağrı grafiği (call-graph) farkındalıklı, <%2 CPU ek yükü ve <%15 Gzip bütçesine sahip istemci tarafı JavaScript koruma ve çalışma zamanı (runtime) müdahale önleme aracı.
 
 [![Lisans: MIT](https://img.shields.io/badge/Lisans-MIT-111111.svg?style=flat-square)](LICENSE)
-[![Sıcak Yol CPU](https://img.shields.io/badge/S%C4%B1cak%20Yol%20CPU-%3C2%25-FF3300.svg?style=flat-square)](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/benchmarks/overhead.bench.ts)
-[![Gzip Artışı](https://img.shields.io/badge/Gzip%20Art%C4%B1%C5%9F%C4%B1-%3C15%25-111111.svg?style=flat-square)](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/benchmarks/overhead.bench.ts)
+[![Sıcak Yol CPU](https://img.shields.io/badge/S%C4%B1cak%20Yol%20CPU-%3C2%25-FF3300.svg?style=flat-square)](packages/unpeek/benchmarks/overhead.bench.ts)
+[![Gzip Artışı](https://img.shields.io/badge/Gzip%20Art%C4%B1%C5%9F%C4%B1-%3C15%25-111111.svg?style=flat-square)](packages/unpeek/benchmarks/overhead.bench.ts)
 [![Canlı Demo](https://img.shields.io/badge/Showcase-Canl%C4%B1%20Demo-FF3300.svg?style=flat-square)](https://woffluon.github.io/unpeek)
 [![Dokümantasyon](https://img.shields.io/badge/Docs-Detayl%C4%B1%20Referans-111111.svg?style=flat-square)](https://woffluon.github.io/unpeek/docs)
 
-[English](./README.md) | Türkçe · [İnteraktif Vitrin](https://woffluon.github.io/unpeek) · [Dokümantasyon](https://woffluon.github.io/unpeek/docs) · [Ajan Mimari Kılavuzu](https://github.com/Woffluon/unpeek/blob/main/AGENTS.md) · [Yapay Zeka Becerisi (SKILL.md)](https://github.com/Woffluon/unpeek/blob/main/skills/unpeek/SKILL.md)
+[English](./README.md) | Türkçe · [İnteraktif Vitrin](https://woffluon.github.io/unpeek) · [Dokümantasyon](https://woffluon.github.io/unpeek/docs) · [Ajan Mimari Kılavuzu](./AGENTS.md) · [Yapay Zeka Becerisi (SKILL.md)](./skills/unpeek/SKILL.md)
 
 ---
 
@@ -61,15 +61,15 @@ flowchart TD
 ```
 
 1. **Çağrı Grafiği (Call-Graph) Hot-Path Muafiyeti (`<%2` CPU Bütçesi)**
-   [`detectHotPaths`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/ast/index.ts), tek bir AST düğümünü değiştirmeden önce dosyanın çağrı grafiğini çift yönlü tarar. Döngü içeren fonksiyonlar (`for`, `while`, `do-while`, `for-of`), dizi yüksek mertebe geri çağrıları (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` zamanlayıcıları, React/UI bileşenleri (`useState`, `useEffect`, `createElement`) ve sıcak döngülerden çağrılan tüm yardımcı fonksiyonlar sıcak yol (hot path) olarak işaretlenir. `unpeek` sıcak döngüleri ve yardımcılarını hem opak kontrol akışı korumalarından hem de metin kasası dönüşümünden muaf tutar; korumayı yalnızca soğuk fonksiyonlara (lisans doğrulama, istek imzalama, yetki kontrolü gibi) uygular. Sıcak döngülerdeki V8 JIT optimizasyonu doğal hızında çalışmayı sürdürür.
+   [`detectHotPaths`](packages/unpeek/src/ast/index.ts), tek bir AST düğümünü değiştirmeden önce dosyanın çağrı grafiğini çift yönlü tarar. Döngü içeren fonksiyonlar (`for`, `while`, `do-while`, `for-of`), dizi yüksek mertebe geri çağrıları (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` zamanlayıcıları, React/UI bileşenleri (`useState`, `useEffect`, `createElement`) ve sıcak döngülerden çağrılan tüm yardımcı fonksiyonlar sıcak yol (hot path) olarak işaretlenir. `unpeek` sıcak döngüleri ve yardımcılarını hem opak kontrol akışı korumalarından hem de metin kasası dönüşümünden muaf tutar; korumayı yalnızca soğuk fonksiyonlara (lisans doğrulama, istek imzalama, yetki kontrolü gibi) uygular. Sıcak döngülerdeki V8 JIT optimizasyonu doğal hızında çalışmayı sürdürür.
 2. **O(1) Sabit-Dizi ve 64-Bit Tuzlu Metin Kasaları (`<%15` Gzip Bütçesi)**
    Soğuk metin sabitleri (`minStringLength >= 4`), 92 karakterli kaçışsız involutory ASCII permütasyonu (`P[P[c]] = c`) veya paylaşımlı tekil `<1.2 KB` konak-bağlı WASM KDF (`env.g`/`env.m`, bit-özdeş non-lineer Rivest + S-Box JS yedeği ile) destekli 64-bit çağrı-noktası tuzlu çözücülerle (`computeCallSiteSalt64`) kodlanır. Giriş kalkanından önce çalışan asenkron parçalar (Issue #1) önbelleği zehirlemeden geçerli düz metni çözer; aktif kurcalamada ise önbelleğe yazmadan kapalı başarısız olur.
 3. **Sıra-Bağımsız `globalThis` Kalkanı, Non-Lineer MBA ve Tier 3 Micro-VM v2**
-   Giriş paketleri, `WorkerGlobalScope` uyumlu (`self`/`globalThis`) sıra-bağımsız bir bütünlük IIFE'i enjekte eder ve [`verifyCodeIntegrity`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/runtime/index.ts) ile `Function.prototype.toString()` + `Reflect.apply` tanımlayıcı sahtelemelerini yakalar. Soğuk yollar (`coldFlow: true`) `>=4`-değişkenli yarı-lineer MBA + derece-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR koşulları (`((z^2 + 1) & 3) === 3`) ve nötr tuzak köprüleri alır; Tier 3 / `--aggressive`, `@unpeek-critical` fonksiyonlarını 43-komutlu direct-threaded Micro-VM v2 motoruna (`$step` trambolini + bloklar arası `$f.ac` akümülatör çarkı, sıfır `eval()`) önceliklendirir. Verilen tepki `deterrentMode` ile yönetilir:
+   Giriş paketleri, `WorkerGlobalScope` uyumlu (`self`/`globalThis`) sıra-bağımsız bir bütünlük IIFE'i enjekte eder ve [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts) ile `Function.prototype.toString()` + `Reflect.apply` tanımlayıcı sahtelemelerini yakalar. Soğuk yollar (`coldFlow: true`) `>=4`-değişkenli yarı-lineer MBA + derece-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR koşulları (`((z^2 + 1) & 3) === 3`) ve nötr tuzak köprüleri alır; Tier 3 / `--aggressive`, `@unpeek-critical` fonksiyonlarını 43-komutlu direct-threaded Micro-VM v2 motoruna (`$step` trambolini + bloklar arası `$f.ac` akümülatör çarkı, sıfır `eval()`) önceliklendirir. Verilen tepki `deterrentMode` ile yönetilir:
    - `passive` (hem CLI `protect` hem de `unplugin` varsayılanı): Konsol çıktısını susturmadan veya uygulamayı çökertmeden `self`/`globalThis` üzerine bir telemetri olayı (`unpeek:tamper`) iletir; tersine mühendislik girişimlerinin sessizce izlenmesini sağlar.
    - `gradual` (`--gradual` veya `deterrentMode: 'gradual'` ile seçime bağlı): İç çalışma zamanı çözümlemelerini kademeli olarak bozar ve `console` çıktılarını susturur; saldırganların doğrudan yamayabileceği ani bir hata yığın izi üretmeden kodu işlevsizleştirir.
 4. **Çok Geçişli Source Map Kasası (`.unpeek-maps/`) ve SHA-256 `debugId`**
-   Üretim çıktısında `.js.map` dosyalarını bırakmak, orijinal TypeScript proje ağacınızın DevTools içinde birebir yeniden oluşturulmasına yol açar. [`protectProject`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/core/protect.ts), ECMA-426 `.sections` indeks haritalarını düzleştirir, çok geçişli $M_1 \circ M_2$ VLQ bileşimini (`chainSourceMaps`) hesaplar, JS paketine ve kasadaki `.map` dosyasına aynı deterministik SHA-256 `debugId` imzasını işler (`unpeek check` ile doğrulanır), `.map` dosyalarını `.unpeek-maps/` klasörüne taşır ve `//# sourceMappingURL=` yorumlarını temizler.
+   Üretim çıktısında `.js.map` dosyalarını bırakmak, orijinal TypeScript proje ağacınızın DevTools içinde birebir yeniden oluşturulmasına yol açar. [`protectProject`](packages/unpeek/src/core/protect.ts), ECMA-426 `.sections` indeks haritalarını düzleştirir, çok geçişli $M_1 \circ M_2$ VLQ bileşimini (`chainSourceMaps`) hesaplar, JS paketine ve kasadaki `.map` dosyasına aynı deterministik SHA-256 `debugId` imzasını işler (`unpeek check` ile doğrulanır), `.map` dosyalarını `.unpeek-maps/` klasörüne taşır ve `//# sourceMappingURL=` yorumlarını temizler.
 
 ---
 
@@ -141,7 +141,7 @@ npx unpeek protect
 
 ### 3. Evrensel Paketleyici Eklentisi (`unpeek/unplugin`)
 
-Derleme sonrası CLI adımı yerine paketleyicinin `renderChunk` yaşam döngüsü sırasında bellek içi dönüşüm yapmak isterseniz [`unpeek/unplugin`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/src/plugins/unplugin.ts) modülünü veya doğrudan ilgili alt yolu (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/rspack`) kullanabilirsiniz:
+Derleme sonrası CLI adımı yerine paketleyicinin `renderChunk` yaşam döngüsü sırasında bellek içi dönüşüm yapmak isterseniz [`unpeek/unplugin`](packages/unpeek/src/plugins/unplugin.ts) modülünü veya doğrudan ilgili alt yolu (`unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/rspack`) kullanabilirsiniz:
 
 #### Vite (`vite.config.ts`)
 
@@ -199,7 +199,7 @@ export default nextConfig;
 
 #### Programatik API ve Paket Dışa Aktarımları (`3.0.0`)
 
-`unpeek` 3.0.0 sürümünde kök `unpeek` giriş noktası temel üst düzey API'yi (`protectProject`, `transformJavaScript`, `initProject`, `checkProject`, `symbolicateStackTrace`, `PRESETS`, `defineConfig`, `loadUnpeekConfig`, `UnpeekError`, `isUnpeekError`, `UnpeekErrorCode` ve `UnpeekProfile`, `UnpeekDiagnostic`, `TransformResult` gibi genel TypeScript tipleri) sunar; paketleyici bağdaştırıcıları ve yapılandırma yardımcıları ise özel alt yollarda (`unpeek/config`, `unpeek/browser`, `unpeek/next`, `unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/rspack`, `unpeek/unplugin`, `unpeek/package.json`) yer alır. v2.x'ten geçiş ve kırıcı değişiklikler için [Geçiş Kılavuzu (v3.0.0)](https://github.com/Woffluon/unpeek/blob/main/docs/MIGRATION_V3.md) belgesine bakın.
+`unpeek` 3.0.0 sürümünde kök `unpeek` giriş noktası temel üst düzey API'yi (`protectProject`, `transformJavaScript`, `initProject`, `checkProject`, `symbolicateStackTrace`, `PRESETS`, `defineConfig`, `loadUnpeekConfig`, `UnpeekError`, `isUnpeekError`, `UnpeekErrorCode` ve `UnpeekProfile`, `UnpeekDiagnostic`, `TransformResult` gibi genel TypeScript tipleri) sunar; paketleyici bağdaştırıcıları ve yapılandırma yardımcıları ise özel alt yollarda (`unpeek/config`, `unpeek/browser`, `unpeek/next`, `unpeek/vite`, `unpeek/webpack`, `unpeek/rollup`, `unpeek/esbuild`, `unpeek/rspack`, `unpeek/unplugin`, `unpeek/package.json`) yer alır. v2.x'ten geçiş ve kırıcı değişiklikler için [Geçiş Kılavuzu (v3.0.0)](docs/MIGRATION_V3.md) belgesine bakın.
 
 ```ts
 import {
@@ -411,7 +411,7 @@ npx @sentry/cli sourcemaps upload .unpeek-maps --release="$GIT_COMMIT_SHA"
 
 ## Yapay Zeka Kodlama Ajanı Entegrasyonu (AI Coding Agent Integration)
 
-`unpeek`, açık Vercel Agent Skills belirtimi ve Ajan Becerileri Keşif Optimizasyonu (SDO) standartlarıyla tam uyumlu resmi bir Yapay Zeka Ajan Becerisi ([`SKILL.md`](https://github.com/Woffluon/unpeek/blob/main/skills/unpeek/SKILL.md)) sunar. Bu beceriyi eklemek; kodlama ajanlarınıza (Claude Code, Cursor, OpenAI Codex, Gemini CLI, GitHub Copilot, OpenCode) istemci paketlerini koruma, hot-path performans bütçelerini (<%2 CPU, <%15 Gzip) koruma, SSR sınırlarını gözetme ve `.unpeek-maps/` kasasını CI/CD hatlarına bağlama konularında doğrudan operasyonel iş akışları kazandırır.
+`unpeek`, açık Vercel Agent Skills belirtimi ve Ajan Becerileri Keşif Optimizasyonu (SDO) standartlarıyla tam uyumlu resmi bir Yapay Zeka Ajan Becerisi ([`skills/unpeek/SKILL.md`](skills/unpeek/SKILL.md)) sunar. Bu beceriyi eklemek; kodlama ajanlarınıza (Claude Code, Cursor, OpenAI Codex, Gemini CLI, GitHub Copilot, OpenCode) istemci paketlerini koruma, hot-path performans bütçelerini (<%2 CPU, <%15 Gzip) koruma, SSR sınırlarını gözetme ve `.unpeek-maps/` kasasını CI/CD hatlarına bağlama konularında doğrudan operasyonel iş akışları kazandırır.
 
 ### Beceri (Skill) Kurulumu
 
@@ -465,7 +465,7 @@ $unpeek Protect this build with passive telemetry and seed 0x7f4a2c.
 
 ### Token-Optimize Modüler Referans Yapısı (`skills/unpeek/references/`)
 
-Ajan bağlam penceresini (context window) korumak ve gereksiz token tüketimini önlemek için ana [`SKILL.md`](https://github.com/Woffluon/unpeek/blob/main/skills/unpeek/SKILL.md) dosyası kompakt tutulmuş; detaylı rehberler `skills/unpeek/references/` dizini altındaki 6 modüler dokümana ayrılmıştır:
+Ajan bağlam penceresini (context window) korumak ve gereksiz token tüketimini önlemek için ana [`skills/unpeek/SKILL.md`](skills/unpeek/SKILL.md) dosyası kompakt tutulmuş; detaylı rehberler `skills/unpeek/references/` dizini altındaki 6 modüler dokümana ayrılmıştır:
 
 - **`quickstart.md`**: Sıfır ayarlı kurulum, postbuild betikleri ve 3 adımlı doğrulama döngüsü.
 - **`frameworks.md`**: Çatı bazlı yapılandırmalar ve SSR istemci sınırları (Next.js, Vite, Webpack, Rollup).
@@ -515,11 +515,11 @@ powershell -File scripts/validate-version.ps1 -Message "fix: description"
 powershell -File scripts/stage-release.ps1
 ```
 
-### Benchmark Çıktı Referansı ([`packages/unpeek/benchmarks/overhead.bench.ts`](https://github.com/Woffluon/unpeek/blob/main/packages/unpeek/benchmarks/overhead.bench.ts))
+### Benchmark Çıktı Referansı ([`packages/unpeek/benchmarks/overhead.bench.ts`](packages/unpeek/benchmarks/overhead.bench.ts))
 
 - **Derleme / Dönüşüm Süresi:** `< 3000 ms`
-- **Gzip Boyut Artışı:** `< %15` (üretim uygulama paketlerinde)
-- **Çalışma Zamanı CPU Ek Yükü:** `< %2.00` (aralıklı çok turlu V8 JIT testi)
+- **Gzip Boyut Artışı:** `< %15` (Tier 1 & Tier 2 üretim uygulama paketlerinde)
+- **Çalışma Zamanı CPU Ek Yükü:** `< %2.00` (Tier 1 & Tier 2 sıcak yollarında aralıklı çok turlu V8 JIT testi)
 - **Düz Metin Sızıntı Oranı:** `%0` (`minStringLength` kuralını karşılayan metin sabitleri için)
 
 ## Lisans
