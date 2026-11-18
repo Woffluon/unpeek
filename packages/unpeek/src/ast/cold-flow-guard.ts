@@ -588,6 +588,20 @@ function extractParamNames(paramNode?: string | acorn.Pattern, out: string[] = [
   return out;
 }
 
+function makeSafeNumericParam(name: string): any {
+  return {
+    type: 'ConditionalExpression',
+    test: {
+      type: 'BinaryExpression',
+      operator: '===',
+      left: makeUnary('typeof', { type: 'Identifier', name }),
+      right: makeLiteral('number'),
+    },
+    consequent: makeBinary('|', { type: 'Identifier', name }, makeLiteral(0)),
+    alternate: makeLiteral(0),
+  };
+}
+
 function buildLiveVariables4(
   seed: number,
   fnIndex: number,
@@ -602,7 +616,7 @@ function buildLiveVariables4(
   for (const name of names) {
     if (name && name !== 'arguments' && name !== 'eval' && !seenNames.has(name)) {
       seenNames.add(name);
-      candidates.push(makeBinary('|', { type: 'Identifier', name }, makeLiteral(0)));
+      candidates.push(makeSafeNumericParam(name));
     }
   }
 
@@ -657,12 +671,22 @@ function buildLiveVariables4(
   return [candidates[0], candidates[1], candidates[2], candidates[3]];
 }
 
+const QNR_RESIDUE_FAMILIES: readonly { add: number; mask: number; target: number }[] = [
+  { add: 1, mask: 3, target: 3 },
+  { add: 3, mask: 7, target: 6 },
+  { add: 5, mask: 7, target: 3 },
+  { add: 7, mask: 15, target: 13 },
+];
+
 /**
- * Generates a non-zero-identical Quadratic Non-Residue (QNR) opaque predicate:
- *   ((Math.imul(z, z) + 1) & 3) === 3
+ * Generates a non-zero-identical Quadratic Non-Residue (QNR) opaque predicate
+ * across 4 modular residue families (mod 4, mod 8, mod 16):
+ * - Family 0: ((Math.imul(z, z) + 1) & 3) === 3  (LHS in {1, 2})
+ * - Family 1: ((Math.imul(z, z) + 3) & 7) === 6  (LHS in {3, 4, 7})
+ * - Family 2: ((Math.imul(z, z) + 5) & 7) === 3  (LHS in {1, 5, 6})
+ * - Family 3: ((Math.imul(z, z) + 7) & 15) === 13 (LHS in {0, 7, 8, 11})
  * where z is derived from >=4 live variables via semi-linear MBA with folded constants,
  * Rivest degree-3 permutation polynomial, and optional 256-entry S-Box mixing.
- * Note: For every 32-bit integer z, (z^2 + 1) mod 4 is in {1, 2}, never 3.
  */
 export function createSotaMbaPredicate(
   seed: number,
@@ -675,6 +699,8 @@ export function createSotaMbaPredicate(
   const domain = ctxOpts?.returnDomain ?? 'object';
   const [x1, x2, x3, x4] = buildLiveVariables4(seed, fnIndex, paramNode, isArrowFn, ctxOpts);
   const mba4 = buildMba4Ast(seed, fnIndex, x1, x2, x3, x4);
+  const qnrFamilyIdx = ((seed ^ Math.imul(fnIndex + 1, 0x9e3779b1)) >>> 0) % QNR_RESIDUE_FAMILIES.length;
+  const qnrFamily = QNR_RESIDUE_FAMILIES[qnrFamilyIdx];
 
   let qnrLeft: any;
   let zRefForDecoy: any;
@@ -703,11 +729,29 @@ export function createSotaMbaPredicate(
         right: buildSboxMixAst(ctxOpts.sboxIdent, ctxOpts.scratchVarIdent),
       });
     }
+    if (ctxOpts.aliasIdentA) {
+      const aliasSlot = (fnIndex + (seed & 3)) & 3;
+      const aliasMem = makeMemberIndex(ctxOpts.aliasIdentA, makeLiteral(aliasSlot));
+      seqExprs.push({
+        type: 'AssignmentExpression',
+        operator: '=',
+        left: cloneNode(aliasMem),
+        right: makeBinary(
+          '|',
+          makeBinary(
+            '^',
+            cloneNode(aliasMem),
+            makeBinary('&', cloneNode(scratchId), makeLiteral(0))
+          ),
+          makeLiteral(0)
+        ),
+      });
+    }
     seqExprs.push(
       makeBinary(
         '&',
-        makeBinary('+', makeImul(cloneNode(scratchId), cloneNode(scratchId)), makeLiteral(1)),
-        makeLiteral(3)
+        makeBinary('+', makeImul(cloneNode(scratchId), cloneNode(scratchId)), makeLiteral(qnrFamily.add)),
+        makeLiteral(qnrFamily.mask)
       )
     );
     qnrLeft = {
@@ -719,8 +763,8 @@ export function createSotaMbaPredicate(
     const zExpr = buildRivestPermAst(seed, fnIndex, mba4);
     qnrLeft = makeBinary(
       '&',
-      makeBinary('+', makeImul(cloneNode(zExpr), cloneNode(zExpr)), makeLiteral(1)),
-      makeLiteral(3)
+      makeBinary('+', makeImul(cloneNode(zExpr), cloneNode(zExpr)), makeLiteral(qnrFamily.add)),
+      makeLiteral(qnrFamily.mask)
     );
     zRefForDecoy = zExpr;
   }
@@ -739,7 +783,7 @@ export function createSotaMbaPredicate(
       type: 'BinaryExpression',
       operator: '===',
       left: qnrLeft,
-      right: makeLiteral(3),
+      right: makeLiteral(qnrFamily.target),
     },
     consequent,
     alternate: null,
@@ -899,6 +943,7 @@ export function applyColdFlowGuard(
     if (guardedCount >= MAX_COLD_GUARDS_PER_CHUNK) return;
     if (!coldFunctionNodes.has(node)) return;
     if (hotExemptNodes?.has(node) || (node as any)._unpeekSerialized) return;
+    if ((node as any)._unpeekVirtualized === true) return;
     if (!node.body || node.body.type !== 'BlockStatement') return;
 
     const paramNames: string[] = [];

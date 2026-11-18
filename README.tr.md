@@ -63,9 +63,9 @@ flowchart TD
 1. **Çağrı Grafiği (Call-Graph) Hot-Path Muafiyeti (`<%2` CPU Bütçesi)**
    [`detectHotPaths`](packages/unpeek/src/ast/index.ts), tek bir AST düğümünü değiştirmeden önce dosyanın çağrı grafiğini çift yönlü tarar. Döngü içeren fonksiyonlar (`for`, `while`, `do-while`, `for-of`), dizi yüksek mertebe geri çağrıları (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` zamanlayıcıları, React/UI bileşenleri (`useState`, `useEffect`, `createElement`) ve sıcak döngülerden çağrılan tüm yardımcı fonksiyonlar sıcak yol (hot path) olarak işaretlenir. `unpeek` sıcak döngüleri ve yardımcılarını hem opak kontrol akışı korumalarından hem de metin kasası dönüşümünden muaf tutar; korumayı yalnızca soğuk fonksiyonlara (lisans doğrulama, istek imzalama, yetki kontrolü gibi) uygular. Sıcak döngülerdeki V8 JIT optimizasyonu doğal hızında çalışmayı sürdürür.
 2. **O(1) Sabit-Dizi ve 64-Bit Tuzlu Metin Kasaları (`<%15` Gzip Bütçesi)**
-   Soğuk metin sabitleri (`minStringLength >= 4`), 92 karakterli kaçışsız involutory ASCII permütasyonu (`P[P[c]] = c`) veya paylaşımlı tekil `<1.2 KB` konak-bağlı WASM KDF (`env.g`/`env.m`, bit-özdeş non-lineer Rivest + S-Box JS yedeği ile) destekli 64-bit çağrı-noktası tuzlu çözücülerle (`computeCallSiteSalt64`) kodlanır. Giriş kalkanından önce çalışan asenkron parçalar (Issue #1) önbelleği zehirlemeden geçerli düz metni çözer; aktif kurcalamada ise önbelleğe yazmadan kapalı başarısız olur.
+   Soğuk metin sabitleri (`minStringLength >= 4`), 92 karakterli kaçışsız involutory ASCII permütasyonu (`P[P[c]] = c`) veya paylaşımlı tekil `<1.2 KB` konak-bağlı WASM KDF (`env.g`/`env.m`, bit-özdeş non-lineer Rivest + S-Box JS yedeği ile) destekli 64-bit çağrı-noktası tuzlu çözücülerle (`computeCallSiteSalt64`) kodlanır; hem Tier 2 (`recommended`) hem Tier 3 (`strict` / `--aggressive`) modlarında yerinde yeniden şifrelenen `Uint8Array` + `TextDecoder` Shader Kasası uygulanır. Tarayıcı ve `WorkerGlobalScope` ortamlarında giriş kalkanından önce çalışan asenkron parçalar önbelleği zehirlemeden geçerli düz metni çözerken, çıplak tarayıcı-dışı VM bağlamları (`window`/`document`/`self` olmayan `node:vm`) ve aktif kurcalamalar önbelleğe yazmadan kapalı başarısız olur.
 3. **Sıra-Bağımsız `globalThis` Kalkanı, Non-Lineer MBA ve Tier 3 Micro-VM v2**
-   Giriş paketleri, `WorkerGlobalScope` uyumlu (`self`/`globalThis`) sıra-bağımsız bir bütünlük IIFE'i enjekte eder ve [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts) ile `Function.prototype.toString()` + `Reflect.apply` tanımlayıcı sahtelemelerini yakalar. Soğuk yollar (`coldFlow: true`) `>=4`-değişkenli yarı-lineer MBA + derece-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR koşulları (`((z^2 + 1) & 3) === 3`) ve nötr tuzak köprüleri alır; Tier 3 / `--aggressive`, `@unpeek-critical` fonksiyonlarını 43-komutlu direct-threaded Micro-VM v2 motoruna (`$step` trambolini + bloklar arası `$f.ac` akümülatör çarkı, sıfır `eval()`) önceliklendirir. Verilen tepki `deterrentMode` ile yönetilir:
+   Giriş paketleri, `WorkerGlobalScope` uyumlu (`self`/`globalThis`) sıra-bağımsız bir bütünlük IIFE'i enjekte eder ve [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts) ile `Function.prototype.toString()` + `Reflect.apply` tanımlayıcı, imza, çapraz çağrı ve yığın izi `Proxy` tuzaklarını yakalar. Soğuk yollar (`coldFlow: true`), tip korumalı `>=4`-değişkenli yarı-lineer MBA + 4 modüler rezidü ailesi ($\pmod 4, \pmod 8, \pmod{16}$) üzerinde derece-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR koşulları, alias tablosu karıştırması ve nötr tuzak köprüleri alır; Tier 3 / `--aggressive`, `@unpeek-critical` ve kritik form/doğrulama işleyicilerini öncelik sırasıyla `globalThis` üzerinde paylaşılan 43-komutlu direct-threaded Micro-VM v2 motoruna (`$step` trambolini, bloklar arası `$f.ac` çarkı, sıfır-olmayan opcode başına MBA sapmaları, `_uVm*` öz-karması ve sıfır `eval()`) taşır. Verilen tepki `deterrentMode` ile yönetilir:
    - `passive` (hem CLI `protect` hem de `unplugin` varsayılanı): Konsol çıktısını susturmadan veya uygulamayı çökertmeden `self`/`globalThis` üzerine bir telemetri olayı (`unpeek:tamper`) iletir; tersine mühendislik girişimlerinin sessizce izlenmesini sağlar.
    - `gradual` (`--gradual` veya `deterrentMode: 'gradual'` ile seçime bağlı): İç çalışma zamanı çözümlemelerini kademeli olarak bozar ve `console` çıktılarını susturur; saldırganların doğrudan yamayabileceği ani bir hata yığın izi üretmeden kodu işlevsizleştirir.
 4. **Çok Geçişli Source Map Kasası (`.unpeek-maps/`) ve SHA-256 `debugId`**
@@ -103,14 +103,15 @@ npx unpeek protect
 | :--- | :--- | :--- |
 | `init [--dry-run] [--profile <ad>]` | Proje çerçevesini otomatik algılar, `postbuild` kancasını ve `.unpeek-maps/` kasasını yapılandırır | |
 | `protect` | Üretim istemci paketlerini yerinde korur (varsayılan komut) | |
-| `check` | Sızan `.map` dosyaları, `sourceMappingURL` yorumları, yoksayma kuralları, Gzip bütçesi ve `eval()` için salt okunur CI kapısı | |
+| `check` | Sızan `.map` dosyaları, `sourceMappingURL` yorumları, yoksayma kuralları, Gzip bütçesi ve `eval()` için salt okunur CI kapısı (`--require-zero-eval` koruma öncesi taban çizgisi, `node_modules/` kaynak haritası ve `Function("return this")` kalıplarını uyarıda tutar) | |
 | `symbolicate` | `.unpeek-maps/` kullanarak üretim yığın izlerini (stack traces) yerelde çözümler (`--maps-dir`, `--trace`, `--file`) | |
 | `--profile <ad>` | Hazır koruma profili: `minimal`, `recommended` veya `strict` | |
 | `--dry-run` | Dosyalara yazmadan bellek içinde dönüşüm ve Gzip farkını hesaplar | Kapalı |
 | `--max-gzip-delta <sayı>` | Gzip artışı belirtilen yüzdeyi aşarsa hata verir (`protect` / `check`) | `15` (`check` için) |
+| `--require-zero-eval` | Atfedilemeyen veya koruma sonrası eklenen `eval()` / `new Function()` çağrılarında `check` komutunu başarısız kılar | Kapalı |
 | `--out-dir <yol>` | İstemci çıktı klasörünü açıkça belirtir (ör. `dist/assets`, `.next/static/chunks`) | Proje framework'ünden otomatik tespit |
 | `--seed <sayı>` | Deterministik 32-bit polimorfik derleme tohumu (seed) | Derleme başına rastgele |
-| `--aggressive` | Katman 2 (Tier 2) agresif korumayı etkinleştirir (Micro-VM ve WASM KDF) | Varsayılan: kapalı (Tier 1 varsayılanı: <%2 CPU, <%15 Gzip) |
+| `--aggressive` | Katman 3 (Tier 3) agresif korumayı etkinleştirir (Micro-VM v2, tekil WASM KDF, tuzlu kasa ve Shader Kasası) | Varsayılan: kapalı (Tier 1 varsayılanı: <%2 CPU, <%15 Gzip) |
 | `--passive` | Pasif caydırıcı modunu kullanır (konsol sessize alma olmadan yalnızca telemetri olayı) | Varsayılan (`passive`) |
 | `--gradual` | Kademeli caydırıcı modunu kullanır (kurcalamada `console` çıktılarını susturur ve çalışma zamanını bozar) | Kapalı |
 | `--detect-headless` | `navigator.webdriver` / `HeadlessChrome` sinyallerini kurcalama olarak işaretler | Kapalı |
@@ -160,7 +161,7 @@ export default defineConfig({
 
 #### Next.js (`next.config.mjs`)
 
-**Next.js >= 16.2** için `unpeek/next` alt yolundan `withUnpeek` Build Adapter yardımcısını kullanın (`npx unpeek init` tarafından otomatik bağlanır):
+**Next.js >= 16.2** için `unpeek/next` alt yolundan `withUnpeek` Build Adapter yardımcısını kullanın (`npx unpeek init` tarafından otomatik bağlanır). `withUnpeek` / `createUnpeekNextAdapter` üretim derlemelerinde Vercel değişmez chunk hash çakışmalarını önlemek için deterministik `outputHashSalt` enjekte eder, `TURBOPACK.push` başlıklarını seçici olarak muaf tutarken modül fabrika gövdelerini şifreler ve `.next/static` boş olduğunda `.vercel/output/static/_next/static` çıktı dizinini otomatik algılar:
 
 ```js
 import { withUnpeek } from 'unpeek/next';

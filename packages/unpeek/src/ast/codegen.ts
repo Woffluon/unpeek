@@ -57,21 +57,22 @@ const DISALLOWED_IDENTS = new Set([
 export function derivePolymorphicIdent(seed: number, role: PolymorphicRole): string {
   let h = (0x811c9dc5 ^ (seed >>> 0)) >>> 0;
   for (let i = 0; i < role.length; i++) {
-    h ^= role.charCodeAt(i);
+    h = (h ^ role.charCodeAt(i)) >>> 0;
     h = Math.imul(h, 0x01000193) >>> 0;
   }
   // Murmur3 avalanche mix so every bit of seed/role affects the first character & suffix
-  h ^= h >>> 16;
+  h = (h ^ (h >>> 16)) >>> 0;
   h = Math.imul(h, 0x85ebca6b) >>> 0;
-  h ^= h >>> 13;
+  h = (h ^ (h >>> 13)) >>> 0;
   h = Math.imul(h, 0xc2b2ae35) >>> 0;
-  h ^= h >>> 16;
+  h = (h ^ (h >>> 16)) >>> 0;
 
   for (let attempt = 0; attempt < 32; attempt++) {
-    const c0 = IDENT_START_CHARS[h % IDENT_START_CHARS.length];
-    const c1 = IDENT_CONT_CHARS[(h >>> 6) % IDENT_CONT_CHARS.length];
-    const c2 = IDENT_CONT_CHARS[(h >>> 12) % IDENT_CONT_CHARS.length];
-    const c3 = IDENT_CONT_CHARS[(h >>> 18) % IDENT_CONT_CHARS.length];
+    const u = h >>> 0;
+    const c0 = IDENT_START_CHARS[u % IDENT_START_CHARS.length];
+    const c1 = IDENT_CONT_CHARS[(u >>> 6) % IDENT_CONT_CHARS.length];
+    const c2 = IDENT_CONT_CHARS[(u >>> 12) % IDENT_CONT_CHARS.length];
+    const c3 = IDENT_CONT_CHARS[(u >>> 18) % IDENT_CONT_CHARS.length];
     const ident = `${c0}${c1}${c2}${c3}`;
     if (
       !DISALLOWED_IDENTS.has(ident) &&
@@ -81,7 +82,7 @@ export function derivePolymorphicIdent(seed: number, role: PolymorphicRole): str
     ) {
       return ident;
     }
-    h = Math.imul(h ^ (0x9e3779b9 + attempt), 0x85ebca6b) >>> 0;
+    h = Math.imul(u ^ (0x9e3779b9 + attempt), 0x85ebca6b) >>> 0;
   }
   return `_${(h >>> 0).toString(36).slice(0, 3).padStart(3, '0')}`;
 }

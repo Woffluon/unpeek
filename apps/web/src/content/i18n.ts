@@ -196,7 +196,7 @@ export function validateLicense($k0){
 export const DICTIONARY: Record<Locale, Dictionary> = {
   en: {
     meta: {
-      version: "v4.0.0",
+      version: "v4.0.1",
       license: "MIT License",
     },
     nav: {
@@ -476,8 +476,8 @@ export default defineConfig({
           {
             title: "Next.js (App Router & Pages Router)",
             body: [
-              "In Next.js projects, unpeek strictly targets `.next/static/chunks` (discovering entries from `.next/build-manifest.json` and exempting `globalThis.TURBOPACK.push` headers) while leaving `.next/server` completely untouched. Async split chunks resolve cleanly even before the entry shield initializes.",
-              "Both `postbuild` CLI execution and the `unpeek/unplugin` adapter are supported.",
+              "In Next.js projects, unpeek strictly targets `.next/static/chunks` (falling back to `.vercel/output/static/_next/static` when `.next/static` is empty, discovering entries from `.next/build-manifest.json`, and selectively exempting `globalThis.TURBOPACK.push` chunk headers while protecting module factory bodies) while leaving `.next/server` completely untouched. In browser and Worker contexts, async split chunks resolve cleanly even before the entry shield initializes.",
+              "Both `postbuild` CLI execution and the `unpeek/next` Build Adapter (`withUnpeek` / `createUnpeekNextAdapter`, which auto-injects a deterministic `outputHashSalt` on production builds to prevent Vercel immutable chunk hash collisions) are supported.",
             ],
             codeBlocks: [
               {
@@ -592,23 +592,23 @@ export default {
             title: "Zero-Escape 92-Char Vault, Noise Filters & In-Place Shader Vault",
             body: [
               "In Layer 1 (default), cold literals (`>= minStringLength`, default `4`) pass through a noise filter (exempting SVG path coordinates and Tailwind utility class chains) and encode via a seed-shuffled 92-character involutory ASCII permutation (`P[P[c]] == c`) that never emits `\\u00xx` escapes, keeping LZ77/Gzip compression tight.",
-              "Large template literals and GPU shaders (`>= 256 B` or WebGPU `@vgpu/wgsl` / GLSL signatures) enter an encrypted `Uint8Array` buffer decoded in-place via `TextDecoder` and immediately re-encrypted in `finally`, preventing lingering heap plaintext and keeping React StrictMode remounts idempotent.",
+              "Large template literals and GPU shaders (`>= 256 B` or WebGPU `@vgpu/wgsl` / GLSL signatures outside direct loops) enter an encrypted `Uint8Array` buffer decoded in-place via `TextDecoder` and immediately re-encrypted in `finally` across both Tier 2 (`recommended`) and Tier 3 (`strict` / `--aggressive`), preventing lingering heap plaintext and keeping React StrictMode remounts idempotent.",
             ],
           },
           {
             title: "Order-Independent Shield & Non-Linear Rivest MBA Guards",
             body: [
-              "Entry chunks execute a `WorkerGlobalScope`-safe (`self`/`globalThis`) FNV-1a integrity IIFE with `Reflect.apply` descriptor checks (`Function.prototype.toString`). When async split chunks (such as Next.js 16 Turbopack) execute before the entry shield initializes (`globalThis[sym] === undefined`), decoders return valid plaintext without poisoning cache (`d = -1` removed), failing closed only on active tampering.",
-              "Cold functions (`coldFlow: true`) receive `>=4`-variable semi-linear MBA predicates paired with degree-3 Rivest $\\mathbb{Z}_{2^{32}}$ permutation polynomials, a 256-entry seeded S-Box, QNR conditions (`((Math.imul(z, z) + 1) & 3) === 3`), and neutral return-domain-aligned decoy bridges without mutating application branches or leaking source identifiers.",
+              "Entry chunks execute a `WorkerGlobalScope`-safe (`self`/`globalThis`) FNV-1a integrity IIFE with `Reflect.apply` and `Function.prototype.toString()` descriptor, native-signature, cross-call, and V8 stack-trace `Proxy` trap checks. In browser and Worker contexts, async split chunks executing before the entry shield initializes (`globalThis[sym] === undefined`) return valid plaintext without poisoning cache (`d = -1` removed), while bare non-browser VMs (`node:vm` without `window`/`document`/`self`) and active tampering fail closed.",
+              "Cold functions (`coldFlow: true`) receive type-guarded `>=4`-variable semi-linear MBA predicates (safe across `Object.create(null)`, `Symbol`, and `BigInt` inputs) paired with degree-3 Rivest $\\mathbb{Z}_{2^{32}}$ permutation polynomials, a 256-entry seeded S-Box, 4 diverse QNR modular residue families ($\\pmod 4, \\pmod 8, \\pmod{16}$) with alias-table perturbation, and neutral return-domain-aligned decoy bridges without mutating application branches or leaking source identifiers.",
             ],
           },
           {
             title: "Tier 3 Deep-Dive: Micro-VM v2, Singleton Host-Coupled WASM KDF & 64-Bit Vault",
             body: [
-              "Passing `--aggressive` or `--profile strict` activates Tier 3 enclave defense (prioritizing `@unpeek-critical` annotations and `critical.include` patterns) without risking application crashes or violating strict CSP:",
+              "Passing `--aggressive` or `--profile strict` activates Tier 3 enclave defense (priority-scoring `@unpeek-critical` and submit/validation/auth handlers into `maxFunctionsPerChunk`, skipping duplicate `coldFlow` on virtualized bodies) without risking application crashes or violating strict CSP:",
             ],
             bullets: [
-              "`Bytecode Micro-VM v2 (43 Opcodes)`: Pre-VM lowering supports `&&`/`||`/`??`, `?:`, `for`/`while`/`do..while`, `try`/`throw`, `this`, `new`, `obj.arguments`, and closures across an `[8, 400]` AST node window using a `$step` direct-threaded closure trampoline and inter-block `$f.ac` accumulator ratchet—zero `eval()` or `new Function()`.",
+              "`Bytecode Micro-VM v2 (43 Opcodes)`: Pre-VM lowering supports `&&`/`||`/`??`, `?:`, `for`/`while`/`do..while`, `try`/`throw`, `this`, `new`, `obj.arguments`, and closures across an `[8, 400]` AST node window using a `globalThis`-shared singleton `$step` direct-threaded trampoline, inter-block `$f.ac` ratchet, non-zero per-opcode handler MBA offsets, dead post-`RET` epilogue pruning, and `_uVm*` pretty-print self-hashing—zero `eval()` or `new Function()`.",
               "`Singleton Host-Coupled WASM KDF (<1.2 KB)`: Synthesizes a `371 B` WebAssembly binary importing `env.g`/`env.m` host hooks, compiled once into a shared `globalThis` singleton across split chunks, with a bit-identical non-linear Rivest + S-Box JavaScript fallback when WebAssembly is blocked by CSP.",
               "`64-Bit Call-Site Salted Vault`: Replaces sequential counters with 31-bit salts derived via 64-bit mixing (`_uD(stringIndex, callSiteSalt)`), guaranteeing complete idempotence under React 19 Concurrent Mode and StrictMode.",
             ],
@@ -745,13 +745,16 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
     --min-string-length <num>      minimum string length for the vault (default: 4)
     --private-maps-dir <dir>       vault directory (default: .unpeek-maps)
     --no-shield                    skip the runtime anti-tamper shield
-    --aggressive                   enable Tier 2 aggressive protection (Micro-VM & WASM KDF)
+    --aggressive                   enable Tier 3 aggressive protection (Micro-VM v2, singleton WASM KDF & Shader Vault)
     -h, --help                     show help
     -v, --version                  show version
 
+  Options (check):
+    --require-zero-eval            fail on unattributed/injected eval() or new Function() (warns on ES5 Function("return this"), node_modules maps & baseline)
+
   Tiers:
     Tier 1 (default)               call-graph hot-path exemption (<2% CPU, <15% Gzip)
-    Tier 2 (--aggressive)          zero plaintext exposure via Micro-VM & WASM KDF`,
+    Tier 3 (--aggressive)          Micro-VM v2 + singleton WASM KDF + Shader Vault`,
               },
             ],
           },
@@ -1016,7 +1019,7 @@ unpeek protect --no-shield`,
   },
   tr: {
     meta: {
-      version: "v4.0.0",
+      version: "v4.0.1",
       license: "MIT Lisansı",
     },
     nav: {
@@ -1296,8 +1299,8 @@ export default defineConfig({
           {
             title: "Next.js (App Router & Pages Router)",
             body: [
-              "Next.js projelerinde unpeek yalnızca `.next/static/chunks` dizinini hedef alır (`.next/build-manifest.json` girişlerini okur ve `globalThis.TURBOPACK.push` başlıklarını muaf tutar), `.next/server` klasörüne kesinlikle dokunmaz. Asenkron yüklenen parçalar giriş kalkanından önce çalışsa bile zehirlenmeden düzgün çözülür.",
-              "Hem `postbuild` CLI kullanımı hem de `unpeek/unplugin` eklentisi tam desteklenir.",
+              "Next.js projelerinde unpeek yalnızca `.next/static/chunks` dizinini hedef alır (`.next/static` boşsa `.vercel/output/static/_next/static` yoluna geçer, `.next/build-manifest.json` girişlerini okur ve `globalThis.TURBOPACK.push` başlıklarını seçici olarak muaf tutup modül fabrika gövdelerini korur), `.next/server` klasörüne kesinlikle dokunmaz. Tarayıcı ve Worker bağlamlarında asenkron yüklenen parçalar giriş kalkanından önce çalışsa bile zehirlenmeden düzgün çözülür.",
+              "Hem `postbuild` CLI kullanımı hem de `unpeek/next` Build Adapter (`withUnpeek` / `createUnpeekNextAdapter` — üretim derlemelerinde Vercel değişmez chunk hash çakışmalarını önlemek için deterministik `outputHashSalt` enjekte eder) tam desteklenir.",
             ],
             codeBlocks: [
               {
@@ -1412,23 +1415,23 @@ export default {
             title: "Kaçışsız 92-Karakter Kasa, Gürültü Filtresi & Yerinde Shader Kasası",
             body: [
               "Katman 1 (varsayılan) içinde soğuk string'ler (`>= minStringLength`, varsayılan `4`) SVG yol verisini ve Tailwind sınıf zincirlerini muaf tutan gürültü filtresinden geçer; ardından `\\u00xx` kaçışı üretmeyen, LZ77/Gzip sıkıştırmasını koruyan 92 karakterli involutory ASCII permütasyonu (`P[P[c]] == c`) ile kodlanır.",
-              "Büyük şablon metinleri ve GPU shader blokları (`>= 256 B` veya WebGPU `@vgpu/wgsl` / GLSL imzaları) XOR şifreli `Uint8Array` tamponunda tutulur; `TextDecoder` ile yerinde çözülüp `finally` bloğunda anında yeniden şifrelenerek React StrictMode uyumu sağlar.",
+              "Doğrudan döngüler dışındaki büyük şablon metinleri ve GPU shader blokları (`>= 256 B` veya WebGPU `@vgpu/wgsl` / GLSL imzaları) hem Tier 2 (`recommended`) hem Tier 3 (`strict` / `--aggressive`) modlarında XOR şifreli `Uint8Array` tamponunda tutulur; `TextDecoder` ile yerinde çözülüp `finally` bloğunda anında yeniden şifrelenerek React StrictMode uyumu sağlar.",
             ],
           },
           {
             title: "Sıra-Bağımsız Kalkan ve Non-Lineer Rivest MBA Koruyucuları",
             body: [
-              "Giriş paketleri, `WorkerGlobalScope` uyumlu (`self`/`globalThis`) FNV-1a bütünlük IIFE'i ile `Function.prototype.toString()` ve `Reflect.apply` tanımlayıcı kontrolleri çalıştırır. Asenkron ayrık parçalar (ör. Next.js 16 Turbopack) giriş kalkanından önce çalışsa bile (`globalThis[sym] === undefined`), çözücüler önbelleği zehirlemeden (`d = -1` kaldırıldı) geçerli düz metni döndürür; yalnızca aktif kurcalamada önbelleğe yazmadan kapalı başarısız olur.",
-              "Soğuk fonksiyonlar (`coldFlow: true`); `>=4`-değişkenli yarı-lineer MBA koşullarını derece-3 Rivest $\\mathbb{Z}_{2^{32}}$ permütasyon polinomları, 256-girişli tohum S-Box'ı, QNR koşulu (`((Math.imul(z, z) + 1) & 3) === 3`) ve uygulama dallarına dokunmayan, kaynak değişken adı sızdırmayan nötr tuzak köprüleriyle birleştirir.",
+              "Giriş paketleri, `WorkerGlobalScope` uyumlu (`self`/`globalThis`) FNV-1a bütünlük IIFE'i ile `Function.prototype.toString()` ve `Reflect.apply` tanımlayıcı, doğal imza, çapraz çağrı ve V8 yığın izi `Proxy` tuzak kontrollerini çalıştırır. Tarayıcı ve Worker ortamlarında asenkron ayrık parçalar (ör. Next.js 16 Turbopack) giriş kalkanından önce çalışsa bile (`globalThis[sym] === undefined`) önbelleği zehirlemeden (`d = -1` kaldırıldı) geçerli düz metni döndürür; buna karşın çıplak tarayıcı-dışı VM bağlamları (`window`/`document`/`self` olmayan `node:vm`) ve aktif kurcalamalar kapalı başarısız olur.",
+              "Soğuk fonksiyonlar (`coldFlow: true`); `Object.create(null)`, `Symbol` ve `BigInt` girdilerinde tip güvenli `>=4`-değişkenli yarı-lineer MBA koşullarını derece-3 Rivest $\\mathbb{Z}_{2^{32}}$ permütasyon polinomları, 256-girişli tohum S-Box'ı, 4 farklı modüler QNR rezidü ailesi ($\\pmod 4, \\pmod 8, \\pmod{16}$) + alias tablosu karıştırması ve kaynak değişken adı sızdırmayan nötr tuzak köprüleriyle birleştirir.",
             ],
           },
           {
             title: "Tier 3 Derinlemesine: Micro-VM v2, Tekil Konak-Bağlı WASM KDF ve 64-Bit Kasa",
             body: [
-              "`--aggressive` veya `--profile strict` etkinleştirildiğinde unpeek, `@unpeek-critical` işaretli fonksiyonları ve `critical.include` desenlerini katı CSP kurallarını bozmadan Tier 3 kalesiyle korur:",
+              "`--aggressive` veya `--profile strict` etkinleştirildiğinde unpeek, `@unpeek-critical` işaretli fonksiyonları ve kritik form/doğrulama/yetki işleyicilerini öncelik puanıyla `maxFunctionsPerChunk` kotasına alır (sanallaştırılmış gövdelere çift `coldFlow` eklemez) ve katı CSP kurallarını bozmadan Tier 3 kalesiyle korur:",
             ],
             bullets: [
-              "`Bytecode Micro-VM v2 (43 Komut)`: Pre-VM düşürmesiyle `&&`/`||`/`??`, `?:`, `for`/`while`/`do..while`, `try`/`throw`, `this`, `new`, `obj.arguments` ve kapanışları `[8, 400]` AST düğüm penceresinde `$step` direct-threaded trambolini ve bloklar arası `$f.ac` akümülatör çarkıyla çalıştırır (`eval()` veya `new Function()` yok).",
+              "`Bytecode Micro-VM v2 (43 Komut)`: Pre-VM düşürmesiyle `&&`/`||`/`??`, `?:`, `for`/`while`/`do..while`, `try`/`throw`, `this`, `new`, `obj.arguments` ve kapanışları `[8, 400]` AST düğüm penceresinde `globalThis` üzerinde paylaşılan tekil `$step` trambolini, bloklar arası `$f.ac` çarkı, sıfır-olmayan opcode başına MBA sapmaları, ölü post-`RET` epilog budaması ve `_uVm*` formatlama öz-karmasıyla çalıştırır (`eval()` veya `new Function()` yok).",
               "`Tekil Konak-Bağlı WASM KDF (<1.2 KB)`: `env.g`/`env.m` konak kancalarını içe aktaran `371 B` WebAssembly ikilisini ayrık parçalar arasında tek bir `globalThis` tekil yuvasında paylaşır; CSP WebAssembly'i engellerse bit-özdeş non-lineer Rivest + S-Box JavaScript yedeğine geçer.",
               "`64-Bit Çağrı-Noktası Tuzlu Kasa`: Sıralı sayaçlar yerine 64-bit karıştırmadan türetilen 31-bit tuzlar (`_uD(stringIndex, callSiteSalt)`) kullanır; React 19 Eşzamanlı Mod ve StrictMode altında tam idempotent çalışır.",
             ],
@@ -1565,13 +1568,16 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
     --min-string-length <num>      minimum string length for the vault (default: 4)
     --private-maps-dir <dir>       vault directory (default: .unpeek-maps)
     --no-shield                    skip the runtime anti-tamper shield
-    --aggressive                   enable Tier 2 aggressive protection (Micro-VM & WASM KDF)
+    --aggressive                   enable Tier 3 aggressive protection (Micro-VM v2, singleton WASM KDF & Shader Vault)
     -h, --help                     show help
     -v, --version                  show version
 
+  Options (check):
+    --require-zero-eval            fail on unattributed/injected eval() or new Function() (warns on ES5 Function("return this"), node_modules maps & baseline)
+
   Tiers:
     Tier 1 (default)               call-graph hot-path exemption (<2% CPU, <15% Gzip)
-    Tier 2 (--aggressive)          zero plaintext exposure via Micro-VM & WASM KDF`,
+    Tier 3 (--aggressive)          Micro-VM v2 + singleton WASM KDF + Shader Vault`,
               },
             ],
           },

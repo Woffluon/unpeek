@@ -10,11 +10,12 @@ import {
 import {
   SAFE_ALPHA,
   DIRECTIVE_STRINGS,
-  isReservedProp,
-  isTailwindNoise,
-  isSvgPathString,
+  createShaderVaultAst,
+  findVaultInsertIndex,
+  isShaderPayload,
+  shouldEncryptString,
 } from './string-vault.js';
-import { generateCompactJs } from './codegen.js';
+import { derivePolymorphicIdent, generateCompactJs } from './codegen.js';
 import { fallbackKdf, injectWasmVault } from './wasm-vault.js';
 import { generateRuntimeShield } from '../runtime/index.js';
 import { deriveWindowKeySymbol } from '../internal/runtime.js';
@@ -25,6 +26,7 @@ export interface SaltedVaultResult {
   integrityToken: number;
   vaultVarName: string;
   decryptFnName: string;
+  shaderBuffersCount?: number;
 }
 
 /**
@@ -103,6 +105,13 @@ export function createSaltedDecryptorFnAst(
       `}if(!tm)m[i]=o;return o;};`;
   } else {
     const edInit = buildRivestDeltaExpr(seed, expectedDelta, '_ed');
+    const hasWindowKey = Boolean(windowKeySymbol);
+    const brDecl = hasWindowKey
+      ? `var _br=typeof window<"u"||typeof document<"u"||typeof self<"u";`
+      : '';
+    const svCheck = hasWindowKey
+      ? `(sv===void 0?!_br:sv!==_ed)`
+      : `(sv!==void 0&&sv!==_ed)`;
     fBody =
       `var m=[],c=Function.prototype.toString.call(f),_tk=${tkExpr};` +
       `for(var h=0x811c9dc5,j=0;j<c.length;j++)h=Math.imul(h^c.charCodeAt(j),0x01000193)>>>0;` +
@@ -110,9 +119,10 @@ export function createSaltedDecryptorFnAst(
       `return function(i,s){` +
       `var G=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof self<"u"?self:this;` +
       `var w=typeof window<"u"?window:typeof self<"u"?self:0;` +
+      brDecl +
       `var sv=G&&G${propAccess}!==void 0?G${propAccess}:w&&w${propAccess}!==void 0?w${propAccess}:void 0;` +
       `var sr=G&&G${stateAccess}?G${stateAccess}:w&&w${stateAccess}?w${stateAccess}:void 0;` +
-      `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||(sr&&sr[0]===2)||((""._u||a._u||0)!==0)||(sv!==void 0&&sv!==_ed);` +
+      `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||(sr&&sr[0]===2)||((""._u||a._u||0)!==0)||${svCheck};` +
       `if(!tm&&sv===_ed&&(i in m))return m[i];` +
       `var d=tm?((_ed^(((Math.imul(i+1,0x9e3779b1)^0x5a5b)&65535)|1))&65535):_ed;` +
       `var q=(h^(""._u||a._u||0)^d)>>>0,p=a[i],o="";` +
@@ -197,7 +207,11 @@ function isAstAlreadySalted(ast: acorn.Program): boolean {
         (d: any) =>
           d.id?.type === 'Identifier' &&
           typeof d.id.name === 'string' &&
-          d.id.name.startsWith('_uP')
+          (d.id.name.startsWith('_uP') ||
+            (d.init?.type === 'CallExpression' &&
+              d.init.callee?.type === 'FunctionExpression' &&
+              d.init.callee?.id?.name === 'f' &&
+              d.init.arguments?.[0]?.type === 'ArrayExpression'))
       )
     ) {
       return true;
@@ -251,6 +265,7 @@ export function applySaltedStringVault(
       integrityToken: computeFnv1aHash('already-salted', seed),
       vaultVarName: '',
       decryptFnName: '',
+      shaderBuffersCount: 0,
     };
   }
 
@@ -276,35 +291,109 @@ export function applySaltedStringVault(
 
   const targetsToReplace: TargetEntry[] = [];
   const encryptedPayloads: string[] = [];
+  const shaderToIndex = new Map<string, number>();
+  const shaderPayloads: string[] = [];
+  const shaderTargets: { node: any; parent: any; idx: number }[] = [];
+
+  function processSaltedCandidate(
+    val: string,
+    node: any,
+    parent: any,
+    ancestors: any[]
+  ): void {
+    if (isNodeInExemptSubtree(ancestors, exemptSubtreeRoots)) {
+      return;
+    }
+
+    if (
+      parent.type === 'ExpressionStatement' &&
+      (Boolean(parent.directive) || activeDirectives.has(val))
+    ) {
+      return;
+    }
+
+    for (let i = ancestors.length - 2; i >= 0; i--) {
+      if (
+        ancestors[i].type === 'ExpressionStatement' &&
+        Boolean((ancestors[i] as any).directive)
+      ) {
+        return;
+      }
+    }
+
+    let isHotExempt = false;
+    if (hotExemptNodes) {
+      for (let i = ancestors.length - 2; i >= 0; i--) {
+        if (hotExemptNodes.has(ancestors[i])) {
+          isHotExempt = true;
+          break;
+        }
+      }
+    }
+
+    // Protect shaders before hot-exempt bailout (only direct loops / serialized workers stay exempt)
+    if (
+      isShaderPayload(
+        val,
+        node,
+        parent,
+        ancestors,
+        seed,
+        isHotExempt,
+        customReserved
+      )
+    ) {
+      let idx = shaderToIndex.get(val);
+      if (idx === undefined) {
+        idx = shaderPayloads.length;
+        shaderToIndex.set(val, idx);
+        shaderPayloads.push(val);
+      }
+      shaderTargets.push({ node, parent, idx });
+      return;
+    }
+
+    if (isHotExempt) {
+      return;
+    }
+
+    if (
+      !shouldEncryptString(
+        val,
+        minLen,
+        parent,
+        activeDirectives,
+        customReserved
+      )
+    ) {
+      return;
+    }
+
+    const callSiteIdx = targetsToReplace.length;
+    const [saltLo, saltHi] = computeCallSiteSalt64(
+      seed >>> 0,
+      callSiteIdx >>> 0,
+      seed >>> 0
+    );
+    const localSalt = (((saltLo ^ saltHi) & 0x7fffffff) | 1) >>> 0;
+
+    targetsToReplace.push({
+      node,
+      parent,
+      callSiteIdx,
+      localSalt,
+      rawString: val,
+    });
+  }
 
   walk.ancestor(ast, {
     Literal(node: any, ancestors: any[]) {
       if (typeof node.value !== 'string') return;
-      if (node.value.length < minLen) return;
-      if (activeDirectives.has(node.value)) return;
+      const val: string = node.value;
+      if (activeDirectives.has(val)) return;
 
       const parent = ancestors[ancestors.length - 2];
       if (!parent) return;
-
-      if (isNodeInExemptSubtree(ancestors, exemptSubtreeRoots)) {
-        return;
-      }
-
-      if (
-        parent.type === 'ExpressionStatement' &&
-        (Boolean(parent.directive) || activeDirectives.has(node.value))
-      ) {
-        return;
-      }
-
-      for (let i = ancestors.length - 2; i >= 0; i--) {
-        if (
-          ancestors[i].type === 'ExpressionStatement' &&
-          Boolean((ancestors[i] as any).directive)
-        ) {
-          return;
-        }
-      }
 
       // Do not encrypt module import/export source paths
       if (
@@ -329,203 +418,235 @@ export function applySaltedStringVault(
       ) {
         return;
       }
-
-      // Skip nodes marked hot-exempt
-      if (hotExemptNodes) {
-        for (let i = ancestors.length - 1; i >= 0; i--) {
-          if (hotExemptNodes.has(ancestors[i])) {
-            return;
-          }
-        }
+      if (
+        parent.type === 'ImportAttribute' ||
+        parent.type === 'ImportSpecifier' ||
+        parent.type === 'ExportSpecifier'
+      ) {
+        return;
       }
 
-      if (isReservedProp(node.value, customReserved)) return;
-      if (isTailwindNoise(node.value)) return;
-      if (isSvgPathString(node.value, parent)) return;
+      processSaltedCandidate(val, node, parent, ancestors);
+    },
 
-      const callSiteIdx = targetsToReplace.length;
-      const [saltLo, saltHi] = computeCallSiteSalt64(
-        seed >>> 0,
-        callSiteIdx >>> 0,
-        seed >>> 0
-      );
-      const localSalt = (((saltLo ^ saltHi) & 0x7fffffff) | 1) >>> 0;
+    TemplateLiteral(node: any, ancestors: any[]) {
+      if (!node.quasis || node.quasis.length !== 1) return;
+      if (node.expressions && node.expressions.length !== 0) return;
 
-      targetsToReplace.push({
-        node,
-        parent,
-        callSiteIdx,
-        localSalt,
-        rawString: node.value,
-      });
+      const val: string = node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
+      if (typeof val !== 'string' || activeDirectives.has(val)) return;
+
+      const parent = ancestors[ancestors.length - 2];
+      if (!parent) return;
+
+      if (parent.type === 'TaggedTemplateExpression' && parent.quasi === node) {
+        return;
+      }
+      if (parent.type === 'ImportExpression' && parent.source === node) {
+        return;
+      }
+
+      processSaltedCandidate(val, node, parent, ancestors);
     },
   });
 
-  if (targetsToReplace.length === 0) {
+  if (targetsToReplace.length === 0 && shaderTargets.length === 0) {
     return {
       encryptedStringsCount: 0,
       integrityToken: computeFnv1aHash('empty-salted', seed),
       vaultVarName: '',
       decryptFnName: '',
+      shaderBuffersCount: 0,
     };
   }
 
-  // Ensure WebAssembly KDF key generator is injected
-  const wasmResult = injectWasmVault(ast, seed);
-  const kdfFnName = wasmResult.kdfFnName;
+  let vaultVarName = '';
+  let decryptFnName = '';
+  let integrityToken = computeFnv1aHash('empty-salted', seed);
 
-  const suffix = computeFnv1aHash(`salted:${seed}`, seed).toString(36);
-  const vaultVarName = `_uP${suffix}`;
-  const cacheVarName = `_uCache${suffix}`;
-  const dCacheVarName = `_uDc${suffix}`;
-  const decryptFnName = `_uD${suffix}`;
+  if (targetsToReplace.length > 0) {
+    // Ensure WebAssembly KDF key generator is injected
+    const wasmResult = injectWasmVault(ast, seed);
+    const kdfFnName = wasmResult.kdfFnName;
 
-  const sym = windowKeySymbol ?? deriveWindowKeySymbol(seed);
-  let expDelta = expectedDelta;
-  if (shieldCoupled && expDelta === undefined) {
-    const shield = generateRuntimeShield({
-      seed,
-      windowKeySymbol: sym,
-      deterrentMode: deterrentMode ?? 'passive',
-      detectHeadless,
-    });
-    expDelta = shield.expectedDelta ?? 0;
-  }
+    const suffix = computeFnv1aHash(`salted:${seed}`, seed).toString(36);
+    vaultVarName = `_uP${suffix}`;
+    const cacheVarName = `_uCache${suffix}`;
+    const dCacheVarName = `_uDc${suffix}`;
+    decryptFnName = `_uD${suffix}`;
 
-  const propAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(sym)
-    ? `.${sym}`
-    : `[${JSON.stringify(sym)}]`;
-  const stateSym = `${sym}_s`;
-  const stateAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(stateSym)
-    ? `.${stateSym}`
-    : `[${JSON.stringify(stateSym)}]`;
-  const flagSym = `${sym}_t`;
-  const flagAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(flagSym)
-    ? `.${flagSym}`
-    : `[${JSON.stringify(flagSym)}]`;
-  const tkExpr = `['__','unp','eek_t','ampered'].join('')`;
-  const dkExpr = `['__','unp','eek_d','elta'].join('')`;
+    const sym = windowKeySymbol ?? deriveWindowKeySymbol(seed);
+    let expDelta = expectedDelta;
+    if (shieldCoupled && expDelta === undefined) {
+      const shield = generateRuntimeShield({
+        seed,
+        windowKeySymbol: sym,
+        deterrentMode: deterrentMode ?? 'passive',
+        detectHeadless,
+      });
+      expDelta = shield.expectedDelta ?? 0;
+    }
 
-  let helperFnSnippet: string;
-  if (!shieldCoupled) {
-    helperFnSnippet = `function ${decryptFnName}(i,s){` +
-      `var G=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof self<"u"?self:this;` +
-      `var w=typeof window<"u"?window:typeof self<"u"?self:0,_tk=${tkExpr},_dk=${dkExpr};` +
-      `var dv=(G&&G[_dk]!=null?G[_dk]:w&&w[_dk]!=null?w[_dk]:0)|0;` +
-      `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||((""._u||0)!==0)||(dv!==0);` +
-      `if(!tm&&${cacheVarName}[i]!==void 0)return ${cacheVarName}[i];` +
-      `if(${dCacheVarName}===void 0){` +
-      `var c=Function.prototype.toString.call(${decryptFnName}),h=0x811c9dc5;` +
-      `for(var l=0;l<c.length;l++)h=Math.imul(h^c.charCodeAt(l),0x01000193)>>>0;` +
-      `${dCacheVarName}=h|0;` +
-      `}` +
-      `var effD=tm?((${dCacheVarName}^(((Math.imul(i+1,0x9e3779b1)^0x5a5b)&65535)|1))|0):${dCacheVarName};` +
-      `var k=${kdfFnName}(i,s,effD);` +
-      `var p=${vaultVarName}[i],o="",rk=k|0;` +
-      `for(var j=0;j<p.length;j++){` +
-      `rk=(Math.imul(rk^(j+1),0x45d9f3b)+0x9e3779b9)|0;` +
-      `o+=String.fromCharCode(p.charCodeAt(j)^(((rk>>>16)&127)|1));` +
-      `}` +
-      `if(!tm)${cacheVarName}[i]=o;` +
-      `return o;` +
-      `}`;
-  } else {
-    const edInit = buildRivestDeltaExpr(seed, (expDelta ?? 0) & 0xffff, '_ed');
-    helperFnSnippet = `function ${decryptFnName}(i,s){` +
-      `var G=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof self<"u"?self:this;` +
-      `var w=typeof window<"u"?window:typeof self<"u"?self:0,_tk=${tkExpr},_dk=${dkExpr};` +
-      `${edInit}` +
-      `var sv=G&&G${propAccess}!==void 0?G${propAccess}:w&&w${propAccess}!==void 0?w${propAccess}:void 0;` +
-      `var sr=G&&G${stateAccess}?G${stateAccess}:w&&w${stateAccess}?w${stateAccess}:void 0;` +
-      `var dv=(G&&G[_dk]!=null?G[_dk]:w&&w[_dk]!=null?w[_dk]:0)|0;` +
-      `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||(sr&&sr[0]===2)||((""._u||0)!==0)||(dv!==0)||(sv!==void 0&&sv!==_ed);` +
-      `if(!tm&&sv===_ed&&${cacheVarName}[i]!==void 0)return ${cacheVarName}[i];` +
-      `if(${dCacheVarName}===void 0){` +
-      `var c=Function.prototype.toString.call(${decryptFnName}),h=0x811c9dc5;` +
-      `for(var l=0;l<c.length;l++)h=Math.imul(h^c.charCodeAt(l),0x01000193)>>>0;` +
-      `${dCacheVarName}=((h|0)^_ed)|0;` +
-      `}` +
-      `var effD=tm?((${dCacheVarName}^(((Math.imul(i+1,0x9e3779b1)^0x5a5b)&65535)|1))|0):${dCacheVarName};` +
-      `var k=${kdfFnName}(i,s,effD);` +
-      `var p=${vaultVarName}[i],o="",rk=k|0;` +
-      `for(var j=0;j<p.length;j++){` +
-      `rk=(Math.imul(rk^(j+1),0x45d9f3b)+0x9e3779b9)|0;` +
-      `o+=String.fromCharCode(p.charCodeAt(j)^(((rk>>>16)&127)|1));` +
-      `}` +
-      `if(!tm&&sv===_ed)${cacheVarName}[i]=o;` +
-      `return o;` +
-      `}`;
-  }
+    const propAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(sym)
+      ? `.${sym}`
+      : `[${JSON.stringify(sym)}]`;
+    const stateSym = `${sym}_s`;
+    const stateAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(stateSym)
+      ? `.${stateSym}`
+      : `[${JSON.stringify(stateSym)}]`;
+    const flagSym = `${sym}_t`;
+    const flagAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(flagSym)
+      ? `.${flagSym}`
+      : `[${JSON.stringify(flagSym)}]`;
+    const tkExpr = `['__','unp','eek_t','ampered'].join('')`;
+    const dkExpr = `['__','unp','eek_d','elta'].join('')`;
 
-  const parsedFn = acorn.parse(helperFnSnippet, {
-    ecmaVersion: 'latest',
-    sourceType: 'script',
-  }) as acorn.Program;
-  const fnDeclAst = parsedFn.body[0];
-  const selfHash = computeFnv1aHash(generateCompactJs(fnDeclAst)) | 0;
-  const buildD = shieldCoupled ? (selfHash ^ ((expDelta ?? 0) & 0xffff)) | 0 : selfHash | 0;
-
-  // Encrypt each call site with its individual static callSiteSalt bound to shield & decryptor self-hash
-  for (const target of targetsToReplace) {
-    const k = fallbackKdf(target.callSiteIdx, target.localSalt, buildD, seed);
-    encryptedPayloads.push(encodeSaltedString(target.rawString, k));
-
-    const callExpr: any = {
-      type: 'CallExpression',
-      callee: {
-        type: 'Identifier',
-        name: decryptFnName,
-      },
-      arguments: [
-        {
-          type: 'Literal',
-          value: target.callSiteIdx,
-          raw: String(target.callSiteIdx),
-        },
-        {
-          type: 'Literal',
-          value: target.localSalt,
-          raw: String(target.localSalt),
-        },
-      ],
-      optional: false,
-    };
-
-    replaceNodeInParent(target.parent, target.node, callExpr);
-  }
-
-  const serializedTable = JSON.stringify(encryptedPayloads);
-  const integrityToken = computeFnv1aHash(serializedTable, seed);
-
-  const varsSnippet = `var ${vaultVarName}=${serializedTable};var ${cacheVarName}=[];var ${dCacheVarName};`;
-  const parsedVars = acorn.parse(varsSnippet, {
-    ecmaVersion: 'latest',
-    sourceType: 'script',
-  }) as acorn.Program;
-
-  let insertIdx = 0;
-  while (insertIdx < ast.body.length) {
-    const stmt: any = ast.body[insertIdx];
-    const isDirective =
-      stmt.type === 'ExpressionStatement' &&
-      (Boolean(stmt.directive) ||
-        (stmt.expression?.type === 'Literal' &&
-          typeof stmt.expression.value === 'string' &&
-          (activeDirectives.has(stmt.expression.value) ||
-            /^(?:use\s+[a-zA-Z0-9_-]+)/.test(stmt.expression.value.trim()))));
-    if (isDirective || stmt.type === 'ImportDeclaration') {
-      insertIdx++;
+    let helperFnSnippet: string;
+    if (!shieldCoupled) {
+      helperFnSnippet = `function ${decryptFnName}(i,s){` +
+        `var G=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof self<"u"?self:this;` +
+        `var w=typeof window<"u"?window:typeof self<"u"?self:0,_tk=${tkExpr},_dk=${dkExpr};` +
+        `var dv=(G&&G[_dk]!=null?G[_dk]:w&&w[_dk]!=null?w[_dk]:0)|0;` +
+        `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||((""._u||0)!==0)||(dv!==0);` +
+        `if(!tm&&${cacheVarName}[i]!==void 0)return ${cacheVarName}[i];` +
+        `if(${dCacheVarName}===void 0){` +
+        `var c=Function.prototype.toString.call(${decryptFnName}),h=0x811c9dc5;` +
+        `for(var l=0;l<c.length;l++)h=Math.imul(h^c.charCodeAt(l),0x01000193)>>>0;` +
+        `${dCacheVarName}=h|0;` +
+        `}` +
+        `var effD=tm?((${dCacheVarName}^(((Math.imul(i+1,0x9e3779b1)^0x5a5b)&65535)|1))|0):${dCacheVarName};` +
+        `var k=${kdfFnName}(i,s,effD);` +
+        `var p=${vaultVarName}[i],o="",rk=k|0;` +
+        `for(var j=0;j<p.length;j++){` +
+        `rk=(Math.imul(rk^(j+1),0x45d9f3b)+0x9e3779b9)|0;` +
+        `o+=String.fromCharCode(p.charCodeAt(j)^(((rk>>>16)&127)|1));` +
+        `}` +
+        `if(!tm)${cacheVarName}[i]=o;` +
+        `return o;` +
+        `}`;
     } else {
-      break;
+      const edInit = buildRivestDeltaExpr(seed, (expDelta ?? 0) & 0xffff, '_ed');
+      const hasWindowKey = Boolean(sym);
+      const brDecl = hasWindowKey
+        ? `var _br=typeof window<"u"||typeof document<"u"||typeof self<"u";`
+        : '';
+      const svCheck = hasWindowKey
+        ? `(sv===void 0?!_br:sv!==_ed)`
+        : `(sv!==void 0&&sv!==_ed)`;
+      helperFnSnippet = `function ${decryptFnName}(i,s){` +
+        `var G=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof self<"u"?self:this;` +
+        `var w=typeof window<"u"?window:typeof self<"u"?self:0,_tk=${tkExpr},_dk=${dkExpr};` +
+        `${edInit}` +
+        brDecl +
+        `var sv=G&&G${propAccess}!==void 0?G${propAccess}:w&&w${propAccess}!==void 0?w${propAccess}:void 0;` +
+        `var sr=G&&G${stateAccess}?G${stateAccess}:w&&w${stateAccess}?w${stateAccess}:void 0;` +
+        `var dv=(G&&G[_dk]!=null?G[_dk]:w&&w[_dk]!=null?w[_dk]:0)|0;` +
+        `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||(sr&&sr[0]===2)||((""._u||0)!==0)||(dv!==0)||${svCheck};` +
+        `if(!tm&&sv===_ed&&${cacheVarName}[i]!==void 0)return ${cacheVarName}[i];` +
+        `if(${dCacheVarName}===void 0){` +
+        `var c=Function.prototype.toString.call(${decryptFnName}),h=0x811c9dc5;` +
+        `for(var l=0;l<c.length;l++)h=Math.imul(h^c.charCodeAt(l),0x01000193)>>>0;` +
+        `${dCacheVarName}=((h|0)^_ed)|0;` +
+        `}` +
+        `var effD=tm?((${dCacheVarName}^(((Math.imul(i+1,0x9e3779b1)^0x5a5b)&65535)|1))|0):${dCacheVarName};` +
+        `var k=${kdfFnName}(i,s,effD);` +
+        `var p=${vaultVarName}[i],o="",rk=k|0;` +
+        `for(var j=0;j<p.length;j++){` +
+        `rk=(Math.imul(rk^(j+1),0x45d9f3b)+0x9e3779b9)|0;` +
+        `o+=String.fromCharCode(p.charCodeAt(j)^(((rk>>>16)&127)|1));` +
+        `}` +
+        `if(!tm&&sv===_ed)${cacheVarName}[i]=o;` +
+        `return o;` +
+        `}`;
+    }
+
+    const parsedFn = acorn.parse(helperFnSnippet, {
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+    }) as acorn.Program;
+    const fnDeclAst = parsedFn.body[0];
+    const selfHash = computeFnv1aHash(generateCompactJs(fnDeclAst)) | 0;
+    const buildD = shieldCoupled ? (selfHash ^ ((expDelta ?? 0) & 0xffff)) | 0 : selfHash | 0;
+
+    // Encrypt each call site with its individual static callSiteSalt bound to shield & decryptor self-hash
+    for (const target of targetsToReplace) {
+      const k = fallbackKdf(target.callSiteIdx, target.localSalt, buildD, seed);
+      encryptedPayloads.push(encodeSaltedString(target.rawString, k));
+
+      const callExpr: any = {
+        type: 'CallExpression',
+        callee: {
+          type: 'Identifier',
+          name: decryptFnName,
+        },
+        arguments: [
+          {
+            type: 'Literal',
+            value: target.callSiteIdx,
+            raw: String(target.callSiteIdx),
+          },
+          {
+            type: 'Literal',
+            value: target.localSalt,
+            raw: String(target.localSalt),
+          },
+        ],
+        optional: false,
+      };
+
+      replaceNodeInParent(target.parent, target.node, callExpr);
+    }
+
+    const serializedTable = JSON.stringify(encryptedPayloads);
+    integrityToken = computeFnv1aHash(serializedTable, seed);
+
+    const varsSnippet = `var ${vaultVarName}=${serializedTable};var ${cacheVarName}=[];var ${dCacheVarName};`;
+    const parsedVars = acorn.parse(varsSnippet, {
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+    }) as acorn.Program;
+
+    const insertIdx = findVaultInsertIndex(ast, activeDirectives);
+    ast.body.splice(insertIdx, 0, ...(parsedVars.body as any[]), fnDeclAst as any);
+  }
+
+  if (shaderPayloads.length > 0) {
+    const shaderVarName = derivePolymorphicIdent(seed, 'shader');
+    for (const target of shaderTargets) {
+      const callExpr: any = {
+        type: 'CallExpression',
+        callee: {
+          type: 'Identifier',
+          name: shaderVarName,
+        },
+        arguments: [
+          {
+            type: 'Literal',
+            value: target.idx,
+            raw: String(target.idx),
+          },
+        ],
+        optional: false,
+      };
+      replaceNodeInParent(target.parent, target.node, callExpr);
+    }
+    const shaderHelperStmt = createShaderVaultAst(
+      shaderVarName,
+      shaderPayloads,
+      seed
+    );
+    const shaderInsertIdx = findVaultInsertIndex(ast, activeDirectives);
+    ast.body.splice(shaderInsertIdx, 0, shaderHelperStmt as any);
+    if (targetsToReplace.length === 0) {
+      integrityToken = computeFnv1aHash(JSON.stringify(shaderPayloads), seed);
     }
   }
-
-  ast.body.splice(insertIdx, 0, ...(parsedVars.body as any[]), fnDeclAst as any);
 
   return {
     encryptedStringsCount: targetsToReplace.length,
     integrityToken,
     vaultVarName,
     decryptFnName,
+    shaderBuffersCount: shaderPayloads.length,
   };
 }

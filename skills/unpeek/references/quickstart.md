@@ -99,7 +99,7 @@ unpeek provides three protection tiers aligned with `minimal`, `recommended`, an
 Subcommands:
 - `unpeek init [--dry-run] [--profile <minimal|recommended|strict>]` — wire `postbuild` and `.unpeek-maps/`.
 - `unpeek protect [options]` — protect client bundles in place (default command).
-- `unpeek check [--out-dir <dir>] [--max-gzip-delta <num>] [--require-zero-eval] [--private-maps-dir <dir>] [--json]` — read-only CI gate for leaked `.map` files, `sourceMappingURL` comments, ignore entries, Gzip budget, and `eval()`/`new Function()`.
+- `unpeek check [--out-dir <dir>] [--max-gzip-delta <num>] [--require-zero-eval] [--private-maps-dir <dir>] [--json]` — read-only CI gate for leaked `.map` files, `sourceMappingURL` comments, ignore entries, Gzip budget, and `eval()`/`new Function()` (`--require-zero-eval` keeps ES5 `Function("return this")`, `node_modules/` sourcemap provenance, and `.unpeek-maps/manifest.json` pre-protection baseline calls as warnings while failing on unattributed or newly introduced calls).
 - `unpeek symbolicate [--maps-dir <dir>] [--trace <str> | --file <path>]` — resolve production stack traces locally using `.unpeek-maps/`.
 
 | Flag | Type | Default | Description |

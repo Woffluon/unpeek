@@ -63,9 +63,9 @@ flowchart TD
 1. **Call-Graph Hot-Path Exemption (`<2%` CPU Budget)**
    Before modifying an AST node, [`detectHotPaths`](packages/unpeek/src/ast/index.ts) traverses the file call graph bidirectionally. Functions containing loops (`for`, `while`, `do-while`, `for-of`), array higher-order callbacks (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` tickers, React/UI render components (`useState`, `useEffect`, `createElement`), and all helper callees invoked from hot loops are flagged as hot paths. `unpeek` exempts hot loops and their callees from both opaque control-flow predicates and string vault rewriting, while protecting cold functions (such as license checks, request signers, and auth validators). V8 JIT optimization inside hot loops remains untouched.
 2. **O(1) Const-Array & 64-Bit Salted String Vaults (`<15%` Gzip Budget)**
-   Cold string literals (`minStringLength >= 4`) are encoded with a seed-shuffled 92-character involutory ASCII permutation (`P[P[c]] = c`) or 64-bit call-site salted decoders (`computeCallSiteSalt64`) backed by a shared singleton `<1.2 KB` host-coupled WASM KDF (`env.g`/`env.m`, with a bit-identical non-linear Rivest + S-Box JS fallback). Async split chunks executing before entry shield initialization resolve cleanly without cache poisoning (`d = -1` removed), while active tampering fails closed without caching.
+   Cold string literals (`minStringLength >= 4`) are encoded with a seed-shuffled 92-character involutory ASCII permutation (`P[P[c]] = c`) or 64-bit call-site salted decoders (`computeCallSiteSalt64`) backed by a shared singleton `<1.2 KB` host-coupled WASM KDF (`env.g`/`env.m`, with a bit-identical non-linear Rivest + S-Box JS fallback), alongside an in-place re-encrypting `Uint8Array` + `TextDecoder` Shader Vault across both Tier 2 (`recommended`) and Tier 3 (`strict` / `--aggressive`). In browser and `WorkerGlobalScope` contexts, async split chunks executing before entry shield initialization resolve cleanly without cache poisoning (`d = -1` removed), while bare non-browser VMs (`node:vm` without `window`/`document`/`self`) and active tampering fail closed without caching.
 3. **Order-Independent `globalThis` Shield, Non-Linear MBA & Tier 3 Micro-VM v2**
-   Entry chunks inject an order-independent, `WorkerGlobalScope`-safe (`self`/`globalThis`) integrity IIFE using `Function.prototype.toString()` and `Reflect.apply` descriptor checks (`verifyCodeIntegrity`). Cold paths (`coldFlow: true`) receive `>=4`-variable semi-linear MBA + degree-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR predicates (`((z^2 + 1) & 3) === 3`) and neutral decoy bridges; Tier 3 / `--aggressive` prioritizes `@unpeek-critical` functions into a 43-opcode direct-threaded Micro-VM v2 (`$step` trampoline + inter-block `$f.ac` ratchet, zero `eval()`). The response on tamper is governed by `deterrentMode`:
+   Entry chunks inject an order-independent, `WorkerGlobalScope`-safe (`self`/`globalThis`) integrity IIFE using `Function.prototype.toString()` and `Reflect.apply` descriptor, signature, cross-call, and stack-trace `Proxy` trap checks (`verifyCodeIntegrity`). Cold paths (`coldFlow: true`) receive type-guarded `>=4`-variable semi-linear MBA + degree-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR predicates across 4 modular residue families ($\pmod 4, \pmod 8, \pmod{16}$) with alias perturbation and neutral decoy bridges; Tier 3 / `--aggressive` priority-scores `@unpeek-critical` and critical submit/validation handlers into a `globalThis`-shared 43-opcode direct-threaded Micro-VM v2 (`$step` trampoline, inter-block `$f.ac` ratchet, non-zero per-opcode handler MBA offsets, `_uVm*` self-hashing, and zero `eval()`). The response on tamper is governed by `deterrentMode`:
    - `passive` (default for both CLI `protect` and `unplugin`): Dispatches a tamper telemetry event (`unpeek:tamper`) to `self`/`globalThis` with zero console muting or audible breakage, enabling covert telemetry.
    - `gradual` (opt-in via `--gradual` or `deterrentMode: 'gradual'`): Progressively corrupts internal runtime lookups and silences `console` output, neutralizing attackers without providing an immediate crash trace to patch.
 4. **Multi-Pass Source Map Vault (`.unpeek-maps/`) & SHA-256 `debugId`**
@@ -103,14 +103,15 @@ npx unpeek protect
 | :--- | :--- | :--- |
 | `init [--dry-run] [--profile <name>]` | Automatically detect project framework, configure `postbuild` script, and create `.unpeek-maps/` vault | |
 | `protect` | Protect production client bundles in-place (default command) | |
-| `check` | Read-only CI gate for leaked maps, `sourceMappingURL` comments, ignore entries, Gzip budget, and `eval()` | |
+| `check` | Read-only CI gate for leaked maps, `sourceMappingURL` comments, ignore entries, Gzip budget, and `eval()` (`--require-zero-eval` preserves pre-existing baseline/vendor `node_modules/` & `Function("return this")` warnings while failing on unattributed/injected calls) | |
 | `symbolicate` | Resolve production stack traces locally using `.unpeek-maps/` (`--maps-dir`, `--trace`, `--file`) | |
 | `--profile <name>` | Preset profile: `minimal`, `recommended`, or `strict` | |
 | `--dry-run` | Compute transform & Gzip delta in memory without writing files | Disabled |
 | `--max-gzip-delta <num>` | Fail if Gzip delta exceeds percentage (`protect` / `check`) | `15` (for `check`) |
+| `--require-zero-eval` | Fail `check` if unattributed or post-protection `eval()` / `new Function()` calls exist | Disabled |
 | `--out-dir <path>` | Explicit client output directory override (e.g., `dist/assets`, `.next/static/chunks`) | Auto-detected from project framework |
 | `--seed <number>` | Deterministic 32-bit polymorphic build seed | Random per build |
-| `--aggressive` | Enable Tier 2 aggressive protection (Micro-VM & WASM KDF) | Disabled (Tier 1 default: <2% CPU, <15% Gzip) |
+| `--aggressive` | Enable Tier 3 aggressive protection (Micro-VM v2, singleton WASM KDF, salted vault & Shader Vault) | Disabled (Tier 1 default: <2% CPU, <15% Gzip) |
 | `--passive` | Use passive deterrent mode (tamper telemetry event without console muting) | Default (`passive`) |
 | `--gradual` | Use gradual deterrent mode (silences `console` and corrupts runtime state on tamper) | Disabled |
 | `--detect-headless` | Treat `navigator.webdriver` / `HeadlessChrome` signals as tamper | Disabled |
@@ -160,7 +161,7 @@ export default defineConfig({
 
 #### Next.js (`next.config.mjs`)
 
-For **Next.js >= 16.2**, use the Build Adapter helper `withUnpeek` from `unpeek/next` (automatically wired by `npx unpeek init`):
+For **Next.js >= 16.2**, use the Build Adapter helper `withUnpeek` from `unpeek/next` (automatically wired by `npx unpeek init`). `withUnpeek` / `createUnpeekNextAdapter` automatically injects a deterministic `outputHashSalt` during production builds to prevent Vercel immutable chunk hash collisions, selectively exempts `TURBOPACK.push` headers while encrypting module factory bodies, and falls back to `.vercel/output/static/_next/static` when `.next/static` is empty:
 
 ```js
 import { withUnpeek } from 'unpeek/next';

@@ -101,6 +101,29 @@ export function hasNextServerSegment(
   return false;
 }
 
+export function hasJsBundleFiles(dir: string): boolean {
+  if (!fs.existsSync(dir)) return false;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (EXCLUDED_DIR_NAMES.has(entry.name.toLowerCase())) {
+        continue;
+      }
+      if (hasJsBundleFiles(path.join(dir, entry.name))) {
+        return true;
+      }
+    } else if (entry.isFile() && SUPPORTED_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function detectTargetFramework(
   cwd: string,
   explicitOutDir?: string,
@@ -181,10 +204,12 @@ export function detectTargetFramework(
     }
   }
 
-  const nextChunksDir = path.join(rootDir, nextDist, 'static', 'chunks');
+  const nextStaticDir = path.join(rootDir, nextDist, 'static');
+  const nextChunksDir = path.join(nextStaticDir, 'chunks');
   const nextExportChunksDir = path.join(rootDir, 'out', '_next', 'static', 'chunks');
   const nextExportDir = path.join(rootDir, 'out');
   const nextDistDir = path.join(rootDir, nextDist);
+  const vercelNextStaticDir = path.join(rootDir, '.vercel', 'output', 'static', '_next', 'static');
   const distAssetsDir = path.join(rootDir, viteOut, viteAssets);
   const distDir = path.join(rootDir, viteOut);
   const buildDir = path.join(rootDir, 'build');
@@ -195,6 +220,7 @@ export function detectTargetFramework(
       fs.existsSync(nextChunksDir) ||
       fs.existsSync(nextDistDir) ||
       fs.existsSync(nextExportChunksDir) ||
+      fs.existsSync(vercelNextStaticDir) ||
       discoveredNextDist !== undefined
     ) {
       framework = 'nextjs';
@@ -204,7 +230,12 @@ export function detectTargetFramework(
       framework = 'webpack';
     } else if (outDirOverride) {
       const normExplicit = outDirOverride.replace(/\\/g, '/');
-      if (normExplicit.includes(nextDist) || normExplicit.includes('.next') || normExplicit.includes('out/_next')) {
+      if (
+        normExplicit.includes(nextDist) ||
+        normExplicit.includes('.next') ||
+        normExplicit.includes('out/_next') ||
+        normExplicit.includes('_next/static')
+      ) {
         framework = 'nextjs';
       } else if (normExplicit.includes(`${viteOut}/${viteAssets}`) || normExplicit.includes('dist/assets')) {
         framework = 'vite';
@@ -229,6 +260,12 @@ export function detectTargetFramework(
   if (framework === 'nextjs') {
     if (fs.existsSync(nextExportChunksDir)) {
       outDir = nextExportChunksDir;
+    } else if (fs.existsSync(nextChunksDir) && hasJsBundleFiles(nextChunksDir)) {
+      outDir = nextChunksDir;
+    } else if (fs.existsSync(nextStaticDir) && hasJsBundleFiles(nextStaticDir)) {
+      outDir = nextStaticDir;
+    } else if (fs.existsSync(vercelNextStaticDir)) {
+      outDir = vercelNextStaticDir;
     } else if (fs.existsSync(nextChunksDir)) {
       outDir = nextChunksDir;
     } else if (fs.existsSync(nextExportDir)) {
@@ -249,7 +286,15 @@ export function detectTargetFramework(
       outDir = distDir;
     }
   } else {
-    const candidates = [nextExportChunksDir, nextChunksDir, distAssetsDir, distDir, buildDir, publicDir];
+    const candidates = [
+      nextExportChunksDir,
+      nextChunksDir,
+      vercelNextStaticDir,
+      distAssetsDir,
+      distDir,
+      buildDir,
+      publicDir,
+    ];
     const existing = candidates.find((candidate) => fs.existsSync(candidate));
     outDir = existing ?? distDir;
   }

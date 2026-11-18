@@ -10,6 +10,7 @@ import { computeFnv1aHash } from '../../shared/hash.js';
 import { UnpeekError } from '../../shared/errors.js';
 import { serializeNextOptions } from '../../internal/next.js';
 import { safeDecodeURIComponent } from '../../core/vlq.js';
+import { hasJsBundleFiles } from '../../core/detector.js';
 
 const MAX_NEXT_OPTIONS_ENV_BYTES = 32_767;
 
@@ -112,6 +113,32 @@ function isNonProductionPhase(phase?: string): boolean {
   );
 }
 
+function buildUnpeekOutputHashSalt(options: UnpeekNextAdapterOptions): string {
+  const profileTag = options.profile ?? options.config?.profile ?? 'recommended';
+  const isAggressive = options.aggressive ?? profileTag === 'strict';
+  const envId =
+    process.env.VERCEL_DEPLOYMENT_ID ||
+    process.env.VERCEL_GIT_COMMIT_SHA ||
+    process.env.GITHUB_SHA ||
+    '';
+  const parts = [
+    profileTag,
+    ...(isAggressive ? ['aggressive'] : []),
+    ...(envId ? [envId] : []),
+    ...(typeof options.seed === 'number' ? [String(options.seed)] : []),
+  ];
+  return `unpeek:${parts.join(':')}`;
+}
+
+function isSameAdapterPath(candidate: string | undefined, selfPath: string): boolean {
+  if (!candidate) return false;
+  try {
+    return path.resolve(candidate) === path.resolve(selfPath);
+  } catch {
+    return false;
+  }
+}
+
 async function delegateToUpstreamOnBuildComplete(
   upstreamPath: string | undefined,
   context: NextAdapterContext
@@ -136,10 +163,14 @@ async function delegateToUpstreamOnBuildComplete(
 export function createUnpeekNextAdapter(
   options: UnpeekNextAdapterOptions = {}
 ): UnpeekNextAdapter {
-  const upstreamPath =
+  const rawUpstreamPath =
     options.upstreamAdapterPath ||
     process.env.UNPEEK_UPSTREAM_ADAPTER_PATH ||
     process.env.NEXT_ADAPTER_PATH;
+  const selfAdapterPath = getUnpeekAdapterPath();
+  const upstreamPath = isSameAdapterPath(rawUpstreamPath, selfAdapterPath)
+    ? undefined
+    : rawUpstreamPath;
   let recordedPhase: string | undefined;
 
   return {
@@ -163,17 +194,45 @@ export function createUnpeekNextAdapter(
           console.warn('[unpeek:next] Failed to invoke upstream modifyConfig:', err);
         }
       }
+
+      const phase =
+        context && typeof context.phase === 'string' ? context.phase : recordedPhase;
+      if (!isNonProductionPhase(phase)) {
+        const existingSalt =
+          typeof config.outputHashSalt === 'string' ? config.outputHashSalt.trim() : '';
+        if (!existingSalt.includes('unpeek:')) {
+          const unpeekSalt = buildUnpeekOutputHashSalt(options);
+          config = {
+            ...config,
+            outputHashSalt: existingSalt ? `${existingSalt}-${unpeekSalt}` : unpeekSalt,
+          };
+        }
+      }
+
       return config;
     },
 
     async onBuildComplete(context: NextAdapterContext): Promise<ProtectSummary> {
       const cwd = options.cwd ?? process.cwd();
-      const distDir = path.resolve(cwd, context.distDir || '.next');
+      const configuredDistDir =
+        context.distDir ||
+        (typeof context.config?.distDir === 'string' ? context.config.distDir : undefined) ||
+        '.next';
+      const distDir = path.resolve(cwd, configuredDistDir);
 
       // Client bundles live under distDir/static (chunks, immutable, etc.)
+      // or .vercel/output/static/_next/static after Vercel adapter relocation.
       // Server/SSR bundles are under distDir/server and distDir/ssr - these MUST NOT be modified.
       const staticDir = path.join(distDir, 'static');
-      const targetDir = fs.existsSync(staticDir) ? staticDir : distDir;
+      const vercelStaticDir = path.join(cwd, '.vercel', 'output', 'static', '_next', 'static');
+      const targetDir =
+        fs.existsSync(staticDir) && (hasJsBundleFiles(staticDir) || !fs.existsSync(vercelStaticDir))
+          ? staticDir
+          : fs.existsSync(vercelStaticDir)
+            ? vercelStaticDir
+            : fs.existsSync(staticDir)
+              ? staticDir
+              : distDir;
 
       const phase = context.phase ?? recordedPhase;
       if (isNonProductionPhase(phase)) {
@@ -243,6 +302,11 @@ export function createUnpeekNextAdapter(
               const fromStatic = path.resolve(distDir, 'static', staticClean);
               if (fs.existsSync(fromStatic)) {
                 absPath = fromStatic;
+              } else {
+                const fromVercelStatic = path.resolve(vercelStaticDir, staticClean);
+                if (fs.existsSync(fromVercelStatic)) {
+                  absPath = fromVercelStatic;
+                }
               }
             }
           }
@@ -316,11 +380,16 @@ function applyWithUnpeek<T extends NextConfigObject>(
   config: T = {} as T,
   options?: UnpeekNextAdapterOptions
 ): T & { adapterPath: string } {
+  const adapterPath = getUnpeekAdapterPath();
   const existingAdapter = config.adapterPath || process.env.NEXT_ADAPTER_PATH;
-  if (existingAdapter && !process.env.UNPEEK_UPSTREAM_ADAPTER_PATH) {
+  if (
+    existingAdapter &&
+    !isSameAdapterPath(existingAdapter, adapterPath) &&
+    !process.env.UNPEEK_UPSTREAM_ADAPTER_PATH
+  ) {
     process.env.UNPEEK_UPSTREAM_ADAPTER_PATH = existingAdapter;
   }
-  if (options?.upstreamAdapterPath) {
+  if (options?.upstreamAdapterPath && !isSameAdapterPath(options.upstreamAdapterPath, adapterPath)) {
     process.env.UNPEEK_UPSTREAM_ADAPTER_PATH = options.upstreamAdapterPath;
   }
 
@@ -337,8 +406,6 @@ function applyWithUnpeek<T extends NextConfigObject>(
   } else {
     delete process.env.UNPEEK_NEXT_OPTIONS;
   }
-
-  const adapterPath = getUnpeekAdapterPath();
 
   return {
     ...config,

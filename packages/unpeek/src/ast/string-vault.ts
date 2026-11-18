@@ -334,8 +334,75 @@ function isEligibleHotLiteral(
   return true;
 }
 
-const SHADER_SIG_RE =
-  /@group|@binding|@vertex|@fragment|@compute|vec4f|gl_Position|uniform/;
+export const SHADER_SIG_RE =
+  /@group|@binding|@vertex|@fragment|@compute|@builtin|@location|@workgroup_size|\bstruct\s+[A-Za-z_]\w*\s*\{|\b[iub]?vec[234][fhiu]?\b|\bmat[234](?:x[234])?[fhi]?\b|\buniform\b|\bvar<(?:uniform|storage)|\bgl_(?:Position|FragColor|FragCoord|VertexID|InstanceID)\b|\bfn\s+main\b|\bvoid\s+main\s*\(|\bprecision\s+(?:lowp|mediump|highp)\s+float\b/;
+
+/**
+ * Checks whether an AST node sits directly inside a loop construct or a serialized worker function.
+ */
+export function isInsideLoopOrSerialized(ancestors: any[]): boolean {
+  for (let i = ancestors.length - 2; i >= 0; i--) {
+    const anc = ancestors[i];
+    if (LOOP_NODE_TYPES.has(anc.type) || Boolean(anc._unpeekSerialized)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Identifies WGSL/GLSL shaders and oversized (>=256 char) payload buffers eligible for Shader Vault,
+ * exempting direct loops, serialized workers, UI class strings, SVG paths, and reserved properties.
+ */
+export function isShaderPayload(
+  val: string,
+  node: any,
+  parent: any,
+  ancestors: any[],
+  seed: number,
+  isHotExempt: boolean,
+  customReserved?: Set<string>
+): boolean {
+  if (isInsideLoopOrSerialized(ancestors)) return false;
+  if (parent?.type === 'Property' && parent.key === node && !parent.computed) return false;
+  if (isReservedProp(val, customReserved)) return false;
+  if (isTailwindNoise(val)) return false;
+  if (isSvgPathString(val, parent)) return false;
+  if (isAdversaryDecoy(val, seed)) return false;
+  if (val.startsWith('HOT_')) return false;
+  const matchesSig = SHADER_SIG_RE.test(val);
+  if (!matchesSig) {
+    if (val.length < 256) return false;
+    if (isHotExempt && isUiClassName(val, parent)) return false;
+  }
+  return true;
+}
+
+/**
+ * Finds the top-level program body index right after directive prologues and static imports.
+ */
+export function findVaultInsertIndex(
+  ast: acorn.Program,
+  activeDirectives: Set<string> = DIRECTIVE_STRINGS
+): number {
+  let insertIdx = 0;
+  while (insertIdx < ast.body.length) {
+    const stmt: any = ast.body[insertIdx];
+    const isDirective =
+      stmt.type === 'ExpressionStatement' &&
+      (Boolean(stmt.directive) ||
+        (stmt.expression?.type === 'Literal' &&
+          typeof stmt.expression.value === 'string' &&
+          (activeDirectives.has(stmt.expression.value) ||
+            /^(?:use\s+[a-zA-Z0-9_-]+)/.test(stmt.expression.value.trim()))));
+    if (isDirective || stmt.type === 'ImportDeclaration') {
+      insertIdx++;
+    } else {
+      break;
+    }
+  }
+  return insertIdx;
+}
 
 export function shouldEncryptString(
   val: string,
@@ -437,7 +504,7 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
   throw new Error('No base64 encoder available in this environment');
 }
 
-function createShaderVaultAst(
+export function createShaderVaultAst(
   shaderVarName: string,
   shaderPayloads: string[],
   seed: number
@@ -625,6 +692,122 @@ export function applyStringVault(
     },
   };
 
+  function processVaultCandidate(
+    val: string,
+    node: any,
+    parent: any,
+    ancestors: any[]
+  ): void {
+    if (isNodeInExemptSubtree(ancestors, exemptSubtreeRoots)) {
+      return;
+    }
+
+    if (
+      parent.type === 'ExpressionStatement' &&
+      (Boolean(parent.directive) || activeDirectives.has(val))
+    ) {
+      return;
+    }
+
+    for (let i = ancestors.length - 2; i >= 0; i--) {
+      if (
+        ancestors[i].type === 'ExpressionStatement' &&
+        Boolean((ancestors[i] as any).directive)
+      ) {
+        return;
+      }
+    }
+
+    let isHotExempt = false;
+    if (hotExemptNodes) {
+      for (let i = ancestors.length - 2; i >= 0; i--) {
+        if (hotExemptNodes.has(ancestors[i])) {
+          isHotExempt = true;
+          break;
+        }
+      }
+    }
+
+    // Check shader payloads before hot-exempt bailout (only direct loops / serialized workers stay exempt)
+    if (
+      isShaderPayload(
+        val,
+        node,
+        parent,
+        ancestors,
+        seed,
+        isHotExempt,
+        customReserved
+      )
+    ) {
+      let idx = shaderToIndex.get(val);
+      if (idx === undefined) {
+        idx = shaderPayloads.length;
+        shaderToIndex.set(val, idx);
+        shaderPayloads.push(val);
+      }
+      targetsToReplace.push({
+        type: 'shader',
+        node,
+        parent,
+        idx,
+        scopeChain: extractScopeChain(ast, ancestors),
+      });
+      return;
+    }
+
+    if (isHotExempt) {
+      if (
+        isEligibleHotLiteral(
+          val,
+          node,
+          parent,
+          ancestors,
+          minLen,
+          seed,
+          customReserved,
+          activeDirectives,
+          semanticPatterns,
+          excludeUi
+        )
+      ) {
+        hotTargetsToReplace.push({
+          node,
+          parent,
+          val,
+          idx: hotTargetsToReplace.length,
+        });
+      }
+      return;
+    }
+
+    if (
+      !shouldEncryptString(
+        val,
+        minLen,
+        parent,
+        activeDirectives,
+        customReserved
+      )
+    ) {
+      return;
+    }
+
+    let idx = stringToIndex.get(val);
+    if (idx === undefined) {
+      idx = uniqueStrings.length;
+      stringToIndex.set(val, idx);
+      uniqueStrings.push(val);
+    }
+    targetsToReplace.push({
+      type: 'string',
+      node,
+      parent,
+      idx,
+      scopeChain: extractScopeChain(ast, ancestors),
+    });
+  }
+
   walk.ancestor(
     ast,
     {
@@ -633,39 +816,8 @@ export function applyStringVault(
         const val: string = node.value;
         if (activeDirectives.has(val)) return;
 
-        let isHotExempt = false;
-        if (hotExemptNodes) {
-          for (let i = ancestors.length - 2; i >= 0; i--) {
-            if (hotExemptNodes.has(ancestors[i])) {
-              isHotExempt = true;
-              break;
-            }
-          }
-        }
-
         const parent = ancestors[ancestors.length - 2] as any;
         if (!parent) return;
-
-        if (isNodeInExemptSubtree(ancestors, exemptSubtreeRoots)) {
-          return;
-        }
-
-        // Skip directives at top of program or function body, or any ExpressionStatement where directive is truthy
-        if (
-          parent.type === 'ExpressionStatement' &&
-          (Boolean(parent.directive) || activeDirectives.has(val))
-        ) {
-          return;
-        }
-
-        for (let i = ancestors.length - 2; i >= 0; i--) {
-          if (
-            ancestors[i].type === 'ExpressionStatement' &&
-            Boolean((ancestors[i] as any).directive)
-          ) {
-            return;
-          }
-        }
 
         // Skip import/export source specifiers
         if (
@@ -695,77 +847,7 @@ export function applyStringVault(
           return;
         }
 
-        if (isHotExempt) {
-          if (
-            isEligibleHotLiteral(
-              val,
-              node,
-              parent,
-              ancestors,
-              minLen,
-              seed,
-              customReserved,
-              activeDirectives,
-              semanticPatterns,
-              excludeUi
-            )
-          ) {
-            hotTargetsToReplace.push({
-              node,
-              parent,
-              val,
-              idx: hotTargetsToReplace.length,
-            });
-          }
-          return;
-        }
-
-        // Preserve standard React/DOM/Vue/Svelte prop keys
-        if (
-          parent.type === 'Property' &&
-          parent.key === node &&
-          !parent.computed
-        ) {
-          if (isReservedProp(val, customReserved)) {
-            return;
-          }
-        }
-
-        if (isReservedProp(val, customReserved)) return;
-        if (isTailwindNoise(val)) return;
-        if (isSvgPathString(val, parent)) return;
-
-        const isShader = val.length >= 256 || SHADER_SIG_RE.test(val);
-        if (isShader) {
-          let idx = shaderToIndex.get(val);
-          if (idx === undefined) {
-            idx = shaderPayloads.length;
-            shaderToIndex.set(val, idx);
-            shaderPayloads.push(val);
-          }
-          targetsToReplace.push({
-            type: 'shader',
-            node,
-            parent,
-            idx,
-            scopeChain: extractScopeChain(ast, ancestors),
-          });
-        } else {
-          if (!shouldEncryptString(val, minLen, parent, activeDirectives, customReserved)) return;
-          let idx = stringToIndex.get(val);
-          if (idx === undefined) {
-            idx = uniqueStrings.length;
-            stringToIndex.set(val, idx);
-            uniqueStrings.push(val);
-          }
-          targetsToReplace.push({
-            type: 'string',
-            node,
-            parent,
-            idx,
-            scopeChain: extractScopeChain(ast, ancestors),
-          });
-        }
+        processVaultCandidate(val, node, parent, ancestors);
       },
 
       TemplateLiteral(node: any, _state: any, ancestors: any[]) {
@@ -775,103 +857,17 @@ export function applyStringVault(
         const val: string = node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
         if (typeof val !== 'string' || activeDirectives.has(val)) return;
 
-        if (isNodeInExemptSubtree(ancestors, exemptSubtreeRoots)) {
-          return;
-        }
-
-        let isHotExempt = false;
-        if (hotExemptNodes) {
-          for (let i = ancestors.length - 2; i >= 0; i--) {
-            if (hotExemptNodes.has(ancestors[i])) {
-              isHotExempt = true;
-              break;
-            }
-          }
-        }
-
         const parent = ancestors[ancestors.length - 2] as any;
         if (!parent) return;
 
-        if (isNodeInExemptSubtree(ancestors, exemptSubtreeRoots)) {
+        if (parent.type === 'TaggedTemplateExpression' && parent.quasi === node) {
+          return;
+        }
+        if (parent.type === 'ImportExpression' && parent.source === node) {
           return;
         }
 
-        if (
-          parent.type === 'ExpressionStatement' &&
-          (Boolean(parent.directive) || activeDirectives.has(val))
-        ) {
-          return;
-        }
-
-        for (let i = ancestors.length - 2; i >= 0; i--) {
-          if (
-            ancestors[i].type === 'ExpressionStatement' &&
-            Boolean((ancestors[i] as any).directive)
-          ) {
-            return;
-          }
-        }
-
-        if (isHotExempt) {
-          if (
-            isEligibleHotLiteral(
-              val,
-              node,
-              parent,
-              ancestors,
-              minLen,
-              seed,
-              customReserved,
-              activeDirectives,
-              semanticPatterns,
-              excludeUi
-            )
-          ) {
-            hotTargetsToReplace.push({
-              node,
-              parent,
-              val,
-              idx: hotTargetsToReplace.length,
-            });
-          }
-          return;
-        }
-
-        if (isReservedProp(val, customReserved)) return;
-        if (isTailwindNoise(val)) return;
-        if (isSvgPathString(val, parent)) return;
-
-        const isShader = val.length >= 256 || SHADER_SIG_RE.test(val);
-        if (isShader) {
-          let idx = shaderToIndex.get(val);
-          if (idx === undefined) {
-            idx = shaderPayloads.length;
-            shaderToIndex.set(val, idx);
-            shaderPayloads.push(val);
-          }
-          targetsToReplace.push({
-            type: 'shader',
-            node,
-            parent,
-            idx,
-            scopeChain: extractScopeChain(ast, ancestors),
-          });
-        } else {
-          if (!shouldEncryptString(val, minLen, parent, activeDirectives, customReserved)) return;
-          let idx = stringToIndex.get(val);
-          if (idx === undefined) {
-            idx = uniqueStrings.length;
-            stringToIndex.set(val, idx);
-            uniqueStrings.push(val);
-          }
-          targetsToReplace.push({
-            type: 'string',
-            node,
-            parent,
-            idx,
-            scopeChain: extractScopeChain(ast, ancestors),
-          });
-        }
+        processVaultCandidate(val, node, parent, ancestors);
       },
     },
     customWalkBase
@@ -918,22 +914,7 @@ export function applyStringVault(
     delete node.expressions;
   }
 
-  let insertIdx = 0;
-  while (insertIdx < ast.body.length) {
-    const stmt: any = ast.body[insertIdx];
-    const isDirective =
-      stmt.type === 'ExpressionStatement' &&
-      (Boolean(stmt.directive) ||
-        (stmt.expression?.type === 'Literal' &&
-          typeof stmt.expression.value === 'string' &&
-          (activeDirectives.has(stmt.expression.value) ||
-            /^(?:use\s+[a-zA-Z0-9_-]+)/.test(stmt.expression.value.trim()))));
-    if (isDirective || stmt.type === 'ImportDeclaration') {
-      insertIdx++;
-    } else {
-      break;
-    }
-  }
+  let insertIdx = findVaultInsertIndex(ast, activeDirectives);
 
   const wantFragmented = Boolean(config?.vault?.fragmented);
   let fragCount = Math.max(2, Math.min(8, Math.floor(config?.vault?.fragmentCount ?? 3)));

@@ -348,6 +348,7 @@ export function transformJavaScript(
     );
     encryptedStringsCount = saltedRes.encryptedStringsCount;
     integrityToken = saltedRes.integrityToken;
+    shaderBuffersCount = saltedRes.shaderBuffersCount ?? 0;
   } else {
     const vaultRes = applyStringVault(
       ast,

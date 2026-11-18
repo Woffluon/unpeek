@@ -54,6 +54,12 @@ const DEFAULT_HOC_WRAPPERS = new Set([
 const DEFAULT_EVENT_HANDLER_REGEX =
   /^(?:on|handle)(?!Tick|Render|Update|Frame|Animate|Physics)[A-Z]/;
 
+const CRITICAL_COLD_HANDLER_REGEX =
+  /^(?:onSubmit|handleSubmit|submit[A-Z0-9_]*|validate[A-Z0-9_]*|login|signIn|register|checkout)$/i;
+
+const CRITICAL_COLD_CALLEE_REGEX =
+  /^(?:onSubmit|handleSubmit|submit[A-Z0-9_]*|validate[A-Z0-9_]*|login|signIn|register|checkout|createServerReference|fetch)$/i;
+
 const DEFAULT_HOOK_REGEX = /^use[A-Z0-9]/;
 
 const REACT_HOOK_OR_RENDER_CALLS = new Set([
@@ -1112,6 +1118,34 @@ export function analyzeAstHotPaths(
     }
   }
 
+  // Protect critical cold handlers (form submission, validation, auth, checkout, server actions, fetch)
+  // from bottom-up hot propagation when not already called inside a hot 60fps loop or render component.
+  for (const fn of allFunctions) {
+    if (
+      !serializedWorkerNodes.has(fn.node) &&
+      !trueHotNodes.has(fn.node) &&
+      !shallowComponentNodes.has(fn.node) &&
+      !containsLoopOrAnimation(fn.node, animationCalls)
+    ) {
+      let isCriticalHandler = CRITICAL_COLD_HANDLER_REGEX.test(fn.name);
+      if (!isCriticalHandler) {
+        const callees = callerToCallees.get(fn.node);
+        if (callees) {
+          for (const cName of callees) {
+            const bare = cName.includes('.') ? cName.split('.').pop()! : cName;
+            if (CRITICAL_COLD_CALLEE_REGEX.test(bare)) {
+              isCriticalHandler = true;
+              break;
+            }
+          }
+        }
+      }
+      if (isCriticalHandler) {
+        coldForcedNodes.add(fn.node);
+      }
+    }
+  }
+
   // Count callers per callee to distinguish dedicated pipeline sub-functions from shared utility loops
   const calleeToCallers = new Map<acorn.Node, Set<acorn.Node>>();
   for (const [callerNode, calleeNames] of callerToCallees.entries()) {
@@ -1166,12 +1200,17 @@ export function analyzeAstHotPaths(
     hotExemptNodes.delete(node);
   }
 
+  const criticalAnnotation =
+    typeof (config as any)?.critical?.annotation === 'string' &&
+    (config as any).critical.annotation.length > 0
+      ? (config as any).critical.annotation
+      : '@unpeek-critical';
   const astComments: acorn.Comment[] =
     ((ast as any)?.__unpeekComments as acorn.Comment[] | undefined) ??
     ((ast as any)?.comments as acorn.Comment[] | undefined) ??
     [];
   const criticalComments = astComments.filter(
-    (c) => typeof c?.value === 'string' && c.value.includes('@unpeek-critical')
+    (c) => typeof c?.value === 'string' && c.value.includes(criticalAnnotation)
   );
   const criticalCommentNodes = new Set<acorn.Node>();
   if (criticalComments.length > 0 && allFunctions.length > 0) {

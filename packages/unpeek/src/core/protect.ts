@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import * as acorn from 'acorn';
+import { simple as walkSimple } from 'acorn-walk';
 import type { ProtectOptions, ProtectSummary, UnpeekDiagnostic } from './types.js';
 import type { InternalShieldPayload, InternalTransformOptions } from '../internal/types.js';
 import type { UnpeekProfile } from '../config.js';
@@ -242,6 +244,56 @@ function readOriginalSourceMapForFile(
   return undefined;
 }
 
+function countPreExistingEvalCalls(code: string): string[] {
+  const hits: string[] = [];
+  let ast: acorn.Program;
+  try {
+    ast = acorn.parse(code, {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      allowReturnOutsideFunction: true,
+    });
+  } catch {
+    try {
+      ast = acorn.parse(code, {
+        ecmaVersion: 'latest',
+        sourceType: 'script',
+        allowReturnOutsideFunction: true,
+      });
+    } catch {
+      return hits;
+    }
+  }
+
+  walkSimple(ast, {
+    CallExpression(node) {
+      if (node.callee.type === 'Identifier') {
+        if (node.callee.name === 'eval') {
+          hits.push('eval(...)');
+        } else if (node.callee.name === 'Function') {
+          hits.push('Function(...)');
+        }
+      }
+    },
+    NewExpression(node) {
+      if (node.callee.type === 'Identifier' && node.callee.name === 'Function') {
+        hits.push('new Function(...)');
+      }
+    },
+  });
+
+  return hits;
+}
+
+interface ProtectManifestPayload {
+  version: number;
+  outDir?: string;
+  originalGzipBytes?: number;
+  protectedGzipBytes?: number;
+  gzipDeltaPercent?: number;
+  preExistingEvalFiles?: Record<string, string[]>;
+}
+
 export async function protectProject(options: ProtectOptions = {}): Promise<ProtectSummary> {
   const startTime = performance.now();
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -309,6 +361,21 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
   const allProtBufs: Buffer[] = [];
   const stagedFiles: Array<{ tmpPath: string; finalPath: string }> = [];
   const pendingVaultMaps: Array<{ relPath: string; map?: RawSourceMap; debugId?: string }> = [];
+  const preExistingEvalFiles: Record<string, string[]> = {};
+  let alreadyProtectedCount = 0;
+
+  const manifestPath = path.join(vaultResult.vaultDir, 'manifest.json');
+  let existingManifest: ProtectManifestPayload | undefined;
+  if (!dryRun && fs.existsSync(manifestPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        existingManifest = parsed as ProtectManifestPayload;
+      }
+    } catch {
+      // ignore malformed manifest
+    }
+  }
 
   let originalGzipBytes = 0;
   let protectedGzipBytes = 0;
@@ -334,6 +401,7 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
       allOrigBufs.push(origBuf);
 
       const relPath = allRelPaths[i];
+      const preExistingHits = countPreExistingEvalCalls(codeToTransform);
       const isEntry = isEntryChunk(relPath, i, allRelPaths, manifestEntries, isWorkerTarget);
       const shouldInjectShield = injectRuntimeShield && isEntry;
       const fileSeed = computeFnv1aHash(`${relPath}:${i}`, seed);
@@ -365,6 +433,13 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
           file: relPath,
         });
       } else if (result.skippedReason === 'already-protected') {
+        alreadyProtectedCount++;
+        const prevHits = existingManifest?.preExistingEvalFiles?.[relPath];
+        if (Array.isArray(prevHits) && prevHits.length > 0) {
+          preExistingEvalFiles[relPath] = prevHits;
+        } else if (preExistingHits.length > 0) {
+          preExistingEvalFiles[relPath] = preExistingHits;
+        }
         diagnostics.push({
           code: 'ALREADY_PROTECTED',
           severity: 'info',
@@ -378,6 +453,8 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
           message: `File "${relPath}" is empty.`,
           file: relPath,
         });
+      } else if (preExistingHits.length > 0) {
+        preExistingEvalFiles[relPath] = preExistingHits;
       }
 
       let finalCode = result.code;
@@ -519,6 +596,40 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
       for (const { tmpPath, finalPath } of stagedFiles) {
         fs.renameSync(tmpPath, finalPath);
       }
+
+      const relVault = path.relative(cwd, vaultResult.vaultDir);
+      const isSafeVaultDir =
+        relVault === '' || (!relVault.startsWith('..') && !path.isAbsolute(relVault));
+      if (isSafeVaultDir) {
+        const relOutDir = path.relative(cwd, outDir).replace(/\\/g, '/') || '.';
+        const manifestPayload: ProtectManifestPayload =
+          processedFiles > 0 && alreadyProtectedCount === processedFiles && existingManifest
+            ? {
+                version: 1,
+                outDir: existingManifest.outDir ?? relOutDir,
+                originalGzipBytes: existingManifest.originalGzipBytes ?? originalGzipBytes,
+                protectedGzipBytes: existingManifest.protectedGzipBytes ?? protectedGzipBytes,
+                gzipDeltaPercent: existingManifest.gzipDeltaPercent ?? gzipDeltaPercent,
+                preExistingEvalFiles: {
+                  ...(existingManifest.preExistingEvalFiles ?? {}),
+                  ...preExistingEvalFiles,
+                },
+              }
+            : {
+                version: 1,
+                outDir: relOutDir,
+                originalGzipBytes,
+                protectedGzipBytes,
+                gzipDeltaPercent,
+                preExistingEvalFiles,
+              };
+        try {
+          fs.mkdirSync(vaultResult.vaultDir, { recursive: true });
+          fs.writeFileSync(manifestPath, JSON.stringify(manifestPayload, null, 2), 'utf8');
+        } catch {
+          // ignore non-fatal manifest write errors
+        }
+      }
     }
   } catch (error) {
     for (const { tmpPath } of stagedFiles) {
@@ -534,6 +645,13 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
   }
 
   const elapsedMs = Math.max(1, Math.round(performance.now() - startTime));
+  const resolvedTier =
+    options.tier ??
+    (effectiveProfile === 'strict' || aggressive
+      ? 'Tier 3'
+      : effectiveProfile === 'minimal'
+        ? 'Tier 1'
+        : config.tier ?? 'Tier 2');
 
   return {
     framework,
@@ -551,7 +669,7 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
     totalMangledSymbols,
     elapsedMs,
     seed,
-    tier: aggressive ? 'Tier 2' : 'Tier 1',
+    tier: resolvedTier,
     aggressive,
     dockerIgnoreMissing: vaultResult.dockerIgnoreMissing,
     dryRun,

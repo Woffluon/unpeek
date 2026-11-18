@@ -939,35 +939,44 @@ describe('AST & Call-Graph Transformation Engine', () => {
           expect(foundLiveParam).toBe(true);
           expect(foundImul).toBe(true);
 
+          const allowedResidues = (code: string, target: number): number[] => {
+            if (target === 6) return [3, 4, 7];
+            if (target === 13) return [0, 7, 8, 11];
+            return code.includes('& 7') ? [1, 5, 6] : [1, 2];
+          };
+
           const paramCode = generate(paramGuard.test.left);
+          const paramAllowed = allowedResidues(paramCode, paramGuard.test.right.value);
           const evalParamFn = new Function('userInput', `return (${paramCode});`);
           for (const liveVal of [0, 1, -1, 42, 0x7fffffff, -0x80000000, 'abc', undefined]) {
             const res = evalParamFn(liveVal);
-            // QNR invariant: ((z * z + 1) & 3) is always in {1, 2}, never 3
-            expect([1, 2]).toContain(res | 0);
+            // QNR invariant across mod 4 / mod 8 / mod 16 families: LHS stays in quadratic residue image and never equals target
+            expect(paramAllowed).toContain(res | 0);
             expect(res === paramGuard.test.right.value).toBe(false);
           }
 
           // 2. 0-param standard function binding: arguments.length
           const argsGuard = createSotaMbaPredicate(seed, fnIndex);
           const argsCode = generate(argsGuard.test.left);
+          const argsAllowed = allowedResidues(argsCode, argsGuard.test.right.value);
           expect(argsCode).toContain('arguments.length');
           expect(argsCode).not.toContain('String');
           const evalArgsFn = new Function(`return (${argsCode});`);
           for (const args of [[], [1], [1, 2, 3]]) {
             const res = evalArgsFn(...args);
-            expect([1, 2]).toContain(res | 0);
+            expect(argsAllowed).toContain(res | 0);
             expect(res === argsGuard.test.right.value).toBe(false);
           }
 
           // 3. 0-param arrow function binding: (typeof globalThis).length
           const arrowGuard = createSotaMbaPredicate(seed, fnIndex, undefined, undefined, true);
           const arrowCode = generate(arrowGuard.test.left);
+          const arrowAllowed = allowedResidues(arrowCode, arrowGuard.test.right.value);
           expect(arrowCode).toContain('globalThis');
           expect(arrowCode).not.toContain('String');
           const evalArrowFn = new Function(`return (${arrowCode});`);
           const arrowRes = evalArrowFn();
-          expect([1, 2]).toContain(arrowRes | 0);
+          expect(arrowAllowed).toContain(arrowRes | 0);
           expect(arrowRes === arrowGuard.test.right.value).toBe(false);
         }
       }

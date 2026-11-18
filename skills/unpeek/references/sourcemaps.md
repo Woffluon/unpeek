@@ -132,7 +132,7 @@ CMD ["node", "server.js"]
 ```
 
 ### Verification Command
-Run `unpeek check` in your CI pipeline before deploying to verify zero source map exposure, clean `sourceMappingURL` stripping, `.gitignore`/`.dockerignore` coverage, and Gzip budget compliance:
+Run `unpeek check` in your CI pipeline before deploying to verify zero source map exposure, clean `sourceMappingURL` stripping, `.gitignore`/`.dockerignore` coverage, and Gzip budget compliance (`--require-zero-eval` preserves pre-protection `.unpeek-maps/manifest.json` baseline calls, `node_modules/` sourcemap-attributed vendor calls, and ES5 `Function("return this")` polyfills as warnings while failing on unattributed or newly added `eval`/`new Function` calls):
 ```bash
 npx unpeek check --max-gzip-delta 15 --require-zero-eval
 ```

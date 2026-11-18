@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.0.1] - 2026-11-18
+
+### Security & Fixed
+- **`coldFlow` Type Guard & Virtualized Skip**: Guarded parameter coercion in `buildLiveVariables4` (`typeof param === 'number' ? param | 0 : 0`) so `Object.create(null)`, `Symbol.toStringTag`, `BigInt`, and rest parameters never throw `TypeError`, and skipped `applyColdFlowGuard` on functions already virtualized by Micro-VM v2 (`_unpeekVirtualized`).
+- **Selective `TURBOPACK.push` Header Exemption**: Updated `classifyChunkBoundary` (`exemptTurbopackPushArg`) to exempt only chunk path/script headers, numeric/string module IDs, and module-map property keys while keeping flat tuple and object-map factory bodies inside String/Shader Vault coverage.
+- **Shader Vault Across Tiers 2 & 3**: Integrated `createShaderVaultAst` (`Uint8Array` + `TextDecoder` + `finally` in-place re-encryption) into `applySaltedStringVault` (`--profile strict` / `--aggressive`), expanded `SHADER_SIG_RE` for WGSL/GLSL, and checked shaders prior to `isHotExempt` (exempting only direct loops and serialized workers).
+- **Next.js 16 Vercel `outputHashSalt` & Output Detection**: `createUnpeekNextAdapter().modifyConfig` automatically injects a deterministic `unpeek:...` `outputHashSalt` (incorporating `VERCEL_DEPLOYMENT_ID` / `VERCEL_GIT_COMMIT_SHA` / `GITHUB_SHA` and profile) to avoid immutable chunk hash collisions, and `detectTargetFramework` falls back to `.vercel/output/static/_next/static` when `.next/static` is empty.
+- **Unsigned 32-Bit `derivePolymorphicIdent`**: Fixed signed `Int32` negative modulo indexing in Murmur3 mixing steps (`>>> 0`) so polymorphic identifiers such as `windowKey` (`seed = 2574799107`) never emit `"undefined*"`.
+- **Anti-Tamper Shield `Proxy` & VM Self-Hash Hardening**: Hardened `devtools-deterrent.ts` (`v8_V`) and `integrity-guard.ts` against naive and self-spoofing `Proxy(Function.prototype.toString)` and `Proxy(Reflect.apply)` traps using descriptor locks, native signature regexes, cross-call probes, and V8 stack-trace trap inspection, and added `_uVm*` `Function.prototype.toString()` pretty-print self-hashing (`$flt = 1`).
+- **Modular QNR Diversity, Non-Zero Handler MBA & Dead Epilogue Pruning**: Diversified `createSotaMbaPredicate` across 4 modular residue families ($\pmod 4, \pmod 8, \pmod{16}$) with alias-table perturbation, parameterized VM handler MBA offset expressions to non-zero per-opcode deltas (`1..31`) balanced at stack/register access sites, and pruned unreachable post-`RET`/`THROW` epilogues in `compileFunctionToBytecode`.
+- **Hybrid Browser-Context Lock**: Coupled `shieldCoupled` string vaults and Micro-VM v2 fail closed in bare `node:vm` contexts lacking `window`, `document`, and `self` when `globalThis[sym] === undefined`, while preserving browser and `WorkerGlobalScope` async order-independence.
+- **Priority VM Quota & Zero-Hardcode `--require-zero-eval`**: Added priority scoring for `maxFunctionsPerChunk` (`@unpeek-critical` > `onSubmit`/validation/auth/checkout handlers > multi-statement logic), `globalThis.__unpeek_vm` singleton VM sharing across same-seed chunks, and zero-hardcode `--require-zero-eval` attribution combining ES5 `Function("return this")` polyfill recognition, `.unpeek-maps/*.map` `node_modules/` provenance resolution, and `.unpeek-maps/manifest.json` pre-protection AST baseline deltas.
+
+---
+
 ## [4.0.0] - 2026-11-16
 
 ### Added

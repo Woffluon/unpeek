@@ -66,6 +66,61 @@ function exemptWebpackPushArg(
   exemptSubtreeRoots.add(arg);
 }
 
+function exemptTurbopackPropertyKeys(
+  objNode: any,
+  exemptSubtreeRoots: WeakSet<acorn.Node>
+): void {
+  if (!Array.isArray(objNode?.properties)) return;
+  for (const prop of objNode.properties) {
+    if (prop?.type === 'Property' && prop.key && typeof prop.key === 'object') {
+      exemptSubtreeRoots.add(prop.key);
+    }
+  }
+}
+
+function exemptTurbopackPushArg(
+  arg: any,
+  exemptSubtreeRoots: WeakSet<acorn.Node>
+): void {
+  if (!arg || typeof arg !== 'object') return;
+  if (arg.type === 'ArrayExpression' && Array.isArray(arg.elements)) {
+    for (let i = 0; i < arg.elements.length; i++) {
+      const el = arg.elements[i];
+      if (!el || typeof el !== 'object') continue;
+      if (i === 0) {
+        // Exempt chunk header element (e.g. document.currentScript ternary or chunk path)
+        exemptSubtreeRoots.add(el);
+        continue;
+      }
+      if (el.type === 'Literal') {
+        // Exempt module ID or chunk path literal
+        exemptSubtreeRoots.add(el);
+      } else if (el.type === 'ObjectExpression') {
+        // Exempt only module-map keys so module factory functions remain protected
+        exemptTurbopackPropertyKeys(el, exemptSubtreeRoots);
+      } else if (
+        el.type === 'FunctionExpression' ||
+        el.type === 'ArrowFunctionExpression'
+      ) {
+        // Flat tuple [script, id, fn, ...]: keep factory body inside vault scope
+        continue;
+      }
+    }
+    return;
+  }
+  if (arg.type === 'ObjectExpression') {
+    exemptTurbopackPropertyKeys(arg, exemptSubtreeRoots);
+    return;
+  }
+  if (
+    arg.type === 'FunctionExpression' ||
+    arg.type === 'ArrowFunctionExpression'
+  ) {
+    return;
+  }
+  exemptSubtreeRoots.add(arg);
+}
+
 function isHostMember(node: any, matcher: PropMatcher): boolean {
   if (!node) return false;
   if (node.type === 'Identifier' && matchesPropName(node.name, matcher)) {
@@ -163,12 +218,13 @@ export function classifyChunkBoundary(ast: acorn.Program): BoundaryClassificatio
           }
         } else if (unwrapAssignedHostMember(callee.object, 'TURBOPACK')) {
           hasEntryBootstrap = true;
-          exemptSubtreeRoots.add(node);
+          exemptSubtreeRoots.add(callee);
+          if (callee.object && typeof callee.object === 'object') {
+            exemptSubtreeRoots.add(callee.object);
+          }
           if (Array.isArray(node.arguments)) {
             for (const arg of node.arguments) {
-              if (arg && typeof arg === 'object') {
-                exemptSubtreeRoots.add(arg);
-              }
+              exemptTurbopackPushArg(arg, exemptSubtreeRoots);
             }
           }
         } else if (
