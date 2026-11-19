@@ -825,8 +825,31 @@ describe('Aggressive Profile & Advanced Protection (Layer 2 & Red-Team Verificat
       const lines = res.code.split('\n');
       const shieldLine = lines[0];
       const strippedCode = lines.slice(1).join('\n');
-      const lateCtx: Record<string, any> = {
+      // Bare window = {} (without genuine loading document) fails closed when shield is stripped
+      const bareLateCtx: Record<string, any> = {
         window: {},
+        Math,
+        String,
+        Uint8Array,
+        Promise,
+        WebAssembly,
+        CustomEvent: class {},
+      };
+      bareLateCtx.globalThis = bareLateCtx;
+      vm.createContext(bareLateCtx);
+      let bareLateOut: unknown;
+      let bareLateThrew = false;
+      try {
+        bareLateOut = vm.runInContext(`(function(){${strippedCode}})()`, bareLateCtx);
+      } catch {
+        bareLateThrew = true;
+      }
+      expect(bareLateThrew || bareLateOut !== 'TIER2_SHIELD_COUPLED_KEY_usr_9:17').toBe(true);
+
+      const doc = { nodeType: 9, scripts: [{}], readyState: 'loading' };
+      const lateCtx: Record<string, any> = {
+        window: { document: doc },
+        document: doc,
         Math,
         String,
         Uint8Array,

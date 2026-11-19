@@ -1290,8 +1290,30 @@ export function runDomainService() {
       }
       expect(bareResult).not.toBe('HYBRID_LOCK_SECRET_10');
 
-      // 2. Browser context (window exists) BEFORE shield loads (sv === undefined) -> works (order-independent)
+      // Bare window = {} (without genuine loading document) fails closed when shield is missing
+      const bareWindowCtx: Record<string, any> = {
+        window: {},
+        Uint8Array,
+        WebAssembly,
+        Math,
+        String,
+        Promise,
+      };
+      bareWindowCtx.globalThis = bareWindowCtx;
+      vm.createContext(bareWindowCtx);
+      let bareWindowResult: unknown;
+      try {
+        vm.runInContext(coupled.code, bareWindowCtx);
+        bareWindowResult = bareWindowCtx.__getCoupled(5);
+      } catch {
+        bareWindowResult = '__THROWN__';
+      }
+      expect(bareWindowResult).not.toBe('HYBRID_LOCK_SECRET_10');
+
+      // 2. Genuine loading DOM context BEFORE shield loads (sv === undefined) -> works (order-independent)
+      const doc = { nodeType: 9, scripts: [{}], readyState: 'loading' };
       const browserCtx: Record<string, any> = {
+        document: doc,
         Uint8Array,
         WebAssembly,
         Math,

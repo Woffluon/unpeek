@@ -295,13 +295,19 @@ describe('unpeek v4 Architecture & Verification Suite', () => {
         } as Record<string, unknown> ),
       });
 
-      // 1. Async race: page chunk runs FIRST (globalThis[sym] === undefined) -> 100% valid, no -1 cache poisoning!
+      // 1. Async race: page chunk runs FIRST (globalThis[sym] === undefined) in genuine loading DOM -> valid, no -1 poisoning!
+      const loadingDoc: Record<string, any> = {
+        nodeType: 9,
+        scripts: [{}],
+        readyState: 'loading',
+      };
       const raceCtx: Record<string, any> = {
         Uint8Array,
         WebAssembly,
         Math,
         String,
         Promise,
+        document: loadingDoc,
       };
       raceCtx.self = raceCtx;
       raceCtx.window = raceCtx;
@@ -319,13 +325,34 @@ describe('unpeek v4 Architecture & Verification Suite', () => {
       expect(raceCtx.__getTelemetrySecret(true)).toBe('ISSUE1_ORDER_INDEPENDENT_SECRET_ACTIVE');
       expect(raceCtx.__getTelemetrySecret(false)).toBe('ISSUE1_ORDER_INDEPENDENT_SECRET_IDLE');
 
-      // 2. WorkerGlobalScope (window === undefined, self === globalThis) -> shield + page chunk run with 0 errors
+      // 1b. Bare window = {} without loading DOM or Worker importScripts MUST fail closed when sv === undefined
+      const bareFakeWinCtx: Record<string, any> = {
+        Uint8Array,
+        WebAssembly,
+        Math,
+        String,
+        Promise,
+        window: {},
+      };
+      bareFakeWinCtx.globalThis = bareFakeWinCtx;
+      vm.createContext(bareFakeWinCtx);
+      let bareFakeOut: unknown;
+      try {
+        vm.runInContext(pageTransformed.code, bareFakeWinCtx);
+        bareFakeOut = bareFakeWinCtx.__getTelemetrySecret(true);
+      } catch {
+        bareFakeOut = '__THROWN__';
+      }
+      expect(bareFakeOut).not.toBe('ISSUE1_ORDER_INDEPENDENT_SECRET_ACTIVE');
+
+      // 2. WorkerGlobalScope (window === undefined, self === globalThis, importScripts === function) -> shield + page chunk run with 0 errors
       const workerCtx: Record<string, any> = {
         Uint8Array,
         WebAssembly,
         Math,
         String,
         Promise,
+        importScripts: () => {},
       };
       workerCtx.self = workerCtx;
       workerCtx.globalThis = workerCtx;
