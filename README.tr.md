@@ -61,15 +61,15 @@ flowchart TD
 ```
 
 1. **Çağrı Grafiği (Call-Graph) Hot-Path Muafiyeti (`<%2` CPU Bütçesi)**
-   [`detectHotPaths`](packages/unpeek/src/ast/index.ts), tek bir AST düğümünü değiştirmeden önce dosyanın çağrı grafiğini çift yönlü tarar. Döngü içeren fonksiyonlar (`for`, `while`, `do-while`, `for-of`), dizi yüksek mertebe geri çağrıları (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` zamanlayıcıları, React/UI bileşenleri (`useState`, `useEffect`, `createElement`) ve sıcak döngülerden çağrılan tüm yardımcı fonksiyonlar sıcak yol (hot path) olarak işaretlenir. `unpeek` sıcak döngüleri ve yardımcılarını hem opak kontrol akışı korumalarından hem de metin kasası dönüşümünden muaf tutar; korumayı yalnızca soğuk fonksiyonlara (lisans doğrulama, istek imzalama, yetki kontrolü gibi) uygular. Sıcak döngülerdeki V8 JIT optimizasyonu doğal hızında çalışmayı sürdürür.
+   [`detectHotPaths`](packages/unpeek/src/ast/index.ts), tek bir AST düğümünü değiştirmeden önce dosyanın çağrı grafiğini çift yönlü tarar. Döngü içeren fonksiyonlar (`for`, `while`, `do-while`, `for-of`), dizi yüksek mertebe geri çağrıları (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` zamanlayıcıları, React/UI bileşenleri (JSX `createElement`/`_jsx` veya `use*` kanca/HOC UI sinyali taşıyan PascalCase bileşenler) ve sıcak döngülerden çağrılan tüm yardımcı fonksiyonlar sıcak yol (hot path) olarak işaretlenir. `unpeek` sıcak döngüleri ve yardımcılarını hem opak kontrol akışı korumalarından hem de metin kasası dönüşümünden muaf tutar; korumayı yalnızca soğuk fonksiyonlara (lisans doğrulama, istek imzalama, yetki kontrolü gibi) uygular. Source Map v3 `sourcesContent`/`names` ve VLQ eşlemeleri (`sourcemap-critical.ts`), paketleyiciler yorumları temizlediğinde veya sembolleri yeniden adlandırdığında bile `/*! @unpeek-critical */` ve `critical.include` hedeflemesini korur. Sıcak döngülerdeki V8 JIT optimizasyonu doğal hızında çalışmayı sürdürür.
 2. **O(1) Sabit-Dizi ve 64-Bit Tuzlu Metin Kasaları (`<%15` Gzip Bütçesi)**
-   Soğuk metin sabitleri (`minStringLength >= 4`), 92 karakterli kaçışsız involutory ASCII permütasyonu (`P[P[c]] = c`) veya paylaşımlı tekil `<1.2 KB` konak-bağlı WASM KDF (`env.g`/`env.m`, bit-özdeş non-lineer Rivest + S-Box JS yedeği ile) destekli 64-bit çağrı-noktası tuzlu çözücülerle (`computeCallSiteSalt64`) kodlanır; hem Tier 2 (`recommended`) hem Tier 3 (`strict` / `--aggressive`) modlarında yerinde yeniden şifrelenen `Uint8Array` + `TextDecoder` Shader Kasası uygulanır. Tarayıcı ve `WorkerGlobalScope` ortamlarında giriş kalkanından önce çalışan asenkron parçalar önbelleği zehirlemeden geçerli düz metni çözerken, çıplak tarayıcı-dışı VM bağlamları (`window`/`document`/`self` olmayan `node:vm`) ve aktif kurcalamalar önbelleğe yazmadan kapalı başarısız olur.
+   Soğuk metin sabitleri (`minStringLength >= 4`), 92 karakterli kaçışsız involutory ASCII permütasyonu (`P[P[c]] = c`) veya paylaşımlı tekil `<1.2 KB` konak-bağlı WASM KDF (`env.g`/`env.m`, maskeli `gMask`/`pcMask` konak içe aktarımları ve bit-özdeş non-lineer Rivest + S-Box JS yedeği ile) destekli 64-bit çağrı-noktası tuzlu çözücülerle (`computeCallSiteSalt64`) kodlanır; hem Tier 2 (`recommended`) hem Tier 3 (`strict` / `--aggressive`) modlarında kalkanla eşleşen (shield-coupled) ve yerinde yeniden şifrelenen `Uint8Array` + `TextDecoder` Shader Kasası uygulanır. Evrensel ikili/Base64 WASM yükleri (`AGFzbQE`), ikili `data:` URI'ları ve büyük saf Base64 blokları çift kodlamaya karşı kasalardan muaf tutulur. `sv === void 0` için asenkron tolerans yalnızca yüklenmekte olan gerçek DOM (`document.scripts.length > 0 && document.readyState !== 'complete'`) veya Web Worker (`self.importScripts`) bağlamlarıyla sınırlandırılır ve önbelleği zehirlemeden (`d = -1` kaldırıldı) çözülür; çıplak tarayıcı-dışı VM bağlamları (`node:vm`, boş `{}`), kalkanı eksik tamamlanmış belgeler ve aktif kurcalamalar önbelleğe yazmadan kapalı başarısız olur.
 3. **Sıra-Bağımsız `globalThis` Kalkanı, Non-Lineer MBA ve Tier 3 Micro-VM v2**
-   Giriş paketleri, `WorkerGlobalScope` uyumlu (`self`/`globalThis`) sıra-bağımsız bir bütünlük IIFE'i enjekte eder ve [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts) ile `Function.prototype.toString()` + `Reflect.apply` tanımlayıcı, imza, çapraz çağrı ve yığın izi `Proxy` tuzaklarını yakalar. Soğuk yollar (`coldFlow: true`), tip korumalı `>=4`-değişkenli yarı-lineer MBA + 4 modüler rezidü ailesi ($\pmod 4, \pmod 8, \pmod{16}$) üzerinde derece-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR koşulları, alias tablosu karıştırması ve nötr tuzak köprüleri alır; Tier 3 / `--aggressive`, `@unpeek-critical` ve kritik form/doğrulama işleyicilerini öncelik sırasıyla `globalThis` üzerinde paylaşılan 43-komutlu direct-threaded Micro-VM v2 motoruna (`$step` trambolini, bloklar arası `$f.ac` çarkı, sıfır-olmayan opcode başına MBA sapmaları, `_uVm*` öz-karması ve sıfır `eval()`) taşır. Verilen tepki `deterrentMode` ile yönetilir:
+   Giriş paketleri, `WorkerGlobalScope` uyumlu (`self`/`globalThis`) sıra-bağımsız bir bütünlük IIFE'i enjekte eder ve [`verifyCodeIntegrity`](packages/unpeek/src/runtime/index.ts) ile `Function.prototype.toString()`, `Reflect.apply`, `Error.prepareStackTrace` ve `Error.prototype.stack` tanımlayıcı, imza, çapraz çağrı ve yığın izi `Proxy` tuzaklarını yakalar. Soğuk yollar (`coldFlow: true`), tip korumalı `>=4`-değişkenli yarı-lineer MBA + 4 durum/kalkan-bağlı koşul biçimi ve 4 modüler rezidü ailesi ($\pmod 4, \pmod 8, \pmod{16}$) üzerinde sabit `=== R` soneki barındırmayan derece-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR koşulları, alias tablosu karıştırması ve nötr tuzak köprüleri alır; Tier 3 / `--aggressive`, `@unpeek-critical` ve kritik form/doğrulama işleyicilerini öncelik sırasıyla `globalThis` üzerinde paylaşılan 43-komutlu direct-threaded Micro-VM v2 motoruna (`$step` trambolini, bloklar arası `$f.ac` çarkı, sıfır-olmayan opcode başına semantik handler sapmaları `1..31`, 32-bit `sym_s[1]` doğrulaması, `_uVm*` öz-karması ve sıfır `eval()`) taşır. Verilen tepki `deterrentMode` ile yönetilir:
    - `passive` (hem CLI `protect` hem de `unplugin` varsayılanı): Konsol çıktısını susturmadan veya uygulamayı çökertmeden `self`/`globalThis` üzerine bir telemetri olayı (`unpeek:tamper`) iletir; tersine mühendislik girişimlerinin sessizce izlenmesini sağlar.
    - `gradual` (`--gradual` veya `deterrentMode: 'gradual'` ile seçime bağlı): İç çalışma zamanı çözümlemelerini kademeli olarak bozar ve `console` çıktılarını susturur; saldırganların doğrudan yamayabileceği ani bir hata yığın izi üretmeden kodu işlevsizleştirir.
-4. **Çok Geçişli Source Map Kasası (`.unpeek-maps/`) ve SHA-256 `debugId`**
-   Üretim çıktısında `.js.map` dosyalarını bırakmak, orijinal TypeScript proje ağacınızın DevTools içinde birebir yeniden oluşturulmasına yol açar. [`protectProject`](packages/unpeek/src/core/protect.ts), ECMA-426 `.sections` indeks haritalarını düzleştirir, çok geçişli $M_1 \circ M_2$ VLQ bileşimini (`chainSourceMaps`) hesaplar, JS paketine ve kasadaki `.map` dosyasına aynı deterministik SHA-256 `debugId` imzasını işler (`unpeek check` ile doğrulanır), `.map` dosyalarını `.unpeek-maps/` klasörüne taşır ve `//# sourceMappingURL=` yorumlarını temizler.
+4. **Çok Geçişli Source Map Kasası (`.unpeek-maps/`) ve Otomatik SHA-256 `debugId`**
+   Üretim çıktısında `.js.map` dosyalarını bırakmak, orijinal TypeScript proje ağacınızın DevTools içinde birebir yeniden oluşturulmasına yol açar. [`protectProject`](packages/unpeek/src/core/protect.ts), ECMA-426 `.sections` indeks haritalarını düzleştirir, çok geçişli $M_1 \circ M_2$ VLQ bileşimini (`chainSourceMaps`) hesaplar, `keepPrivateMaps: true` iken (önceden `debugId` bulunmasa bile) JS paketine ve kasadaki `.map` dosyasına otomatik olarak aynı deterministik SHA-256 `debugId` imzasını işler (`unpeek check` ile doğrulanır), `.map` dosyalarını `.unpeek-maps/` klasörüne taşır ve `//# sourceMappingURL=` yorumlarını temizler.
 
 ---
 
@@ -111,7 +111,7 @@ npx unpeek protect
 | `--require-zero-eval` | Atfedilemeyen veya koruma sonrası eklenen `eval()` / `new Function()` çağrılarında `check` komutunu başarısız kılar | Kapalı |
 | `--out-dir <yol>` | İstemci çıktı klasörünü açıkça belirtir (ör. `dist/assets`, `.next/static/chunks`) | Proje framework'ünden otomatik tespit |
 | `--seed <sayı>` | Deterministik 32-bit polimorfik derleme tohumu (seed) | Derleme başına rastgele |
-| `--aggressive` | Katman 3 (Tier 3) agresif korumayı etkinleştirir (Micro-VM v2, tekil WASM KDF, tuzlu kasa ve Shader Kasası) | Varsayılan: kapalı (Tier 1 varsayılanı: <%2 CPU, <%15 Gzip) |
+| `--aggressive` | Katman 3 (Tier 3) agresif korumayı etkinleştirir (Micro-VM v2, tekil WASM KDF, tuzlu kasa ve Shader Kasası) | Varsayılan: kapalı (Tier 2 recommended varsayılanı: <%2 CPU, <%15 Gzip) |
 | `--passive` | Pasif caydırıcı modunu kullanır (konsol sessize alma olmadan yalnızca telemetri olayı) | Varsayılan (`passive`) |
 | `--gradual` | Kademeli caydırıcı modunu kullanır (kurcalamada `console` çıktılarını susturur ve çalışma zamanını bozar) | Kapalı |
 | `--detect-headless` | `navigator.webdriver` / `HeadlessChrome` sinyallerini kurcalama olarak işaretler | Kapalı |
@@ -128,7 +128,7 @@ npx unpeek protect
 > - **Tier 2 (`--profile recommended` / Varsayılan):** 92-karakter kaçışsız metin kasası, `>=4`-değişkenli yarı-lineer MBA + derece-3 Rivest QNR koruyucuları ve yerinde şifrelenen `Uint8Array` shader kasası ekler.
 > - **Tier 3 (`--profile strict` / `--aggressive`):** `@unpeek-critical` fonksiyonlarını ve `critical.include` desenlerini 43-komutlu direct-threaded Micro-VM v2, paylaşımlı `<1.2 KB` konak-bağlı WASM KDF (bit-özdeş JS yedeğiyle), 64-bit çağrı-noktası tuzlu kasa ve CWE-540 yol temizliğiyle korur.
 >
-> `protectProject(options)` üzerinden programatik kullanım; `tier`, `critical`, `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, `aggressive`, `scrubPaths` ve `cwd` seçeneklerini destekler. Paketleyici eklentileri küçültme sonrası aşamalarda çalışır (Vite `enforce: 'post'` `generateBundle` + `worker.plugins`, Webpack/Rspack `processAssets`, esbuild `onEnd`, Rollup `renderChunk`, Next.js `.next/build-manifest.json`), Service Worker ve Web Worker dosyaları (`sw.js`, `*.worker.js`) `target: 'worker'` belirtilmedikçe varsayılan olarak ayrı tutulur.
+> `protectProject(options)` üzerinden programatik kullanım; `tier`, `critical`, `seed`, `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, `deterrentMode`, `detectHeadless`, `aggressive`, `scrubPaths` ve `cwd` seçeneklerini destekler; `unpeek protect` özet çıktısında efektif `tier` (`Tier 1`/`Tier 2`/`Tier 3`) ve `shield` (`deterrentMode` ile `detectHeadless`) satırlarını raporlar. Paketleyici eklentileri küçültme sonrası aşamalarda çalışır (Vite `enforce: 'post'` `generateBundle` + `worker.plugins`, Webpack/Rspack `processAssets`, esbuild `onEnd`, Rollup `renderChunk`, Next.js `.next/build-manifest.json`), Service Worker ve Web Worker dosyaları (`sw.js`, `*.worker.js`) `target: 'worker'` belirtilmedikçe varsayılan olarak ayrı tutulur.
 
 > [!IMPORTANT]
 > **Yerel CommonJS & ESM Çift-Paket Desteği:**
@@ -272,6 +272,8 @@ export default defineConfig({
   // Hazır koruma profili ('minimal' | 'recommended' | 'strict') ve katman ('Tier 1' | 'Tier 2' | 'Tier 3')
   profile: 'recommended',
   tier: 'Tier 2',
+  // Opsiyonel deterministik 32-bit derleme tohumu (sonlu sayı)
+  seed: 0x42f00d,
   coldFlow: true,
 
   // Tier 3 kritik bölge hedeflemesi (@unpeek-critical / include desenleri)
@@ -289,7 +291,7 @@ export default defineConfig({
   // Genel statik varlık dizinleri
   publicDirs: ['public', 'static'],
 
-  // Dosya dahil etme ve hariç tutma filtreleri
+  // Dosya dahil etme ve hariç tutma glob filtreleri (CLI scanClientBundles ve unplugin içinde uygulanır)
   filter: {
     include: [],
     exclude: ['node_modules/**', '**/*.test.*', '**/*.spec.*'],
@@ -338,6 +340,12 @@ export default defineConfig({
     excludePrefixes: ['data-', 'aria-'],
     // Korunacak düzenli ifade (RegExp) desenleri
     excludePatterns: [/^on[A-Z]/],
+  },
+
+  // Çalışma zamanı anti-tamper kalkan seçenekleri
+  shield: {
+    deterrentMode: 'passive',
+    detectHeadless: false,
   },
 
   // Özel kaynak haritası (source map) kasası seçenekleri
@@ -390,7 +398,7 @@ JSON formatındaki yapılandırmalar için (`unpeek.config.json`):
 
 ## `.unpeek-maps/` Source Map Kasası ve Sentry İş Akışı
 
-`keepPrivateMaps` etkinleştirildiğinde (varsayılan), `unpeek` genel çıktı dizininizdeki tüm `.js.map` dosyalarını göreli dosya adlarını koruyarak `.unpeek-maps/` dizinine taşır ve genel `.js` dosyalarından `//# sourceMappingURL=` yönergelerini temizler.
+`keepPrivateMaps` etkinleştirildiğinde (varsayılan), `unpeek` genel çıktı dizininizdeki tüm `.js.map` dosyalarını göreli dosya adlarını koruyarak `.unpeek-maps/` dizinine taşır, önceden `debugId` bulunmasa bile korumalı `.js` paketi ile kasadaki `.map` dosyasına otomatik olarak aynı deterministik SHA-256 `debugId` imzasını basar, paketleyiciler yorumları temizlediğinde `/*! @unpeek-critical */` hedeflerini Source Map v3 üzerinden çözümler ve genel `.js` dosyalarından `//# sourceMappingURL=` yönergelerini temizler.
 
 > [!CAUTION]
 > **Konteyner Güvenliği Uyarısı (`.dockerignore`):**

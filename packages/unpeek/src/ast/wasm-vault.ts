@@ -70,7 +70,9 @@ function deriveWasmHostParams(seed: number) {
   const rA1 = computeFnv1aHash('wasm-ra1', seed) | 1;
   const rA2 = computeFnv1aHash('wasm-ra2', seed) & ~1;
   const rA3 = computeFnv1aHash('wasm-ra3', seed) & ~1;
-  return { gArr, sOff, rA0, rA1, rA2, rA3 };
+  const gMask = (computeFnv1aHash('wasm-gmask', seed) | 1) | 0;
+  const pcMask = (computeFnv1aHash('wasm-pcmask', seed) | 1) | 0;
+  return { gArr, sOff, rA0, rA1, rA2, rA3, gMask, pcMask };
 }
 
 /**
@@ -83,19 +85,20 @@ export function createWasmHostEnv(seed: number): {
     m: (acc: number, pc: number) => number;
   };
 } {
-  const { gArr, sOff, rA0, rA1, rA2, rA3 } = deriveWasmHostParams(seed);
+  const { gArr, sOff, rA0, rA1, rA2, rA3, gMask, pcMask } = deriveWasmHostParams(seed);
   return {
     env: {
       g(slot: number): number {
         const gObj = typeof globalThis !== 'undefined' ? (globalThis as any) : undefined;
         const tp = gObj && gObj.__unpeek_tampered === true ? 0x5a5b : 0;
-        return (gArr[slot & 3] ^ tp) | 0;
+        return (gArr[slot & 3] ^ gMask ^ tp) | 0;
       },
       m(acc: number, pc: number): number {
         const sb0 = (Math.imul(167, acc & 255) + sOff) & 255;
         const sb1 = (Math.imul(167, (acc >>> 8) & 255) + sOff) & 255;
         const sb = sb0 ^ (sb1 << 8);
-        const riv = evalRivestPoly32((acc ^ sb ^ pc) | 0, rA0, rA1, rA2, rA3) | 0;
+        const unmaskedPc = (pc ^ pcMask) | 0;
+        const riv = evalRivestPoly32((acc ^ sb ^ unmaskedPc) | 0, rA0, rA1, rA2, rA3) | 0;
         return (riv ^ gArr[2]) | 0;
       },
     },
@@ -116,6 +119,7 @@ export function createWasmHostEnv(seed: number): {
  */
 export function generateWasmKdfBinary(seed: number): Uint8Array {
   const { sVal, c1, c2, k0, r1, r2 } = deriveKdfParams(seed);
+  const { gMask, pcMask } = deriveWasmHostParams(seed);
   const memBase = ((seed >>> 0) & 0x7f) * 4;
   const r0 = computeFnv1aHash('wasm-r0', seed) | 0;
   const rotAmt = ((seed >>> 0) % 27) + 3;
@@ -130,6 +134,8 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
   const w2 = (c1 ^ ((w0 + w1) | 0)) | 0;
   const w3 = (c2 - Math.imul(w1 | 1, w2 | 1)) | 0;
   const w4 = (k0 ^ rotl32(w2, 11) ^ w3) | 0;
+  const w5 = (gMask ^ rotl32(w3, 7) ^ w0) | 0;
+  const w6 = (pcMask ^ rotl32(w4, 13) ^ w1) | 0;
 
   // func 2: kdf(fnId: 0, callSiteSalt: 1, shieldHash: 2) -> i32
   const kdfInstructions = [
@@ -186,7 +192,30 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     0x73, // i32.xor
     0x21, 0x0a, // local.set 10 (k0)
 
-    // x = f ^ sVal ^ k0 ^ env.g(0)
+    // Reconstruct gMask -> local 12
+    0x20, 0x03, // local.get 3 (ptr)
+    0x28, 0x02, 0x14, // i32.load align=2 offset=20 (w5)
+    0x20, 0x07, // local.get 7 (w3)
+    0x41, 0x07, // i32.const 7
+    0x77, // i32.rotl
+    0x73, // i32.xor
+    0x20, 0x04, // local.get 4 (w0)
+    0x73, // i32.xor
+    0x21, 0x0c, // local.set 12 (gMask)
+
+    // Reconstruct pcMask -> local 13
+    0x20, 0x03, // local.get 3 (ptr)
+    0x28, 0x02, 0x18, // i32.load align=2 offset=24 (w6)
+    0x20, 0x03, // local.get 3 (ptr)
+    0x28, 0x02, 0x10, // i32.load align=2 offset=16 (w4)
+    0x41, 0x0d, // i32.const 13
+    0x77, // i32.rotl
+    0x73, // i32.xor
+    0x20, 0x05, // local.get 5 (w1)
+    0x73, // i32.xor
+    0x21, 0x0d, // local.set 13 (pcMask)
+
+    // x = f ^ sVal ^ k0 ^ (env.g(0) ^ gMask)
     0x20, 0x00, // local.get 0 (fnId)
     0x20, 0x08, // local.get 8 (sVal)
     0x73, // i32.xor
@@ -194,6 +223,8 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     0x73, // i32.xor
     0x41, 0x00, // i32.const 0
     0x10, 0x00, // call 0 (env.g(0))
+    0x20, 0x0c, // local.get 12 (gMask)
+    0x73, // i32.xor
     0x73, // i32.xor
     0x22, 0x0b, // local.tee 11 (x)
 
@@ -213,17 +244,21 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     0x41, ...encodeSignedLeb128(r1), // i32.const r1
     0x77, // i32.rotl
 
-    // x = env.m(x, shieldHash)
+    // x = env.m(x, shieldHash ^ pcMask)
     0x20, 0x02, // local.get 2 (shieldHash)
-    0x10, 0x01, // call 1 (env.m(x, shieldHash))
+    0x20, 0x0d, // local.get 13 (pcMask)
+    0x73, // i32.xor
+    0x10, 0x01, // call 1 (env.m(x, maskedPc))
 
-    // x = imul(x ^ h ^ sVal ^ env.g(1), c2)
+    // x = imul(x ^ h ^ sVal ^ (env.g(1) ^ gMask), c2)
     0x20, 0x02, // local.get 2 (shieldHash)
     0x73, // i32.xor
     0x20, 0x08, // local.get 8 (sVal)
     0x73, // i32.xor
     0x41, 0x01, // i32.const 1
     0x10, 0x00, // call 0 (env.g(1))
+    0x20, 0x0c, // local.get 12 (gMask)
+    0x73, // i32.xor
     0x73, // i32.xor
     0x20, 0x07, // local.get 7 (w3)
     0x20, 0x05, // local.get 5 (w1)
@@ -287,6 +322,8 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     0x41, 0x03, // i32.const 3
     0x71, // i32.and
     0x10, 0x00, // call 0 (env.g)
+    0x41, ...encodeSignedLeb128(gMask), // i32.const gMask
+    0x73, // i32.xor
     0x6a, // i32.add
     0x10, 0x01, // call 1 (env.m)
     0x21, 0x02, // local.set 2 (key)
@@ -307,8 +344,8 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     0x0b, // end func
   ];
 
-  // Function body 0 (kdf): 9 i32 locals (3..11)
-  const kdfBody = [0x01, 0x09, 0x7f, ...kdfInstructions];
+  // Function body 0 (kdf): 11 i32 locals (3..13)
+  const kdfBody = [0x01, 0x0b, 0x7f, ...kdfInstructions];
   const kdfBodyWithLen = [...encodeUnsignedLeb128(kdfBody.length), ...kdfBody];
 
   // Function body 1 (bulkMix): 2 i32 locals (3..4)
@@ -372,13 +409,15 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     ...codeSectionPayload,
   ];
 
-  // Section 11: Data section (5 blinded 32-bit words at memBase)
+  // Section 11: Data section (7 blinded 32-bit words at memBase)
   const dataWords = [
     ...writeI32LE(w0),
     ...writeI32LE(w1),
     ...writeI32LE(w2),
     ...writeI32LE(w3),
     ...writeI32LE(w4),
+    ...writeI32LE(w5),
+    ...writeI32LE(w6),
   ];
   const dataPayload = [
     0x01, // 1 active segment
@@ -420,22 +459,24 @@ export function fallbackKdf(
   seed: number
 ): number {
   const { sVal, c1, c2, k0, r1, r2 } = deriveKdfParams(seed);
-  const { gArr, sOff, rA0, rA1, rA2, rA3 } = deriveWasmHostParams(seed);
+  const { gArr, sOff, rA0, rA1, rA2, rA3, gMask, pcMask } = deriveWasmHostParams(seed);
 
+  const envG = (slot: number): number => (gArr[slot & 3] ^ gMask) | 0;
   const envM = (acc: number, pc: number): number => {
     const sb0 = (Math.imul(167, acc & 255) + sOff) & 255;
     const sb1 = (Math.imul(167, (acc >>> 8) & 255) + sOff) & 255;
     const sb = sb0 ^ (sb1 << 8);
-    const riv = evalRivestPoly32((acc ^ sb ^ pc) | 0, rA0, rA1, rA2, rA3) | 0;
+    const unmaskedPc = (pc ^ pcMask) | 0;
+    const riv = evalRivestPoly32((acc ^ sb ^ unmaskedPc) | 0, rA0, rA1, rA2, rA3) | 0;
     return (riv ^ gArr[2]) | 0;
   };
 
-  let x = (fnId ^ sVal ^ k0 ^ gArr[0]) | 0;
+  let x = (fnId ^ sVal ^ k0 ^ (envG(0) ^ gMask)) | 0;
   x = (x ^ (x >>> 16)) | 0;
   x = Math.imul(x, c1);
   x = rotl32((x ^ callSiteSalt) | 0, r1);
-  x = envM(x, shieldHash | 0);
-  x = Math.imul((x ^ shieldHash ^ sVal ^ gArr[1]) | 0, c2);
+  x = envM(x, (shieldHash ^ pcMask) | 0);
+  x = Math.imul((x ^ shieldHash ^ sVal ^ (envG(1) ^ gMask)) | 0, c2);
   x = (x ^ (x >>> 15)) | 0;
   x = (x + rotl32((callSiteSalt ^ k0) | 0, r2)) | 0;
   x = Math.imul(x, c1);
@@ -507,7 +548,7 @@ export function injectWasmVault(
   const byteArrayLiteral = Array.from(wasmBytes).join(',');
 
   const { sVal, c1, c2, k0, r1, r2 } = deriveKdfParams(seed);
-  const { gArr, sOff, rA0, rA1, rA2, rA3 } = deriveWasmHostParams(seed);
+  const { gArr, sOff, rA0, rA1, rA2, rA3, gMask, pcMask } = deriveWasmHostParams(seed);
 
   const targets = [c1, c2, sVal, k0, r1, r2];
   const rivEncodedTargets = targets.map(
@@ -535,11 +576,11 @@ export function injectWasmVault(
   var _tk = ['__','unp','eek_t','ampered'].join('');
   var _eG = function(sl) {
     var tp = (_G && _G[_tk] === !0) ? 0x5a5b : 0;
-    return (_g[sl & 3] ^ tp) | 0;
+    return (_g[sl & 3] ^ ${gMask} ^ tp) | 0;
   };
   var _eM = function(acc, pc) {
     var sb = _sb(acc) ^ (_sb(acc >>> 8) << 8);
-    return (_evR((acc ^ sb ^ pc) | 0) ^ _g[2]) | 0;
+    return (_evR((acc ^ sb ^ (pc ^ ${pcMask})) | 0) ^ _g[2]) | 0;
   };
   try {
     var ${wasmVarName} = new Uint8Array([${byteArrayLiteral}]);
@@ -559,13 +600,13 @@ export function injectWasmVault(
     }
     var _m = Math[_p];
     ${kdfFnName} = function(f, s, h) {
-      var _x = (f ^ _k[2] ^ _k[3] ^ _eG(0)) | 0;
+      var _x = (f ^ _k[2] ^ _k[3] ^ (_eG(0) ^ ${gMask})) | 0;
       _x = (_x ^ (_x >>> 16)) | 0;
       _x = _m(_x, _k[0]);
       var _t0 = _x ^ s, _r1 = _k[4];
       _x = (_t0 << _r1) | (_t0 >>> (32 - _r1));
-      _x = _eM(_x, h | 0);
-      _x = _m(_x ^ h ^ _k[2] ^ _eG(1), _k[1]);
+      _x = _eM(_x, (h ^ ${pcMask}) | 0);
+      _x = _m(_x ^ h ^ _k[2] ^ (_eG(1) ^ ${gMask}), _k[1]);
       _x = (_x ^ (_x >>> 15)) | 0;
       var _u0 = s ^ _k[3], _r2 = _k[5];
       _x = (_x + ((_u0 << _r2) | (_u0 >>> (32 - _r2)))) | 0;

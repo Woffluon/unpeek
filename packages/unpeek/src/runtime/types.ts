@@ -25,4 +25,5 @@ export interface ShieldPayload {
   windowKeySymbol?: string;
   expectedDelta?: number;
   stateKeySymbol?: string;
+  expectedStateHash?: number;
 }

@@ -383,7 +383,7 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
     }
   });
 
-  it('CLI help and summary display Tier 1 (<%2 CPU, <%15 Gzip) vs Tier 2 / --aggressive (Micro-VM & WASM KDF)', async () => {
+  it('CLI help and summary display Tier 1 (<2% CPU, <15% Gzip), Tier 2 (recommended), and Tier 3 / --aggressive (Micro-VM & WASM KDF)', async () => {
     const { runCli } = await import('../src/cli/index.js');
     fs.writeFileSync(
       path.join(tmpDir, 'package.json'),
@@ -392,11 +392,9 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
     );
     const distDir = path.join(tmpDir, 'dist');
     fs.mkdirSync(distDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(distDir, 'bundle.js'),
-      'function testSecret() { return "super_secret_token"; }',
-      'utf8'
-    );
+    const bundlePath = path.join(distDir, 'bundle.js');
+    const sourceCode = 'function testSecret() { return "super_secret_token"; }';
+    fs.writeFileSync(bundlePath, sourceCode, 'utf8');
 
     let logs: string[] = [];
     const origLog = console.log;
@@ -408,31 +406,43 @@ describe('Bundler Detection, Zero-Code-Change CLI (init & protect), and Unplugin
     try {
       process.chdir(tmpDir);
 
-      // 1. Verify --help output contains Tier 1 and Tier 2 descriptions
+      // 1. Verify --help output contains Tier 1, Tier 2, and Tier 3 descriptions
       logs = [];
       await runCli(['--help']);
       const helpOutput = logs.join('\n');
       expect(helpOutput).toMatch(/Tier 1/i);
       expect(helpOutput).toMatch(/Tier 2/i);
+      expect(helpOutput).toMatch(/Tier 3/i);
       expect(helpOutput).toMatch(/--aggressive/);
       expect(helpOutput).toMatch(/Micro-VM & WASM KDF/i);
-      expect(helpOutput).toMatch(/(?:<2%|<%2)\s*CPU/i);
-      expect(helpOutput).toMatch(/(?:<15%|<%15)\s*Gzip/i);
+      expect(helpOutput).toMatch(/<2%\s*CPU/i);
+      expect(helpOutput).toMatch(/<15%\s*Gzip/i);
 
-      // 2. Verify summary for Tier 1 default
+      // 2. Verify summary for Tier 1 (--profile minimal)
+      fs.writeFileSync(bundlePath, sourceCode, 'utf8');
       logs = [];
-      await runCli(['protect', '--out-dir', 'dist']);
+      await runCli(['protect', '--out-dir', 'dist', '--profile', 'minimal']);
       const tier1Summary = logs.join('\n');
       expect(tier1Summary).toContain('Tier 1');
-      expect(tier1Summary).toMatch(/default/i);
+      expect(tier1Summary).toMatch(/minimal/i);
 
-      // 3. Verify summary for Tier 2 --aggressive
+      // 3. Verify summary for Tier 2 default (recommended) + shield row
+      fs.writeFileSync(bundlePath, sourceCode, 'utf8');
       logs = [];
-      await runCli(['protect', '--out-dir', 'dist', '--aggressive']);
+      await runCli(['protect', '--out-dir', 'dist']);
       const tier2Summary = logs.join('\n');
       expect(tier2Summary).toContain('Tier 2');
-      expect(tier2Summary).toMatch(/--aggressive/);
-      expect(tier2Summary).toMatch(/Micro-VM & WASM KDF/i);
+      expect(tier2Summary).toMatch(/recommended/i);
+      expect(tier2Summary).toMatch(/shield\s+passive/i);
+
+      // 4. Verify summary for Tier 3 --aggressive
+      fs.writeFileSync(bundlePath, sourceCode, 'utf8');
+      logs = [];
+      await runCli(['protect', '--out-dir', 'dist', '--aggressive']);
+      const tier3Summary = logs.join('\n');
+      expect(tier3Summary).toContain('Tier 3');
+      expect(tier3Summary).toMatch(/--aggressive/);
+      expect(tier3Summary).toMatch(/Micro-VM & WASM KDF/i);
     } finally {
       process.chdir(origCwd);
       console.log = origLog;

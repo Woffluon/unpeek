@@ -115,6 +115,8 @@ export interface UnpeekConfig {
   target?: ConfigTarget;
   profile?: UnpeekProfile;
   tier?: UnpeekTier;
+  /** Deterministic 32-bit polymorphic seed (must be a finite number) */
+  seed?: number;
   coldFlow?: boolean;
   outDir?: string;
   extensions?: string[];
@@ -125,6 +127,7 @@ export interface UnpeekConfig {
   critical?: CriticalConfig;
   vault?: VaultConfig;
   mangler?: ManglerConfig;
+  shield?: ShieldOptionsConfig;
   sourcemaps?: SourcemapsConfig;
   next?: NextConfigOptions;
   vite?: ViteConfigOptions;
@@ -134,7 +137,7 @@ export interface UnpeekConfig {
 ### Configuration Option Blocks
 
 #### `FilterConfig`
-Glob patterns to control which files unpeek processes:
+Glob patterns evaluated against bundle relative paths in both CLI `scanClientBundles` and bundler `unplugin` (`isExcludedClientAsset`):
 ```ts
 export interface FilterConfig {
   include?: string[];
@@ -189,6 +192,15 @@ export interface ManglerConfig {
 }
 ```
 
+#### `ShieldOptionsConfig`
+Runtime integrity shield options:
+```ts
+export interface ShieldOptionsConfig {
+  detectHeadless?: boolean;
+  deterrentMode?: DeterrentMode; // 'gradual' | 'passive'
+}
+```
+
 #### `SourcemapsConfig`
 Source map relocation and comment stripping controls:
 ```ts
@@ -235,7 +247,7 @@ export interface ProtectOptions {
   injectRuntimeShield?: boolean;
   /** Minimum string length to encrypt in the O(1) kConst string vault (default: 4) */
   minStringLength?: number;
-  /** Enable Layer 2 aggressive protection (Bytecode Micro-VM, Inline WASM KDF, Call-Site Salted Vault) */
+  /** Enable Tier 3 strict protection (Micro-VM v2, singleton WASM KDF, 64-bit Salted Vault) */
   aggressive?: boolean;
   /** Protection preset profile */
   profile?: UnpeekProfile;
@@ -321,6 +333,8 @@ export interface ProtectSummary {
   seed?: number;
   tier?: 'Tier 1' | 'Tier 2' | 'Tier 3';
   aggressive?: boolean;
+  deterrentMode?: DeterrentMode;
+  detectHeadless?: boolean;
   dockerIgnoreMissing?: boolean;
   dryRun?: boolean;
   profile?: UnpeekProfile;

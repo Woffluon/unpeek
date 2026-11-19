@@ -38,11 +38,14 @@ export function computeCallSiteSalt(seed: number, idx: number): number {
   return (((lo ^ hi) & 0x7fffffff) | 1) >>> 0;
 }
 
+export const NARROWED_ASYNC_BR_DECL =
+  `var _br=(typeof window<'u'&&typeof document<'u'&&window.document===document&&document.nodeType===9&&document.scripts&&document.scripts.length>0&&document.readyState!=='complete')||(typeof self<'u'&&typeof self.importScripts==='function');`;
+
 /**
  * Builds a non-linear Rivest degree-3 permutation polynomial runtime expression
  * that reconstructs the 16-bit expectedDelta without embedding raw delta or `maskA ^ maskB` literals.
  */
-function buildRivestDeltaExpr(seed: number, expectedDelta: number, varName = '_ed'): string {
+export function buildRivestDeltaExpr(seed: number, expectedDelta: number, varName = '_ed'): string {
   const s = seed >>> 0;
   const rA0 = computeFnv1aHash(`riv-a0:${s}`, s) | 0;
   const rA1 = computeFnv1aHash(`riv-a1:${s}`, s) | 1;
@@ -106,9 +109,7 @@ export function createSaltedDecryptorFnAst(
   } else {
     const edInit = buildRivestDeltaExpr(seed, expectedDelta, '_ed');
     const hasWindowKey = Boolean(windowKeySymbol);
-    const brDecl = hasWindowKey
-      ? `var _br=typeof window<"u"||typeof document<"u"||typeof self<"u";`
-      : '';
+    const brDecl = hasWindowKey ? NARROWED_ASYNC_BR_DECL : '';
     const svCheck = hasWindowKey
       ? `(sv===void 0?!_br:sv!==_ed)`
       : `(sv!==void 0&&sv!==_ed)`;
@@ -464,6 +465,18 @@ export function applySaltedStringVault(
   let decryptFnName = '';
   let integrityToken = computeFnv1aHash('empty-salted', seed);
 
+  const sym = windowKeySymbol ?? deriveWindowKeySymbol(seed);
+  let expDelta = expectedDelta;
+  if (shieldCoupled && expDelta === undefined) {
+    const shield = generateRuntimeShield({
+      seed,
+      windowKeySymbol: sym,
+      deterrentMode: deterrentMode ?? 'passive',
+      detectHeadless,
+    });
+    expDelta = shield.expectedDelta ?? 0;
+  }
+
   if (targetsToReplace.length > 0) {
     // Ensure WebAssembly KDF key generator is injected
     const wasmResult = injectWasmVault(ast, seed);
@@ -474,18 +487,6 @@ export function applySaltedStringVault(
     const cacheVarName = `_uCache${suffix}`;
     const dCacheVarName = `_uDc${suffix}`;
     decryptFnName = `_uD${suffix}`;
-
-    const sym = windowKeySymbol ?? deriveWindowKeySymbol(seed);
-    let expDelta = expectedDelta;
-    if (shieldCoupled && expDelta === undefined) {
-      const shield = generateRuntimeShield({
-        seed,
-        windowKeySymbol: sym,
-        deterrentMode: deterrentMode ?? 'passive',
-        detectHeadless,
-      });
-      expDelta = shield.expectedDelta ?? 0;
-    }
 
     const propAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(sym)
       ? `.${sym}`
@@ -527,9 +528,7 @@ export function applySaltedStringVault(
     } else {
       const edInit = buildRivestDeltaExpr(seed, (expDelta ?? 0) & 0xffff, '_ed');
       const hasWindowKey = Boolean(sym);
-      const brDecl = hasWindowKey
-        ? `var _br=typeof window<"u"||typeof document<"u"||typeof self<"u";`
-        : '';
+      const brDecl = hasWindowKey ? NARROWED_ASYNC_BR_DECL : '';
       const svCheck = hasWindowKey
         ? `(sv===void 0?!_br:sv!==_ed)`
         : `(sv!==void 0&&sv!==_ed)`;
@@ -633,7 +632,10 @@ export function applySaltedStringVault(
     const shaderHelperStmt = createShaderVaultAst(
       shaderVarName,
       shaderPayloads,
-      seed
+      seed,
+      sym,
+      expDelta,
+      shieldCoupled
     );
     const shaderInsertIdx = findVaultInsertIndex(ast, activeDirectives);
     ast.body.splice(shaderInsertIdx, 0, shaderHelperStmt as any);

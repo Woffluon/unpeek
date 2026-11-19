@@ -10,6 +10,7 @@ import { transformJavaScript } from '../ast/index.js';
 import { computeFnv1aHash } from '../shared/hash.js';
 import { generateRuntimeShield } from '../runtime/index.js';
 import { deriveWindowKeySymbol } from '../internal/runtime.js';
+import { matchesGlobPattern } from '../core/detector.js';
 import {
   extractDebugId,
   replaceOrAppendDebugId,
@@ -47,6 +48,17 @@ function isExcludedClientAsset(fileName: string, config?: UnpeekConfig): boolean
   if (config?.target !== 'worker' && SW_OR_WORKBOX_PATTERN.test(norm)) {
     return true;
   }
+  const cleanRel = norm.replace(/^\/+/, '');
+  if (config?.filter?.include && config.filter.include.length > 0) {
+    if (!config.filter.include.some((pattern) => matchesGlobPattern(cleanRel, pattern))) {
+      return true;
+    }
+  }
+  if (config?.filter?.exclude && config.filter.exclude.length > 0) {
+    if (config.filter.exclude.some((pattern) => matchesGlobPattern(cleanRel, pattern))) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -70,9 +82,11 @@ export const unpeekPlugin = createUnplugin<UnpeekPluginOptions | undefined>((opt
   const config: UnpeekConfig | undefined = options.config;
 
   const baseSeed =
-    typeof options.seed === 'number'
+    typeof options.seed === 'number' && Number.isFinite(options.seed)
       ? options.seed
-      : Math.floor(Math.random() * 0x7fffffff) || 0x1337beef;
+      : typeof config?.seed === 'number' && Number.isFinite(config.seed)
+        ? config.seed
+        : Math.floor(Math.random() * 0x7fffffff) || 0x1337beef;
   const deterrentMode = options.deterrentMode ?? config?.shield?.deterrentMode ?? 'passive';
   const detectHeadless = options.detectHeadless ?? config?.shield?.detectHeadless ?? false;
   const injectRuntimeShield = options.injectRuntimeShield ?? true;
@@ -109,6 +123,7 @@ export const unpeekPlugin = createUnplugin<UnpeekPluginOptions | undefined>((opt
     }
 
     const shouldInjectShield = injectRuntimeShield && isEntry;
+    const shouldGenerateMap = requestMap || Boolean(inputMap);
     const chunkSeed = computeFnv1aHash(fileName, baseSeed);
     const transformOptions: InternalTransformOptions = {
       seed: chunkSeed,
@@ -119,14 +134,15 @@ export const unpeekPlugin = createUnplugin<UnpeekPluginOptions | undefined>((opt
       shieldCoupled: injectRuntimeShield,
       windowKeySymbol: masterSym,
       expectedDelta: masterShield?.expectedDelta,
+      expectedStateHash: masterShield?.expectedStateHash,
+      originalSourceMap: inputMap,
       deterrentMode,
       detectHeadless,
       aggressive,
       config,
+      generateMap: shouldGenerateMap,
+      rootDir: process.cwd(),
     };
-    (transformOptions as { generateMap?: boolean; rootDir?: string }).generateMap =
-      requestMap || Boolean(inputMap);
-    (transformOptions as { generateMap?: boolean; rootDir?: string }).rootDir = process.cwd();
 
     const result = transformJavaScript(codeToTransform, transformOptions);
 
@@ -164,7 +180,10 @@ export const unpeekPlugin = createUnplugin<UnpeekPluginOptions | undefined>((opt
 
     const inputMapDebugId = inputMap?.debugId ?? inputMap?.debug_id;
     const hadDebugId = Boolean(fileDebugId || inputMapDebugId || result.debugId);
-    if (hadDebugId) {
+    const shouldMintDebugId =
+      hadDebugId ||
+      (shouldGenerateMap && !result.skippedReason && Boolean(composedMap || inputMap));
+    if (shouldMintDebugId) {
       const codeWithoutDebugId = stripDebugIdComments(finalCode);
       const mintedDebugId = computeDeterministicDebugId(
         codeWithoutDebugId,
@@ -444,7 +463,12 @@ export const unpeekPlugin = createUnplugin<UnpeekPluginOptions | undefined>((opt
             const jsOutCount = result.outputFiles.filter((f) => isSupportedJsAsset(f.path)).length;
             for (const outFile of result.outputFiles) {
               const normPath = outFile.path.replace(/\\/g, '/');
-              if (!isSupportedJsAsset(normPath) || isExcludedClientAsset(normPath, config)) {
+              const relFromWork = path.relative(workDir, outFile.path).replace(/\\/g, '/');
+              const filterPath =
+                relFromWork && !relFromWork.startsWith('..') && !path.isAbsolute(relFromWork)
+                  ? relFromWork
+                  : normPath;
+              if (!isSupportedJsAsset(normPath) || isExcludedClientAsset(filterPath, config)) {
                 continue;
               }
 
@@ -458,7 +482,6 @@ export const unpeekPlugin = createUnplugin<UnpeekPluginOptions | undefined>((opt
                 }
               }
 
-              const relFromWork = path.relative(workDir, outFile.path).replace(/\\/g, '/');
               const isEntry =
                 entryOutputs.size > 0
                   ? entryOutputs.has(outFile.path) ||

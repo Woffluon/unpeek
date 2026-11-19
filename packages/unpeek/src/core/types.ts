@@ -1,4 +1,5 @@
 import type { BaseProtectionOptions, UnpeekFramework, UnpeekProfile } from '../config.js';
+import type { DeterrentMode } from '../runtime/types.js';
 
 export interface ProtectOptions extends BaseProtectionOptions {
   /** Target project root directory (defaults to process.cwd()) */
@@ -52,6 +53,8 @@ export interface ProtectSummary {
   seed?: number;
   tier?: 'Tier 1' | 'Tier 2' | 'Tier 3';
   aggressive?: boolean;
+  deterrentMode?: DeterrentMode;
+  detectHeadless?: boolean;
   dockerIgnoreMissing?: boolean;
   dryRun?: boolean;
   profile?: UnpeekProfile;

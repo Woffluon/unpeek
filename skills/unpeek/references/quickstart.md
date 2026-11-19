@@ -50,10 +50,20 @@ import { defineConfig } from 'unpeek/config';
 
 export default defineConfig({
   target: 'browser',
+  // Optional deterministic 32-bit build seed (finite number)
+  seed: 0x42f00d,
+  filter: {
+    include: [],
+    exclude: ['node_modules/**', '**/*.test.*', '**/*.spec.*'],
+  },
   vault: {
     minStringLength: 4,
     cssFramework: 'tailwind',
     polymorphicDecoys: true,
+  },
+  shield: {
+    deterrentMode: 'passive',
+    detectHeadless: false,
   },
   sourcemaps: {
     keepPrivate: true,
@@ -116,7 +126,7 @@ Subcommands:
 | `--private-maps-dir <dir>` | `string` | `.unpeek-maps` | Target directory for extracted production source maps. |
 | `--min-string-length <num>` | `number` | `4` | Minimum string literal character length for string vault encryption. |
 | `--no-shield` | `boolean` | `false` | Skips injecting the runtime anti-tamper deterrent shield into entry chunks. |
-| `--aggressive` | `boolean` | `false` | Enables Tier 2 aggressive defense: Bytecode Micro-VM and inline WASM KDF. |
+| `--aggressive` | `boolean` | `false` | Enables Tier 3 strict protection: 43-opcode Micro-VM v2, singleton host-coupled WASM KDF, and 64-bit salted vault. |
 | `-v, --version` | `boolean` | — | Prints installed unpeek version. |
 | `-h, --help` | `boolean` | — | Displays command-line help. |
 
@@ -132,7 +142,8 @@ Upon completing protection, unpeek prints a structured metrics summary:
 
   PROJECT ──────────────────────────────────────
   framework            nextjs
-  tier                 Tier 1 (default: <2% CPU, <15% Gzip)
+  tier                 Tier 2 (recommended: string vault & cold-flow)
+  shield               passive (detectHeadless: off)
   output               /workspace/.next/static/chunks
   bundles              14
 

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import vm from 'node:vm';
+import * as acorn from 'acorn';
+import * as walk from 'acorn-walk';
+import { generateCompactJs } from '../src/ast/codegen.js';
 import { transformJavaScript } from '../src/ast/index.js';
 import { generateRuntimeShield, verifyCodeIntegrity, computeIntegrityHash } from '../src/runtime/index.js';
 
@@ -233,8 +236,27 @@ describe('Reverse Engineering & Deobfuscation Resistance (Acceptance Thresholds)
     expect(sessionResult.role).not.toBe('superadmin');
     expect(sessionResult.telemetryOk).toBeUndefined();
 
-    // 4. Inverting the QNR predicate (=== 3 -> !== 3) verifies the neutral object-domain decoy block fires cleanly
-    const triggeredDecoyCode = res.code.replace(/(===)\s*3\b/, '!== 3');
+    // 4. Inverting the diversified cold-flow guard condition verifies the neutral object-domain decoy block fires cleanly
+    const parsedOut = acorn.parse(res.code, {
+      ecmaVersion: 'latest',
+      allowReturnOutsideFunction: true,
+    }) as any;
+    let inverted = false;
+    walk.simple(parsedOut, {
+      IfStatement(node: any) {
+        if (!inverted && node.consequent?.type === 'BlockStatement') {
+          node.test = {
+            type: 'UnaryExpression',
+            operator: '!',
+            prefix: true,
+            argument: node.test,
+          };
+          inverted = true;
+        }
+      },
+    });
+    expect(inverted).toBe(true);
+    const triggeredDecoyCode = generateCompactJs(parsedOut);
     const decoyFn = new Function(triggeredDecoyCode);
     const decoyResult = decoyFn();
     expect(decoyResult).toBeDefined();

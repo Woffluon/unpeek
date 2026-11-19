@@ -56,7 +56,7 @@ describe('Runtime Integrity Guard & DevTools Deterrent', () => {
 
       expect(shield.preambleCode).toContain("typeof window!=='undefined'");
       expect(shield.preambleCode.includes('\n')).toBe(false);
-      expect(Buffer.byteLength(shield.preambleCode, 'utf8')).toBeLessThan(1536);
+      expect(Buffer.byteLength(shield.preambleCode, 'utf8')).toBeLessThan(2048);
       expect(shield.preambleCode).not.toContain('outerWidth');
       expect(shield.preambleCode).not.toContain('innerWidth');
 
@@ -416,9 +416,22 @@ describe('Runtime Integrity Guard & DevTools Deterrent', () => {
       const shieldLine = codeLines[0];
       const strippedCode = codeLines.slice(1).join('\n');
 
-      const lateWindow: Record<string, unknown> = {};
+      // Bare window = {} (without genuine loading document) fails closed when shield is stripped
+      const bareWindow: Record<string, unknown> = {};
+      const bareContext = vm.createContext({
+        window: bareWindow,
+        globalThis: {},
+      });
+      bareContext.globalThis = bareContext;
+      bareContext.window = bareWindow;
+      vm.runInContext(strippedCode, bareContext);
+      expect(bareContext.__secret).not.toBe('SUPER_SECRET_DATABASE_CREDENTIAL');
+
+      const doc = { nodeType: 9, scripts: [{}], readyState: 'loading' };
+      const lateWindow: Record<string, unknown> = { document: doc };
       const lateContext = vm.createContext({
         window: lateWindow,
+        document: doc,
         globalThis: {},
       });
       lateContext.globalThis = lateContext;

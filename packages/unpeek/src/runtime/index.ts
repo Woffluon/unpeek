@@ -37,6 +37,8 @@ export function generateRuntimeShield(config: ShieldConfig): ShieldPayload {
       ? config.expectedDelta & 0xffff
       : (computedHash >>> 0) & 0xffff;
 
+  const expectedStateHash = (computedHash ^ seed) | 0;
+
   const payload: InternalShieldPayload = {
     preambleCode,
     integrityCheckFnName,
@@ -44,6 +46,7 @@ export function generateRuntimeShield(config: ShieldConfig): ShieldPayload {
     windowKeySymbol,
     expectedDelta,
     stateKeySymbol: `${windowKeySymbol}_s`,
+    expectedStateHash,
   };
   return payload;
 }

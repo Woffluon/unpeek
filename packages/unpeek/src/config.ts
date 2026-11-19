@@ -82,6 +82,7 @@ export interface UnpeekConfig {
   target?: ConfigTarget;
   profile?: UnpeekProfile;
   tier?: UnpeekTier;
+  seed?: number;
   coldFlow?: boolean;
   outDir?: string;
   extensions?: string[];

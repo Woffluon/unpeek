@@ -579,13 +579,20 @@ describe('AST & Call-Graph Transformation Engine', () => {
       const lines = withShield.code.split('\n');
       const shieldLine = lines[0];
       const stripped = lines.slice(1).join('\n');
-      const lateWin: Record<string, any> = {};
-      const lateCtx: Record<string, any> = { window: lateWin };
+      const loadingDoc = { nodeType: 9, scripts: [{}], readyState: 'loading' };
+      const lateWin: Record<string, any> = { document: loadingDoc };
+      const lateCtx: Record<string, any> = { window: lateWin, document: loadingDoc };
       lateCtx.globalThis = lateCtx;
       vm.createContext(lateCtx);
       expect(vm.runInContext(`(function(){${stripped}})()`, lateCtx)).toBe('world');
       vm.runInContext(shieldLine, lateCtx);
       expect(vm.runInContext(`(function(){${stripped}})()`, lateCtx)).toBe('world');
+
+      // Bare window = {} (without genuine loading DOM) must fail closed
+      const bareFakeCtx: Record<string, any> = { window: {} };
+      bareFakeCtx.globalThis = bareFakeCtx;
+      vm.createContext(bareFakeCtx);
+      expect(vm.runInContext(`(function(){${stripped}})()`, bareFakeCtx)).not.toBe('world');
 
       const tamperedWin: Record<string, any> = {
         [shieldInfo.windowKeySymbol]: (shieldInfo.expectedDelta ^ 0x4242) & 0xffff,
@@ -909,13 +916,15 @@ describe('AST & Call-Graph Transformation Engine', () => {
     it('generates algebraically sound 32-bit live-parameter MBA predicates without static +!String', () => {
       for (const seed of [0, 42, 0x9e3779b9, 0xdeadbeef, 0x12345678]) {
         for (let fnIndex = 0; fnIndex < 5; fnIndex++) {
-          // 1. Live parameter binding: (param | 0)
+          // 1. Live parameter binding: (param | 0) with diversified opaque predicate forms (no === literal QNR suffix)
           const paramGuard = createSotaMbaPredicate(seed, fnIndex, 'userInput');
           expect(paramGuard.type).toBe('IfStatement');
-          expect(paramGuard.test.type).toBe('BinaryExpression');
-          expect(paramGuard.test.operator).toBe('===');
-          expect(paramGuard.test.right.type).toBe('Literal');
-          expect(paramGuard.test.right.value).toBeGreaterThan(0);
+          const isStaticLitEq =
+            paramGuard.test.type === 'BinaryExpression' &&
+            paramGuard.test.operator === '===' &&
+            paramGuard.test.right?.type === 'Literal';
+          expect(isStaticLitEq).toBe(false);
+          expect(['BinaryExpression', 'LogicalExpression']).toContain(paramGuard.test.type);
 
           let foundStaticString = false;
           let foundLiveParam = false;
@@ -939,45 +948,29 @@ describe('AST & Call-Graph Transformation Engine', () => {
           expect(foundLiveParam).toBe(true);
           expect(foundImul).toBe(true);
 
-          const allowedResidues = (code: string, target: number): number[] => {
-            if (target === 6) return [3, 4, 7];
-            if (target === 13) return [0, 7, 8, 11];
-            return code.includes('& 7') ? [1, 5, 6] : [1, 2];
-          };
-
-          const paramCode = generate(paramGuard.test.left);
-          const paramAllowed = allowedResidues(paramCode, paramGuard.test.right.value);
-          const evalParamFn = new Function('userInput', `return (${paramCode});`);
+          const paramCode = generate(paramGuard.test);
+          const evalParamFn = new Function('userInput', `return Boolean(${paramCode});`);
           for (const liveVal of [0, 1, -1, 42, 0x7fffffff, -0x80000000, 'abc', undefined]) {
-            const res = evalParamFn(liveVal);
-            // QNR invariant across mod 4 / mod 8 / mod 16 families: LHS stays in quadratic residue image and never equals target
-            expect(paramAllowed).toContain(res | 0);
-            expect(res === paramGuard.test.right.value).toBe(false);
+            expect(evalParamFn(liveVal)).toBe(false);
           }
 
           // 2. 0-param standard function binding: arguments.length
           const argsGuard = createSotaMbaPredicate(seed, fnIndex);
-          const argsCode = generate(argsGuard.test.left);
-          const argsAllowed = allowedResidues(argsCode, argsGuard.test.right.value);
+          const argsCode = generate(argsGuard.test);
           expect(argsCode).toContain('arguments.length');
           expect(argsCode).not.toContain('String');
-          const evalArgsFn = new Function(`return (${argsCode});`);
+          const evalArgsFn = new Function(`return Boolean(${argsCode});`);
           for (const args of [[], [1], [1, 2, 3]]) {
-            const res = evalArgsFn(...args);
-            expect(argsAllowed).toContain(res | 0);
-            expect(res === argsGuard.test.right.value).toBe(false);
+            expect(evalArgsFn(...args)).toBe(false);
           }
 
           // 3. 0-param arrow function binding: (typeof globalThis).length
           const arrowGuard = createSotaMbaPredicate(seed, fnIndex, undefined, undefined, true);
-          const arrowCode = generate(arrowGuard.test.left);
-          const arrowAllowed = allowedResidues(arrowCode, arrowGuard.test.right.value);
+          const arrowCode = generate(arrowGuard.test);
           expect(arrowCode).toContain('globalThis');
           expect(arrowCode).not.toContain('String');
-          const evalArrowFn = new Function(`return (${arrowCode});`);
-          const arrowRes = evalArrowFn();
-          expect(arrowAllowed).toContain(arrowRes | 0);
-          expect(arrowRes === arrowGuard.test.right.value).toBe(false);
+          const evalArrowFn = new Function(`return Boolean(${arrowCode});`);
+          expect(evalArrowFn()).toBe(false);
         }
       }
     });
@@ -1038,28 +1031,39 @@ describe('AST & Call-Graph Transformation Engine', () => {
       let coldGuardFound = false;
       let stringIdentifierFound = false;
       let liveParamFound = false;
-      let maxSmiComparisonFound = false;
+      let imulComparisonFound = false;
 
       walk.simple(ast, {
         FunctionDeclaration(fnNode: any) {
           if (fnNode.id?.name !== 'verifyToken') return;
           const firstParamName = fnNode.params?.[0]?.name;
           for (const stmt of fnNode.body?.body || []) {
-            if (
-              stmt.type === 'IfStatement' &&
-              stmt.test?.type === 'BinaryExpression' &&
-              stmt.test.operator === '===' &&
-              stmt.test.right?.type === 'Literal' &&
-              typeof stmt.test.right.value === 'number'
-            ) {
-              coldGuardFound = true;
-              maxSmiComparisonFound = true;
-              walk.simple(stmt.test, {
-                Identifier(id: any) {
-                  if (id.name === 'String') stringIdentifierFound = true;
-                  if (firstParamName && id.name === firstParamName) liveParamFound = true;
-                },
-              });
+            if (stmt.type === 'IfStatement' && stmt.test) {
+              const isStaticLitEq =
+                stmt.test.type === 'BinaryExpression' &&
+                stmt.test.operator === '===' &&
+                stmt.test.right?.type === 'Literal';
+              if (
+                !isStaticLitEq &&
+                (stmt.test.type === 'BinaryExpression' || stmt.test.type === 'LogicalExpression')
+              ) {
+                coldGuardFound = true;
+                walk.simple(stmt.test, {
+                  Identifier(id: any) {
+                    if (id.name === 'String') stringIdentifierFound = true;
+                    if (firstParamName && id.name === firstParamName) liveParamFound = true;
+                  },
+                  CallExpression(call: any) {
+                    if (
+                      call.callee?.type === 'MemberExpression' &&
+                      call.callee.object?.name === 'Math' &&
+                      call.callee.property?.name === 'imul'
+                    ) {
+                      imulComparisonFound = true;
+                    }
+                  },
+                });
+              }
             }
           }
         },
@@ -1068,14 +1072,14 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(coldGuardFound).toBe(true);
       expect(stringIdentifierFound).toBe(false);
       expect(liveParamFound).toBe(true);
-      expect(maxSmiComparisonFound).toBe(true);
+      expect(imulComparisonFound).toBe(true);
 
       const fn = new Function(res.code);
       expect(fn()).toBe('TOKEN_VALID:60');
 
       const instrumentedCode = res.code.replace(
-        /endpoint:"\/api\/v2\/auth\/admin-bypass"/g,
-        'endpoint:(()=>{throw new Error("GUARD_BRANCH_EXECUTED");})()'
+        /if\s*\(([^)]+)\)\{return\s+([^;]+);\}/,
+        'if($1){throw new Error("GUARD_BRANCH_EXECUTED");}'
       );
       const instrumentedFn = new Function(instrumentedCode);
       expect(() => instrumentedFn()).not.toThrow();

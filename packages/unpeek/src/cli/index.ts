@@ -15,7 +15,7 @@ import { protectProject } from '../core/protect.js';
 import { checkProject } from '../core/check.js';
 import { symbolicateStackTrace } from '../core/vlq.js';
 
-const VERSION = '4.0.1';
+const VERSION = '4.1.0';
 let cachedPackageVersion: string | undefined;
 
 export function getPackageVersion(): string {
@@ -72,7 +72,7 @@ function printHelp(): void {
     '',
     '  Usage:',
     '    unpeek init [--dry-run] [--profile <name>]   wire postbuild and the .unpeek-maps/ vault',
-    '    unpeek protect [options]                     protect client bundles in place (Tier 1 default: <2% CPU, <15% Gzip)',
+    '    unpeek protect [options]                     protect client bundles in place (Tier 2 default: <2% CPU, <15% Gzip)',
     '    unpeek check [options]                       read-only CI gate for leaks, ignores, budget, and CSP',
     '    unpeek symbolicate [options]                 resolve stack traces locally using .unpeek-maps/',
     '',
@@ -89,7 +89,7 @@ function printHelp(): void {
     '    --min-string-length <num>      minimum string length for the vault (default: 4)',
     '    --private-maps-dir <dir>       vault directory (default: .unpeek-maps)',
     '    --no-shield                    skip the runtime anti-tamper shield',
-    '    --aggressive                   enable Tier 2 aggressive protection (Micro-VM & WASM KDF)',
+    '    --aggressive                   enable Tier 3 strict protection (Micro-VM & WASM KDF)',
     '',
     '  Options (check):',
     '    --out-dir <dir>                explicit client output directory',
@@ -108,8 +108,9 @@ function printHelp(): void {
     '    -v, --version                  show version',
     '',
     '  Tiers:',
-    '    Tier 1 (default)               call-graph hot-path exemption (<2% CPU, <15% Gzip)',
-    '    Tier 2 (--aggressive)          zero plaintext exposure via Micro-VM & WASM KDF',
+    '    Tier 1 (minimal)               call-graph hot-path exemption (<2% CPU, <15% Gzip)',
+    '    Tier 2 (recommended, default)  string vault & cold-flow protection (<2% CPU, <15% Gzip)',
+    '    Tier 3 (strict / --aggressive) zero plaintext exposure via Micro-VM & WASM KDF',
   ].join('\n');
   console.log(helpText);
 }
@@ -123,9 +124,22 @@ function printSummaryTable(summary: ProtectSummary): void {
   const sign = summary.gzipDeltaPercent > 0 ? '+' : '';
   const gzip = `${formatBytes(summary.originalGzipBytes)} -> ${formatBytes(summary.protectedGzipBytes)}  ${sign}${summary.gzipDeltaPercent}%`;
 
-  const tierLabel = summary.aggressive
-    ? 'Tier 2 (--aggressive: Micro-VM & WASM KDF)'
-    : 'Tier 1 (default: <2% CPU, <15% Gzip)';
+  const effectiveTier =
+    summary.tier ??
+    (summary.aggressive || summary.profile === 'strict'
+      ? 'Tier 3'
+      : summary.profile === 'minimal'
+        ? 'Tier 1'
+        : 'Tier 2');
+  const tierLabel =
+    effectiveTier === 'Tier 1'
+      ? 'Tier 1 (minimal: <2% CPU, <15% Gzip)'
+      : effectiveTier === 'Tier 3'
+        ? 'Tier 3 (strict / --aggressive: Micro-VM & WASM KDF)'
+        : 'Tier 2 (recommended: string vault & cold-flow)';
+
+  const effectiveDeterrent = summary.deterrentMode ?? 'passive';
+  const effectiveHeadless = summary.detectHeadless ? 'on' : 'off';
 
   console.log('');
   console.log(brandBlock());
@@ -137,6 +151,7 @@ function printSummaryTable(summary: ProtectSummary): void {
   const projectRows: Array<[string, string]> = [
     ['framework', summary.framework],
     ['tier', tierLabel],
+    ['shield', `${effectiveDeterrent} (detectHeadless: ${effectiveHeadless})`],
   ];
   if (summary.profile) {
     projectRows.push(['profile', summary.profile]);

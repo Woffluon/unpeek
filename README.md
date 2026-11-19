@@ -61,15 +61,15 @@ flowchart TD
 ```
 
 1. **Call-Graph Hot-Path Exemption (`<2%` CPU Budget)**
-   Before modifying an AST node, [`detectHotPaths`](packages/unpeek/src/ast/index.ts) traverses the file call graph bidirectionally. Functions containing loops (`for`, `while`, `do-while`, `for-of`), array higher-order callbacks (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` tickers, React/UI render components (`useState`, `useEffect`, `createElement`), and all helper callees invoked from hot loops are flagged as hot paths. `unpeek` exempts hot loops and their callees from both opaque control-flow predicates and string vault rewriting, while protecting cold functions (such as license checks, request signers, and auth validators). V8 JIT optimization inside hot loops remains untouched.
+   Before modifying an AST node, [`detectHotPaths`](packages/unpeek/src/ast/index.ts) traverses the file call graph bidirectionally. Functions containing loops (`for`, `while`, `do-while`, `for-of`), array higher-order callbacks (`.map`, `.filter`, `.reduce`, `.forEach`), `requestAnimationFrame` tickers, React/UI render components (PascalCase components carrying a JSX `createElement`/`_jsx` or `use*` hook/HOC UI signal), and all helper callees invoked from hot loops are flagged as hot paths. `unpeek` exempts hot loops and their callees from both opaque control-flow predicates and string vault rewriting, while protecting cold functions (such as license checks, request signers, and auth validators). Source Map v3 `sourcesContent`/`names` and VLQ mappings (`sourcemap-critical.ts`) preserve `/*! @unpeek-critical */` and `critical.include` targeting even when bundlers strip comments or rename symbols. V8 JIT optimization inside hot loops remains untouched.
 2. **O(1) Const-Array & 64-Bit Salted String Vaults (`<15%` Gzip Budget)**
-   Cold string literals (`minStringLength >= 4`) are encoded with a seed-shuffled 92-character involutory ASCII permutation (`P[P[c]] = c`) or 64-bit call-site salted decoders (`computeCallSiteSalt64`) backed by a shared singleton `<1.2 KB` host-coupled WASM KDF (`env.g`/`env.m`, with a bit-identical non-linear Rivest + S-Box JS fallback), alongside an in-place re-encrypting `Uint8Array` + `TextDecoder` Shader Vault across both Tier 2 (`recommended`) and Tier 3 (`strict` / `--aggressive`). In browser and `WorkerGlobalScope` contexts, async split chunks executing before entry shield initialization resolve cleanly without cache poisoning (`d = -1` removed), while bare non-browser VMs (`node:vm` without `window`/`document`/`self`) and active tampering fail closed without caching.
+   Cold string literals (`minStringLength >= 4`) are encoded with a seed-shuffled 92-character involutory ASCII permutation (`P[P[c]] = c`) or 64-bit call-site salted decoders (`computeCallSiteSalt64`) backed by a shared singleton `<1.2 KB` host-coupled WASM KDF (`env.g`/`env.m` with masked host imports `gMask`/`pcMask` and a bit-identical non-linear Rivest + S-Box JS fallback), alongside a shield-coupled, in-place re-encrypting `Uint8Array` + `TextDecoder` Shader Vault across both Tier 2 (`recommended`) and Tier 3 (`strict` / `--aggressive`). Universal binary/Base64 WASM payloads (`AGFzbQE`), binary `data:` URIs, and large pure Base64 blobs are exempted from vault double-encoding. Async tolerance for `sv === void 0` is narrowed to genuine loading DOM (`document.scripts.length > 0 && document.readyState !== 'complete'`) or Web Worker (`self.importScripts`) contexts without cache poisoning (`d = -1` removed), while bare non-browser VMs (`node:vm`, bare `{}`), already-complete documents without a shield, and active tampering fail closed without caching.
 3. **Order-Independent `globalThis` Shield, Non-Linear MBA & Tier 3 Micro-VM v2**
-   Entry chunks inject an order-independent, `WorkerGlobalScope`-safe (`self`/`globalThis`) integrity IIFE using `Function.prototype.toString()` and `Reflect.apply` descriptor, signature, cross-call, and stack-trace `Proxy` trap checks (`verifyCodeIntegrity`). Cold paths (`coldFlow: true`) receive type-guarded `>=4`-variable semi-linear MBA + degree-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR predicates across 4 modular residue families ($\pmod 4, \pmod 8, \pmod{16}$) with alias perturbation and neutral decoy bridges; Tier 3 / `--aggressive` priority-scores `@unpeek-critical` and critical submit/validation handlers into a `globalThis`-shared 43-opcode direct-threaded Micro-VM v2 (`$step` trampoline, inter-block `$f.ac` ratchet, non-zero per-opcode handler MBA offsets, `_uVm*` self-hashing, and zero `eval()`). The response on tamper is governed by `deterrentMode`:
+   Entry chunks inject an order-independent, `WorkerGlobalScope`-safe (`self`/`globalThis`) integrity IIFE using `Function.prototype.toString()`, `Reflect.apply`, `Error.prepareStackTrace`, and `Error.prototype.stack` descriptor, signature, cross-call, and stack-trace `Proxy` trap checks (`verifyCodeIntegrity`). Cold paths (`coldFlow: true`) receive type-guarded `>=4`-variable semi-linear MBA + degree-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR predicates across 4 state- and shield-coupled predicate forms and 4 modular residue families ($\pmod 4, \pmod 8, \pmod{16}$) without fixed `=== R` suffixes, plus alias perturbation and neutral decoy bridges; Tier 3 / `--aggressive` priority-scores `@unpeek-critical` and critical submit/validation handlers into a `globalThis`-shared 43-opcode direct-threaded Micro-VM v2 (`$step` trampoline, inter-block `$f.ac` ratchet, non-zero per-opcode semantic handler biases `1..31`, 32-bit `sym_s[1]` verification, `_uVm*` self-hashing, and zero `eval()`). The response on tamper is governed by `deterrentMode`:
    - `passive` (default for both CLI `protect` and `unplugin`): Dispatches a tamper telemetry event (`unpeek:tamper`) to `self`/`globalThis` with zero console muting or audible breakage, enabling covert telemetry.
    - `gradual` (opt-in via `--gradual` or `deterrentMode: 'gradual'`): Progressively corrupts internal runtime lookups and silences `console` output, neutralizing attackers without providing an immediate crash trace to patch.
-4. **Multi-Pass Source Map Vault (`.unpeek-maps/`) & SHA-256 `debugId`**
-   Leaving `.js.map` files in a public build directory reconstructs your original TypeScript project tree inside DevTools. [`protectProject`](packages/unpeek/src/core/protect.ts) flattens ECMA-426 `.sections` index maps, composes multi-pass $M_1 \circ M_2$ VLQ mappings (`chainSourceMaps`), stamps deterministic SHA-256 `debugId` values across JS bundles and vaulted `.map` files (verified by `unpeek check`), relocates `.map` files into `.unpeek-maps/`, and strips `//# sourceMappingURL=` comments.
+4. **Multi-Pass Source Map Vault (`.unpeek-maps/`) & Automatic SHA-256 `debugId`**
+   Leaving `.js.map` files in a public build directory reconstructs your original TypeScript project tree inside DevTools. [`protectProject`](packages/unpeek/src/core/protect.ts) flattens ECMA-426 `.sections` index maps, composes multi-pass $M_1 \circ M_2$ VLQ mappings (`chainSourceMaps`), automatically stamps identical deterministic SHA-256 `debugId` values across JS bundles and vaulted `.map` files whenever `keepPrivateMaps: true` (even without a pre-existing `debugId`, verified by `unpeek check`), relocates `.map` files into `.unpeek-maps/`, and strips `//# sourceMappingURL=` comments.
 
 ---
 
@@ -111,7 +111,7 @@ npx unpeek protect
 | `--require-zero-eval` | Fail `check` if unattributed or post-protection `eval()` / `new Function()` calls exist | Disabled |
 | `--out-dir <path>` | Explicit client output directory override (e.g., `dist/assets`, `.next/static/chunks`) | Auto-detected from project framework |
 | `--seed <number>` | Deterministic 32-bit polymorphic build seed | Random per build |
-| `--aggressive` | Enable Tier 3 aggressive protection (Micro-VM v2, singleton WASM KDF, salted vault & Shader Vault) | Disabled (Tier 1 default: <2% CPU, <15% Gzip) |
+| `--aggressive` | Enable Tier 3 aggressive protection (Micro-VM v2, singleton WASM KDF, salted vault & Shader Vault) | Disabled (Tier 2 recommended default: <2% CPU, <15% Gzip) |
 | `--passive` | Use passive deterrent mode (tamper telemetry event without console muting) | Default (`passive`) |
 | `--gradual` | Use gradual deterrent mode (silences `console` and corrupts runtime state on tamper) | Disabled |
 | `--detect-headless` | Treat `navigator.webdriver` / `HeadlessChrome` signals as tamper | Disabled |
@@ -128,7 +128,7 @@ npx unpeek protect
 > - **Tier 2 (`--profile recommended` / Default):** Adds 92-char zero-escape string vault, `>=4`-var semi-linear MBA + degree-3 Rivest QNR predicates, and in-place `Uint8Array` shader vault.
 > - **Tier 3 (`--profile strict` / `--aggressive`):** Targets `@unpeek-critical` enclaves and `critical.include` patterns with the 43-opcode direct-threaded Micro-VM v2, shared `<1.2 KB` host-coupled WASM KDF (with bit-identical JS fallback), 64-bit call-site salted decoders, and CWE-540 path scrubbing.
 >
-> Programmatic execution through `protectProject(options)` supports `tier`, `critical`, `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, `aggressive`, `scrubPaths`, and `cwd`. Bundler plugins run at lifecycle-safe post-minify hooks (Vite `enforce: 'post'` `generateBundle` + `worker.plugins`, Webpack/Rspack `processAssets`, esbuild `onEnd`, Rollup `renderChunk`, Next.js `.next/build-manifest.json`), and Service Workers / Web Workers (`sw.js`, `*.worker.js`) are isolated by default unless `target: 'worker'`.
+> Programmatic execution through `protectProject(options)` supports `tier`, `critical`, `seed`, `minStringLength`, `privateMapsDir`, `injectRuntimeShield`, `deterrentMode`, `detectHeadless`, `aggressive`, `scrubPaths`, and `cwd`; `unpeek protect` prints the effective `tier` (`Tier 1`/`Tier 2`/`Tier 3`) and `shield` (`deterrentMode` and `detectHeadless`) rows in its summary output. Bundler plugins run at lifecycle-safe post-minify hooks (Vite `enforce: 'post'` `generateBundle` + `worker.plugins`, Webpack/Rspack `processAssets`, esbuild `onEnd`, Rollup `renderChunk`, Next.js `.next/build-manifest.json`), and Service Workers / Web Workers (`sw.js`, `*.worker.js`) are isolated by default unless `target: 'worker'`.
 
 > [!IMPORTANT]
 > **Native CommonJS & ESM Dual-Package Support:**
@@ -272,6 +272,8 @@ export default defineConfig({
   // Protection preset ('minimal' | 'recommended' | 'strict') & tier ('Tier 1' | 'Tier 2' | 'Tier 3')
   profile: 'recommended',
   tier: 'Tier 2',
+  // Optional deterministic 32-bit build seed (finite number)
+  seed: 0x42f00d,
   coldFlow: true,
 
   // Tier 3 critical enclave targeting (@unpeek-critical / include patterns)
@@ -289,7 +291,7 @@ export default defineConfig({
   // Public asset directories
   publicDirs: ['public', 'static'],
 
-  // Inclusion and exclusion glob filters
+  // Inclusion and exclusion glob filters (applied in CLI scanClientBundles & unplugin)
   filter: {
     include: [],
     exclude: ['node_modules/**', '**/*.test.*', '**/*.spec.*'],
@@ -338,6 +340,12 @@ export default defineConfig({
     excludePrefixes: ['data-', 'aria-'],
     // Regular expression patterns to preserve
     excludePatterns: [/^on[A-Z]/],
+  },
+
+  // Runtime anti-tamper shield options
+  shield: {
+    deterrentMode: 'passive',
+    detectHeadless: false,
   },
 
   // Private source map vault options
@@ -390,7 +398,7 @@ For JSON configurations (`unpeek.config.json`):
 
 ## `.unpeek-maps/` Source Map Vault & Sentry Workflow
 
-When `keepPrivateMaps` is enabled (the default), `unpeek` relocates all `.js.map` files from your public output directory into `.unpeek-maps/` while preserving relative filenames, and strips `//# sourceMappingURL=` directives from public `.js` chunks.
+When `keepPrivateMaps` is enabled (the default), `unpeek` relocates all `.js.map` files from your public output directory into `.unpeek-maps/` while preserving relative filenames, automatically generates identical deterministic SHA-256 `debugId` stamps across the protected `.js` bundle and vaulted `.map` file (even when no pre-existing `debugId` existed), resolves `/*! @unpeek-critical */` annotations via Source Map v3 when bundlers strip comments, and strips `//# sourceMappingURL=` directives from public `.js` chunks.
 
 > [!CAUTION]
 > **Container Security Advisory (`.dockerignore`):**

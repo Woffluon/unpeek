@@ -31,6 +31,9 @@ export function computeNormalizedIntegrityHash(source: string, seed = 0): number
 }
 
 const NATIVE_BUILTIN_RE = /^function (\w+)\(\)\s*\{\s*\[native code\]\s*\}$/;
+const STACK_GETTER_RE = /^function (?:get )?stack\(\)\s*\{\s*\[native code\]\s*\}$/;
+const STACK_SETTER_RE = /^function (?:set )?stack\(\)\s*\{\s*\[native code\]\s*\}$/;
+const NATIVE_ANON_OR_STACK_RE = /^function (?:(?:get )?stack)?\(\)\s*\{\s*\[native code\]\s*\}$/;
 
 function hasTamperedDescriptor(obj: object | null | undefined, key: string): boolean {
   try {
@@ -78,40 +81,93 @@ function isNativeBuiltinSignature(
 function probeThrowsCleanTypeError(
   fn: (...args: any[]) => unknown,
   thisArg: unknown,
-  args: unknown[]
+  args: unknown[],
+  toStr: (...args: any[]) => unknown,
+  stackProtoDesc?: PropertyDescriptor
 ): boolean {
-  const refLine = (new Error().stack || '').split('\n')[1] || '';
-  const refMatch = /^\s*at\s+([^\s(]+)\s*\(/.exec(refLine);
-  const callerMarker = refMatch ? `\n    at ${refMatch[1]} (` : '';
+  const errCtor = Error as unknown as { prepareStackTrace?: unknown };
+  const prevPrepare = errCtor.prepareStackTrace;
+  let ok = false;
+  let restoreFailed = false;
   try {
-    Reflect.apply(fn, thisArg, args);
-    return false;
-  } catch (err) {
-    const isTypeError =
-      err instanceof TypeError ||
-      (err !== null &&
-        typeof err === 'object' &&
-        (err as { name?: unknown }).name === 'TypeError');
-    if (!isTypeError) {
-      return false;
-    }
-    const stack =
-      err !== null && typeof err === 'object' && typeof (err as Error).stack === 'string'
-        ? (err as Error).stack!
-        : '';
-    if (stack && callerMarker && stack.includes(callerMarker)) {
-      const head = stack.slice(0, stack.indexOf(callerMarker));
-      if (
-        /(?:Object|Proxy)\.apply\b/.test(head) ||
-        /\n    at (?!.* \(<anonymous>\)$)/m.test(head)
-      ) {
+    if (prevPrepare !== undefined) {
+      if (typeof process === 'undefined') {
         return false;
       }
-    } else if (stack && /(?:Object|Proxy)\.apply\b/.test(stack)) {
-      return false;
+      errCtor.prepareStackTrace = undefined;
     }
-    return true;
+    const refOwnStackDesc = Object.getOwnPropertyDescriptor(new Error(), 'stack');
+    const refLine = (new Error().stack || '').split('\n')[1] || '';
+    const refMatch = /^\s*at\s+([^\s(]+)\s*\(/.exec(refLine);
+    const callerMarker = refMatch ? `\n    at ${refMatch[1]} (` : '';
+    try {
+      Reflect.apply(fn, thisArg, args);
+      return false;
+    } catch (err) {
+      if (errCtor.prepareStackTrace !== undefined) {
+        if (typeof process === 'undefined') {
+          return false;
+        }
+        errCtor.prepareStackTrace = undefined;
+      }
+      const isTypeError =
+        err instanceof TypeError ||
+        (err !== null &&
+          typeof err === 'object' &&
+          (err as { name?: unknown }).name === 'TypeError');
+      if (!isTypeError || err === null || typeof err !== 'object') {
+        return false;
+      }
+      const ownDesc = Object.getOwnPropertyDescriptor(err, 'stack');
+      if (ownDesc) {
+        if (
+          'value' in ownDesc ||
+          typeof ownDesc.get !== 'function' ||
+          Reflect.has(ownDesc.get, 'prototype') ||
+          !refOwnStackDesc?.get ||
+          ownDesc.get.name !== '' ||
+          ownDesc.get.length !== 0
+        ) {
+          return false;
+        }
+        const getterSrc = Reflect.apply(toStr, ownDesc.get, []);
+        if (typeof getterSrc !== 'string' || !NATIVE_ANON_OR_STACK_RE.test(getterSrc)) {
+          return false;
+        }
+      }
+      const stack = stackProtoDesc?.get
+        ? Reflect.apply(stackProtoDesc.get, err, [])
+        : ownDesc?.get
+          ? Reflect.apply(ownDesc.get, err, [])
+          : (err as Error).stack;
+      if (typeof stack !== 'string' || stack.length === 0 || !stack.includes('\n    at ')) {
+        return false;
+      }
+      if (callerMarker && stack.includes(callerMarker)) {
+        const head = stack.slice(0, stack.indexOf(callerMarker));
+        if (
+          /(?:Object|Proxy)\.apply\b/.test(head) ||
+          /\n    at (?!.* \(<anonymous>\)$)/m.test(head)
+        ) {
+          return false;
+        }
+      } else if (/(?:Object|Proxy)\.apply\b/.test(stack)) {
+        return false;
+      }
+      ok = true;
+    }
+  } catch {
+    return false;
+  } finally {
+    if (prevPrepare !== undefined) {
+      try {
+        errCtor.prepareStackTrace = prevPrepare;
+      } catch {
+        restoreFailed = true;
+      }
+    }
   }
+  return ok && !restoreFailed;
 }
 
 /**
@@ -123,11 +179,16 @@ export function isNativeDescriptorIntact(): boolean {
   if (typeof Reflect === 'undefined' || typeof Reflect.apply !== 'function') {
     return false;
   }
+  const errCtor = Error as unknown as { prepareStackTrace?: unknown };
   if (
     hasTamperedDescriptor(Function.prototype, 'toString') ||
     hasTamperedDescriptor(Function.prototype, 'call') ||
-    hasTamperedDescriptor(Reflect, 'apply')
+    hasTamperedDescriptor(Reflect, 'apply') ||
+    hasTamperedDescriptor(Error, 'prepareStackTrace')
   ) {
+    return false;
+  }
+  if (typeof process === 'undefined' && errCtor.prepareStackTrace !== undefined) {
     return false;
   }
   const toStr = Function.prototype.toString;
@@ -140,10 +201,44 @@ export function isNativeDescriptorIntact(): boolean {
   ) {
     return false;
   }
+  const stackProtoDesc = Object.getOwnPropertyDescriptor(Error.prototype, 'stack');
+  if (stackProtoDesc) {
+    if (
+      typeof stackProtoDesc.get !== 'function' ||
+      Reflect.has(stackProtoDesc.get, 'prototype')
+    ) {
+      return false;
+    }
+    try {
+      const getSrc = reflectApply(toStr, stackProtoDesc.get, []);
+      if (typeof getSrc !== 'string' || !STACK_GETTER_RE.test(getSrc)) {
+        return false;
+      }
+      if (stackProtoDesc.set !== undefined) {
+        if (
+          typeof stackProtoDesc.set !== 'function' ||
+          Reflect.has(stackProtoDesc.set, 'prototype')
+        ) {
+          return false;
+        }
+        const setSrc = reflectApply(toStr, stackProtoDesc.set, []);
+        if (typeof setSrc !== 'string' || !STACK_SETTER_RE.test(setSrc)) {
+          return false;
+        }
+      }
+    } catch {
+      return false;
+    }
+    if (hasTamperedDescriptor(Object.getPrototypeOf(Error.prototype), 'stack')) {
+      return false;
+    }
+  } else if (hasTamperedDescriptor(Error.prototype, 'stack')) {
+    return false;
+  }
   if (
-    !probeThrowsCleanTypeError(Object.getOwnPropertyDescriptor, null, []) ||
-    !probeThrowsCleanTypeError(toStr, { toString() {} }, []) ||
-    !probeThrowsCleanTypeError(reflectApply, toStr, [null, toStr, []])
+    !probeThrowsCleanTypeError(Object.getOwnPropertyDescriptor, null, [], toStr, stackProtoDesc) ||
+    !probeThrowsCleanTypeError(toStr, { toString() {} }, [], toStr, stackProtoDesc) ||
+    !probeThrowsCleanTypeError(reflectApply, toStr, [null, toStr, []], toStr, stackProtoDesc)
   ) {
     return false;
   }
