@@ -305,9 +305,11 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
   const { framework, outDir } = detectTargetFramework(cwd, options.outDir, config);
 
   const seed =
-    typeof options.seed === 'number'
+    typeof options.seed === 'number' && Number.isFinite(options.seed)
       ? options.seed
-      : Math.floor(Math.random() * 0x7fffffff) || 0x5f3759df;
+      : typeof config.seed === 'number' && Number.isFinite(config.seed)
+        ? config.seed
+        : Math.floor(Math.random() * 0x7fffffff) || 0x5f3759df;
   const dryRun = Boolean(options.dryRun);
   const keepPrivateMaps = options.keepPrivateMaps ?? config.sourcemaps?.keepPrivate ?? true;
   const privateMapsDir = options.privateMapsDir ?? config.sourcemaps?.vaultDir ?? '.unpeek-maps';
@@ -401,6 +403,9 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
       allOrigBufs.push(origBuf);
 
       const relPath = allRelPaths[i];
+      const originalMap = keepPrivateMaps
+        ? readOriginalSourceMapForFile(filePath, relPath, vaultResult.vaultDir, deferVaultWrites)
+        : undefined;
       const preExistingHits = countPreExistingEvalCalls(codeToTransform);
       const isEntry = isEntryChunk(relPath, i, allRelPaths, manifestEntries, isWorkerTarget);
       const shouldInjectShield = injectRuntimeShield && isEntry;
@@ -414,15 +419,16 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
         shieldCoupled: injectRuntimeShield,
         windowKeySymbol: masterSym,
         expectedDelta: masterShield?.expectedDelta,
+        expectedStateHash: masterShield?.expectedStateHash,
+        originalSourceMap: originalMap,
         deterrentMode,
         detectHeadless,
         aggressive,
         scrubPaths,
         config,
+        generateMap: keepPrivateMaps,
+        rootDir: cwd,
       };
-      (transformOptions as { generateMap?: boolean; rootDir?: string }).generateMap =
-        keepPrivateMaps;
-      (transformOptions as { generateMap?: boolean; rootDir?: string }).rootDir = cwd;
       const result = transformJavaScript(codeToTransform, transformOptions);
 
       if (result.skippedReason === 'parse-error') {
@@ -470,9 +476,6 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
         finalCode = `${prefix}${finalCode}`;
       }
 
-      const originalMap = keepPrivateMaps
-        ? readOriginalSourceMapForFile(filePath, relPath, vaultResult.vaultDir, deferVaultWrites)
-        : undefined;
       const rawTransformMap = (result as { sourceMap?: RawSourceMap }).sourceMap;
       const shiftedTransformMap = rawTransformMap
         ? shiftSourceMapLines(rawTransformMap, preambleLineOffset)
@@ -489,9 +492,12 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
 
       const originalMapDebugId = originalMap?.debugId ?? originalMap?.debug_id;
       const hadDebugId = Boolean(fileDebugId || originalMapDebugId || result.debugId);
+      const shouldMintDebugId =
+        hadDebugId ||
+        (keepPrivateMaps && !result.skippedReason && Boolean(composedMap || originalMap));
       let mintedDebugId: string | undefined;
 
-      if (hadDebugId) {
+      if (shouldMintDebugId) {
         const codeWithoutDebugId = stripDebugIdComments(finalCode);
         mintedDebugId = computeDeterministicDebugId(
           codeWithoutDebugId,
@@ -573,8 +579,9 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
           : fs.existsSync(decodedMapPath)
             ? decodedMapPath
             : vaultedMapPath;
-        if (map && fs.existsSync(targetMapPath)) {
+        if (map) {
           try {
+            fs.mkdirSync(path.dirname(targetMapPath), { recursive: true });
             fs.writeFileSync(targetMapPath, JSON.stringify(map), 'utf8');
           } catch {
             // ignore write error on vaulted map
@@ -671,6 +678,8 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
     seed,
     tier: resolvedTier,
     aggressive,
+    deterrentMode,
+    detectHeadless,
     dockerIgnoreMissing: vaultResult.dockerIgnoreMissing,
     dryRun,
     profile: effectiveProfile,

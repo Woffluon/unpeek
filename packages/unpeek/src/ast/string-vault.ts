@@ -12,6 +12,8 @@ import {
 } from '../runtime/index.js';
 import { deriveWindowKeySymbol } from '../internal/runtime.js';
 import {
+  NARROWED_ASYNC_BR_DECL,
+  buildRivestDeltaExpr,
   computeCallSiteSalt,
   createSaltedDecryptorFnAst,
   createSaltedVaultHelperAst,
@@ -247,6 +249,7 @@ function isEligibleHotLiteral(
   excludeUiClasses = true
 ): boolean {
   if (val.length < minLen || activeDirectives.has(val)) return false;
+  if (isBinaryOrBase64Payload(val)) return false;
   if (isReactDomSpecialProp(val, node, parent, customReserved)) return false;
   if (isTailwindNoise(val)) return false;
   if (isSvgPathString(val, parent)) return false;
@@ -287,11 +290,7 @@ function isEligibleHotLiteral(
       a.type === 'FunctionExpression' ||
       a.type === 'ArrowFunctionExpression'
     ) {
-      if (a.id?.name && /^[A-Z]/.test(a.id.name)) {
-        isInsideRender = true;
-        break;
-      }
-      if (a._unpeekIsComponent) {
+      if (Boolean(a._unpeekIsComponent)) {
         isInsideRender = true;
         break;
       }
@@ -350,9 +349,26 @@ export function isInsideLoopOrSerialized(ancestors: any[]): boolean {
   return false;
 }
 
+const BINARY_DATA_URI_RE =
+  /^data:(?:application\/(?:wasm|octet-stream|pdf|zip|gzip|font-[a-z0-9-]+)|image\/|font\/|audio\/|video\/)/i;
+const PURE_BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * Detects universal WASM Base64 headers, binary data: URIs, and large pure Base64 binary blobs
+ * so they are never double-encoded into ShaderVault or StringVault.
+ */
+export function isBinaryOrBase64Payload(val: string): boolean {
+  if (val.startsWith('AGFzbQE')) return true;
+  if (BINARY_DATA_URI_RE.test(val)) return true;
+  if (val.length >= 4096 && !/\s/.test(val) && PURE_BASE64_RE.test(val)) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Identifies WGSL/GLSL shaders and oversized (>=256 char) payload buffers eligible for Shader Vault,
- * exempting direct loops, serialized workers, UI class strings, SVG paths, and reserved properties.
+ * exempting binary/Base64 blobs, direct loops, serialized workers, UI class strings, SVG paths, and reserved properties.
  */
 export function isShaderPayload(
   val: string,
@@ -363,6 +379,7 @@ export function isShaderPayload(
   isHotExempt: boolean,
   customReserved?: Set<string>
 ): boolean {
+  if (isBinaryOrBase64Payload(val)) return false;
   if (isInsideLoopOrSerialized(ancestors)) return false;
   if (parent?.type === 'Property' && parent.key === node && !parent.computed) return false;
   if (isReservedProp(val, customReserved)) return false;
@@ -412,6 +429,7 @@ export function shouldEncryptString(
   customReserved?: Set<string>
 ): boolean {
   if (val.length < minLen || activeDirectives.has(val)) return false;
+  if (isBinaryOrBase64Payload(val)) return false;
   if (isReservedProp(val, customReserved)) return false;
   if (isSvgPathString(val, parent)) return false;
   if (isTailwindNoise(val)) return false;
@@ -507,10 +525,63 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 export function createShaderVaultAst(
   shaderVarName: string,
   shaderPayloads: string[],
-  seed: number
+  seed: number,
+  windowKeySymbol?: string,
+  expectedDelta?: number,
+  shieldCoupled = false
 ): acorn.VariableDeclaration {
   const sSeed = seed >>> 0;
-  const fnCode = `(function f(B){var c=Function.prototype.toString.call(f),h=0x811c9dc5;for(var i=0;i<c.length;i++)h=Math.imul(h^c.charCodeAt(i),0x01000193)>>>0;var S=h^${sSeed},b=B.map(function(s){var n=typeof atob=="function"?atob(s):typeof Buffer<"u"?Buffer.from(s,"base64").toString("binary"):"",u=new Uint8Array(n.length);for(var i=0;i<n.length;i++)u[i]=n.charCodeAt(i);return u;}),d=typeof TextDecoder<"u"?new TextDecoder():null;function x(u,i){for(var r=(S^Math.imul(i+1,0x9e3779b1))|0,j=0;j<u.length;j++){r=(Math.imul(r^(j+1),0x45d9f3b)+0x85ebca6b)|0;u[j]^=(r>>>16)&255;}}return function(i){var u=b[i];x(u,i);try{return d?d.decode(u):String.fromCharCode.apply(null,u);}finally{x(u,i);}};})`;
+  let fnCode: string;
+  let ed = 0;
+
+  if (!shieldCoupled) {
+    fnCode = `(function f(B){var c=Function.prototype.toString.call(f),h=0x811c9dc5;for(var i=0;i<c.length;i++)h=Math.imul(h^c.charCodeAt(i),0x01000193)>>>0;var S=h^${sSeed},b=B.map(function(s){var n=typeof atob=="function"?atob(s):typeof Buffer<"u"?Buffer.from(s,"base64").toString("binary"):"",u=new Uint8Array(n.length);for(var i=0;i<n.length;i++)u[i]=n.charCodeAt(i);return u;}),d=typeof TextDecoder<"u"?new TextDecoder():null;function x(u,i){for(var r=(S^Math.imul(i+1,0x9e3779b1))|0,j=0;j<u.length;j++){r=(Math.imul(r^(j+1),0x45d9f3b)+0x85ebca6b)|0;u[j]^=(r>>>16)&255;}}return function(i){var u=b[i];x(u,i);try{return d?d.decode(u):String.fromCharCode.apply(null,u);}finally{x(u,i);}};})`;
+  } else {
+    const sym = windowKeySymbol ?? deriveWindowKeySymbol(sSeed);
+    let expDelta = expectedDelta;
+    if (expDelta === undefined) {
+      expDelta =
+        generateRuntimeShield({
+          seed: sSeed,
+          windowKeySymbol: sym,
+        }).expectedDelta ?? 0;
+    }
+    ed = expDelta & 0xffff;
+    const edInit = buildRivestDeltaExpr(sSeed, ed, '_ed');
+    const propAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(sym)
+      ? `.${sym}`
+      : `[${JSON.stringify(sym)}]`;
+    const stateSym = `${sym}_s`;
+    const stateAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(stateSym)
+      ? `.${stateSym}`
+      : `[${JSON.stringify(stateSym)}]`;
+    const flagSym = `${sym}_t`;
+    const flagAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(flagSym)
+      ? `.${flagSym}`
+      : `[${JSON.stringify(flagSym)}]`;
+    const tkExpr = `['__','unp','eek_t','ampered'].join('')`;
+
+    fnCode =
+      `(function f(B){` +
+      `var c=Function.prototype.toString.call(f),h=0x811c9dc5;` +
+      `for(var i=0;i<c.length;i++)h=Math.imul(h^c.charCodeAt(i),0x01000193)>>>0;` +
+      `${edInit}` +
+      `var _tk=${tkExpr},_sc=[],b=B.map(function(s){var n=typeof atob=="function"?atob(s):typeof Buffer<"u"?Buffer.from(s,"base64").toString("binary"):"",u=new Uint8Array(n.length);for(var i=0;i<n.length;i++)u[i]=n.charCodeAt(i);return u;}),d=typeof TextDecoder<"u"?new TextDecoder():null;` +
+      `function x(u,i,S){for(var r=(S^Math.imul(i+1,0x9e3779b1))|0,j=0;j<u.length;j++){r=(Math.imul(r^(j+1),0x45d9f3b)+0x85ebca6b)|0;u[j]^=(r>>>16)&255;}}` +
+      `return function(i){` +
+      `var G=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof self<"u"?self:this;` +
+      `var w=typeof window<"u"?window:typeof self<"u"?self:0;` +
+      `${NARROWED_ASYNC_BR_DECL}` +
+      `var sv=G&&G${propAccess}!==void 0?G${propAccess}:w&&w${propAccess}!==void 0?w${propAccess}:void 0;` +
+      `var sr=G&&G${stateAccess}?G${stateAccess}:w&&w${stateAccess}?w${stateAccess}:void 0;` +
+      `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||(sr&&sr[0]===2)||((""._u||0)!==0)||(sv===void 0?!_br:sv!==_ed);` +
+      `if(!tm&&sv===_ed&&(i in _sc))return _sc[i];` +
+      `var S=(h^${sSeed}^_ed^(tm?(((Math.imul(i+1,0x9e3779b1)^0x5a5b)&65535)|1):0))>>>0;` +
+      `var u=b[i];x(u,i,S);` +
+      `try{var o=d?d.decode(u):String.fromCharCode.apply(null,u);if(!tm&&sv===_ed)_sc[i]=o;return o;}finally{x(u,i,S);}` +
+      `};})`;
+  }
+
   const parsedProgram = acorn.parse(fnCode, {
     ecmaVersion: 'latest',
     sourceType: 'script',
@@ -518,7 +589,7 @@ export function createShaderVaultAst(
   const firstStmt = parsedProgram.body[0] as acorn.ExpressionStatement;
   const fnAst = firstStmt.expression;
   const buildH = computeIntegrityHash(generateCompactJs(fnAst), 0);
-  const S = (buildH ^ sSeed) >>> 0;
+  const S = (buildH ^ sSeed ^ (shieldCoupled ? ed : 0)) >>> 0;
 
   const textEncoder = new TextEncoder();
   const b64List: string[] = [];
@@ -630,7 +701,7 @@ export function applyStringVault(
           d.id?.type === 'Identifier' &&
           typeof d.id.name === 'string' &&
           (d.id.name.startsWith('_uC') ||
-            d.id.name.startsWith('_uD') ||
+            (d.id.name.startsWith('_uD') && !d.id.name.startsWith('_uDec')) ||
             d.id.name === decryptFnName ||
             d.id.name === cacheVarName ||
             (d.init?.type === 'CallExpression' &&
@@ -1121,7 +1192,10 @@ export function applyStringVault(
     const shaderHelperStmt = createShaderVaultAst(
       shaderVarName,
       shaderPayloads,
-      seed
+      seed,
+      sym,
+      expDelta,
+      shieldCoupled
     );
     ast.body.splice(insertIdx++, 0, shaderHelperStmt);
   }

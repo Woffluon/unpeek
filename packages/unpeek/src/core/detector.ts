@@ -302,6 +302,86 @@ export function detectTargetFramework(
   return { framework, outDir };
 }
 
+function globBodyToRegex(pat: string): string {
+  let out = '';
+  let i = 0;
+  while (i < pat.length) {
+    const ch = pat[i];
+    if (ch === '/' && pat.slice(i, i + 4) === '/**/') {
+      out += '(?:/.+/|/)';
+      i += 4;
+      continue;
+    }
+    if (ch === '/' && pat.slice(i) === '/**') {
+      out += '/.*';
+      i = pat.length;
+      continue;
+    }
+    if (ch === '*' && pat[i + 1] === '*') {
+      if ((i === 0 || pat[i - 1] === '/') && pat[i + 2] === '/') {
+        out += '(?:.*/)?';
+        i += 3;
+      } else {
+        out += '.*';
+        i += 2;
+      }
+      continue;
+    }
+    if (ch === '*') {
+      out += '[^/]*';
+      i += 1;
+      continue;
+    }
+    if (ch === '?') {
+      out += '[^/]';
+      i += 1;
+      continue;
+    }
+    if (ch === '{') {
+      let depth = 1;
+      let j = i + 1;
+      const alts: string[] = [];
+      let segStart = j;
+      while (j < pat.length && depth > 0) {
+        if (pat[j] === '{') depth++;
+        else if (pat[j] === '}') {
+          depth--;
+          if (depth === 0) {
+            alts.push(pat.slice(segStart, j));
+            break;
+          }
+        } else if (pat[j] === ',' && depth === 1) {
+          alts.push(pat.slice(segStart, j));
+          segStart = j + 1;
+        }
+        j++;
+      }
+      if (depth === 0 && alts.length > 0) {
+        out += `(?:${alts.map(globBodyToRegex).join('|')})`;
+        i = j + 1;
+        continue;
+      }
+    }
+    out += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    i += 1;
+  }
+  return out;
+}
+
+export function matchesGlobPattern(relPath: string, pattern: string): boolean {
+  const normPattern = pattern.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '').trim();
+  if (!normPattern) return false;
+  const normPath = relPath.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  const regex = new RegExp(`^${globBodyToRegex(normPattern)}$`);
+  if (regex.test(normPath)) {
+    return true;
+  }
+  if (!normPattern.includes('/')) {
+    return regex.test(path.posix.basename(normPath));
+  }
+  return false;
+}
+
 export function scanClientBundles(outDir: string, config?: UnpeekConfig): string[] {
   const resolvedOutDir = path.resolve(outDir);
   if (!fs.existsSync(resolvedOutDir)) {
@@ -359,6 +439,17 @@ export function scanClientBundles(outDir: string, config?: UnpeekConfig): string
             isWorkerOrServiceWorkerFile(fullPath, resolvedOutDir)
           ) {
             continue;
+          }
+          const relPath = path.relative(resolvedOutDir, fullPath).replace(/\\/g, '/');
+          if (config?.filter?.include && config.filter.include.length > 0) {
+            if (!config.filter.include.some((pattern) => matchesGlobPattern(relPath, pattern))) {
+              continue;
+            }
+          }
+          if (config?.filter?.exclude && config.filter.exclude.length > 0) {
+            if (config.filter.exclude.some((pattern) => matchesGlobPattern(relPath, pattern))) {
+              continue;
+            }
           }
           results.push(fullPath);
         }

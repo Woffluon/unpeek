@@ -57,6 +57,7 @@ export interface MicroVmResult {
 export interface MicroVmExtraOptions {
   criticalFunctionNodes?: WeakSet<acorn.Node>;
   maxFunctionsPerChunk?: number;
+  expectedStateHash?: number;
 }
 
 export interface UpvalueDescriptor {
@@ -70,6 +71,7 @@ export interface CompiledFunction {
   localCount: number;
   stateSlots?: Set<number>;
   accSlots?: Set<number>;
+  jumpTargets?: Map<number, number>;
   upvalues?: UpvalueDescriptor[];
 }
 
@@ -114,7 +116,8 @@ export function encryptBytecodeStream(
   fnSalt: number,
   vmKey: number,
   stateSlots?: Set<number>,
-  accSlots?: Set<number>
+  accSlots?: Set<number>,
+  jumpTargets?: Map<number, number>
 ): number[] {
   const len = plainBytecode.length;
   const enc = new Array<number>(len);
@@ -149,14 +152,14 @@ export function encryptBytecodeStream(
 
   if (stateSlots) {
     for (const slot of stateSlots) {
-      const targetPc = plainBytecode[slot - 1];
+      const targetPc = jumpTargets?.get(slot - 1) ?? plainBytecode[slot - 1];
       const sBefore = stAtSlot.get(slot) ?? 0;
       enc[slot] = (stateBefore[targetPc] ^ sBefore) | 0;
     }
   }
   if (accSlots) {
     for (const slot of accSlots) {
-      const targetPc = plainBytecode[slot - 2];
+      const targetPc = jumpTargets?.get(slot - 2) ?? plainBytecode[slot - 2];
       const aBefore = acAtSlot.get(slot) ?? 0;
       enc[slot] = (accBefore[targetPc] ^ aBefore) | 0;
     }
@@ -187,39 +190,44 @@ export function generateOpcodeMap(seed: number, count = OPCODE_COUNT): number[] 
   return pool.slice(0, count);
 }
 
-function computeHandlerDelta(op: number): number {
-  const delta = ((op + 1) * 7) & 31;
-  return delta === 0 ? 7 : delta;
+/**
+ * Computes a deterministic non-zero handler bias (1..31) per (seed, opcode).
+ * Immediate operands and stack offsets are biased at compile time and unbiased
+ * semantically inside each handler body via the MBA offset variable.
+ */
+export function computeHandlerBias(seed: number, op: number): number {
+  const mixed = Math.abs(mixOpSeed(seed, op * 19 + 7)) % 31;
+  return mixed + 1;
 }
 
 /**
  * Generates a per-(seed, op) polymorphic MBA offset expression over live ($f.ac, $f.p)
- * evaluating deterministically to non-zero deltaOp (1..31) across all 32-bit inputs
+ * evaluating deterministically to non-zero bias (1..31) across all 32-bit inputs
  * so every VM handler AST resists constant folding to 0 and static fingerprinting.
  */
-function makeHandlerMbaOffsetExpr(seed: number, op: number, deltaOp: number): string {
+function makeHandlerMbaOffsetExpr(seed: number, op: number, bias: number): string {
   const variant = Math.abs(mixOpSeed(seed, op * 11 + 3)) % 4;
   const c1 = mixOpSeed(seed, op * 11 + 5);
   const c2 = mixOpSeed(seed, op * 11 + 7);
   if (variant === 0) {
-    const cSum = (c1 + c2 - deltaOp) | 0;
+    const cSum = (c1 + c2 - bias) | 0;
     return `(((((($f.ac|${c1})+($f.ac&${c1}))|0)|((($f.p^${c2})+(($f.p&${c2})<<1))|0))+((((($f.ac|${c1})+($f.ac&${c1}))|0)&((($f.p^${c2})+(($f.p&${c2})<<1))|0))))-(((((($f.ac^$f.p)+(($f.ac&$f.p)<<1))|0)|${cSum})+((((($f.ac^$f.p)+(($f.ac&$f.p)<<1))|0)&${cSum})))|0))|0`;
   }
   if (variant === 1) {
-    const cSum = (c1 + c2 + deltaOp) | 0;
+    const cSum = (c1 + c2 + bias) | 0;
     return `((((($f.ac|$f.p)<<1)-($f.ac^$f.p))+${cSum})-((($f.ac^${c1})+(($f.ac&${c1})<<1))+(($f.p|${c2})+($f.p&${c2}))))|0`;
   }
   if (variant === 2) {
-    const cFold = (1 + deltaOp - c1 - c2) | 0;
+    const cFold = (1 + bias - c1 - c2) | 0;
     return `(((~$f.ac|${c1})+(~$f.ac&${c1}))+(($f.ac|$f.p)-(~$f.ac&$f.p))+(($f.p&${c2})+(~$f.p&${c2}))+${cFold})|0`;
   }
-  const cFold = (c1 - deltaOp) | 0;
+  const cFold = (c1 - bias) | 0;
   return `((((($f.ac|$f.p)-(~$f.ac&$f.p))|${c1})+((($f.ac|$f.p)-(~$f.ac&$f.p))&${c1}))-(((($f.ac&${c2})+($f.ac&~${c2}))^${cFold})+(((($f.ac&${c2})+($f.ac&~${c2}))&${cFold})<<1)))|0`;
 }
 
 function wrapHandlerWithMba(seed: number, op: number, coreBody: string, isTerminal = false): string {
-  const deltaOp = computeHandlerDelta(op);
-  const zExpr = makeHandlerMbaOffsetExpr(seed, op, deltaOp);
+  const bias = computeHandlerBias(seed, op);
+  const zExpr = makeHandlerMbaOffsetExpr(seed, op, bias);
   const shape = Math.abs(mixOpSeed(seed, op * 17 + 1)) % 3;
   const zVar = shape === 0 ? '$z0' : shape === 1 ? '$m0' : '$k0';
   const tail = isTerminal
@@ -229,28 +237,25 @@ function wrapHandlerWithMba(seed: number, op: number, coreBody: string, isTermin
       : shape === 1
         ? 'var $nx=$step($f);return $nx;'
         : 'return $f.d?void 0:$step($f);';
-  const balancedOffset = `(${zVar}-${deltaOp})`;
-  const adjustedBody = coreBody.replace(/\$Z/g, balancedOffset);
-  if (coreBody.includes('$Z')) {
-    return `function($f){var ${zVar}=${zExpr};${adjustedBody}${tail}}`;
-  }
-  return `function($f){var ${zVar}=${zExpr};$f.r=($f.r+${balancedOffset})|0;${adjustedBody}${tail}}`;
+  const adjustedBody = coreBody.replace(/\$Z/g, zVar).replace(/\$B/g, String(bias));
+  return `function($f){var ${zVar}=${zExpr};${adjustedBody}${tail}}`;
 }
 
 /**
  * Produces the CSP-safe, eval-free, direct-threaded closure-trampoline interpreter.
  * Features:
  * - Zero switch(), zero eval(), zero Function(), zero >=4-char string literals.
- * - Order-independent key derivation (never poisons with -1 when globalThis[sym] === undefined).
+ * - Order-independent key derivation with narrowed DOM/Worker async tolerance.
  * - Direct-threaded closure trampoline ($fn = $fn($f)) with inter-block accumulator ratcheting ($f.ac).
- * - Per-(seed, op) MBA-wrapped handler bodies breaking fixed AST fingerprints.
+ * - Per-(seed, op) non-zero MBA-wrapped handler bodies semantically coupled to immediate/stack offsets.
  */
 export function createInterpreterSource(
   vmHelperName: string,
   opMap: number[],
   seed = 0x9e3779b9,
   windowKeySymbol?: string,
-  expectedDelta?: number
+  expectedDelta?: number,
+  expectedStateHash?: number
 ): string {
   const opCount = opMap.length;
   const slotMap = shuffleRange(opCount, (seed ^ 0x517cc1b7) >>> 0);
@@ -279,52 +284,52 @@ export function createInterpreterSource(
       : '$a|$b';
 
   const coreHandlers: Record<number, { body: string; terminal?: boolean }> = {
-    [OP_LDC]: { body: '$f.q[($f.r++)+$Z]=$f.k[$rd($f)];' },
-    [OP_LDV]: { body: '$f.q[($f.r++)+$Z]=$f.s[$rd($f)];' },
-    [OP_STV]: { body: '$f.s[$rd($f)]=$f.q[(--$f.r)+$Z];' },
-    [OP_LDG]: { body: '$f.q[($f.r++)+$Z]=$G[$f.k[$rd($f)]];' },
-    [OP_GETP]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a[$b];' },
-    [OP_SETP]: { body: 'var $v=$f.q[--$f.r],$b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=($a[$b]=$v);' },
-    [OP_CALL]: { body: 'var $n=$rd($f)+$Z,$g=[];for(var $i=$n-1;$i>=0;$i--)$g[$i]=$f.q[--$f.r];var $fn=$f.q[--$f.r];$f.q[$f.r++]=$fn.apply(void 0,$g);' },
-    [OP_MCALL]: { body: 'var $n=$rd($f)+$Z,$g=[];for(var $i=$n-1;$i>=0;$i--)$g[$i]=$f.q[--$f.r];var $b=$f.q[--$f.r],$a=$f.q[--$f.r];$f.q[$f.r++]=$a[$b].apply($a,$g);' },
-    [OP_ADD]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a+$b;' },
-    [OP_SUB]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a-$b;' },
-    [OP_MUL]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a*$b;' },
-    [OP_XOR]: { body: `var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=${xorImpl};` },
-    [OP_AND]: { body: `var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=${andImpl};` },
-    [OP_OR]: { body: `var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=${orImpl};` },
-    [OP_SEQ]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a===$b;' },
-    [OP_LT]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a<$b;' },
-    [OP_NOT]: { body: '$f.q[($f.r-1)+$Z]=!$f.q[$f.r-1];' },
-    [OP_JMP]: { body: 'var $j=$rd($f)+$Z,$ts=$f.c[$f.p++]^$f.st,$ta=$f.c[$f.p++]^$f.ac;$f.p=$j;$f.st=$ts;$f.ac=$ta;' },
-    [OP_JZ]: { body: 'var $j=$rd($f)+$Z,$ts=$f.c[$f.p++]^$f.st,$ta=$f.c[$f.p++]^$f.ac;if(!$f.q[--$f.r]){$f.p=$j;$f.st=$ts;$f.ac=$ta;}' },
-    [OP_RET]: { body: '$f.d=1;$f.v=$f.q[(--$f.r)+$Z];', terminal: true },
-    [OP_THROW]: { body: 'throw $f.q[(--$f.r)+$Z];' },
+    [OP_LDC]: { body: '$f.q[$f.r++]=$f.k[($rd($f)-$Z)&0xffff];' },
+    [OP_LDV]: { body: '$f.q[$f.r++]=$f.s[($rd($f)-$Z)&0xffff];' },
+    [OP_STV]: { body: '$f.s[($rd($f)-$Z)&0xffff]=$f.q[--$f.r];' },
+    [OP_LDG]: { body: '$f.q[$f.r++]=$G[$f.k[($rd($f)-$Z)&0xffff]];' },
+    [OP_GETP]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a[$b];$f.r=($f.r-$B)|0;' },
+    [OP_SETP]: { body: '$f.r=($f.r+$Z)|0;var $v=$f.q[($f.r-=1)-$B],$b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=($a[$b]=$v);$f.r=($f.r-$B)|0;' },
+    [OP_CALL]: { body: 'var $n=($rd($f)-$Z)&0xffff,$g=[];for(var $i=$n-1;$i>=0;$i--)$g[$i]=$f.q[--$f.r];var $fn=$f.q[--$f.r];$f.q[$f.r++]=$fn.apply(void 0,$g);' },
+    [OP_MCALL]: { body: 'var $n=($rd($f)-$Z)&0xffff,$g=[];for(var $i=$n-1;$i>=0;$i--)$g[$i]=$f.q[--$f.r];var $b=$f.q[--$f.r],$a=$f.q[--$f.r];$f.q[$f.r++]=$a[$b].apply($a,$g);' },
+    [OP_ADD]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a+$b;$f.r=($f.r-$B)|0;' },
+    [OP_SUB]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a-$b;$f.r=($f.r-$B)|0;' },
+    [OP_MUL]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a*$b;$f.r=($f.r-$B)|0;' },
+    [OP_XOR]: { body: `$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=${xorImpl};$f.r=($f.r-$B)|0;` },
+    [OP_AND]: { body: `$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=${andImpl};$f.r=($f.r-$B)|0;` },
+    [OP_OR]: { body: `$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=${orImpl};$f.r=($f.r-$B)|0;` },
+    [OP_SEQ]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a===$b;$f.r=($f.r-$B)|0;' },
+    [OP_LT]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a<$b;$f.r=($f.r-$B)|0;' },
+    [OP_NOT]: { body: '$f.r=($f.r+$Z)|0;$f.q[$f.r-(1+$B)]=!$f.q[$f.r-(1+$B)];$f.r=($f.r-$B)|0;' },
+    [OP_JMP]: { body: 'var $j=($rd($f)-$Z)&0xffff,$ts=$f.c[$f.p++]^$f.st,$ta=$f.c[$f.p++]^$f.ac;$f.p=$j;$f.st=$ts;$f.ac=$ta;' },
+    [OP_JZ]: { body: 'var $j=($rd($f)-$Z)&0xffff,$ts=$f.c[$f.p++]^$f.st,$ta=$f.c[$f.p++]^$f.ac;if(!$f.q[--$f.r]){$f.p=$j;$f.st=$ts;$f.ac=$ta;}' },
+    [OP_RET]: { body: '$f.r=($f.r+$Z)|0;$f.d=1;$f.v=$f.q[($f.r-=1)-$B];$f.r=($f.r-$B)|0;', terminal: true },
+    [OP_THROW]: { body: '$f.r=($f.r+$Z)|0;var $tv=$f.q[($f.r-=1)-$B];$f.r=($f.r-$B)|0;throw $tv;' },
     [OP_AWAIT]: {
-      body: 'var $v=$f.q[(--$f.r)+$Z];$f.d=2;$f.v=Promise.resolve($v).then(function($w){$f.d=0;$f.q[$f.r++]=$w;return $x($f);},function($e){if($f.e.length>0){var $ex=$f.e.pop();$f.d=0;$f.r=$ex.r;$f.q[$f.r++]=$e;$f.p=$ex.p;$f.st=$ex.s;$f.ac=$ex.a;return $x($f);}throw $e;});',
+      body: '$f.r=($f.r+$Z)|0;var $v=$f.q[($f.r-=1)-$B];$f.r=($f.r-$B)|0;$f.d=2;$f.v=Promise.resolve($v).then(function($w){$f.d=0;$f.q[$f.r++]=$w;return $x($f);},function($e){if($f.e.length>0){var $ex=$f.e.pop();$f.d=0;$f.r=$ex.r;$f.q[$f.r++]=$e;$f.p=$ex.p;$f.st=$ex.s;$f.ac=$ex.a;return $x($f);}throw $e;});',
       terminal: true,
     },
-    [OP_OBJ]: { body: 'var $n=$rd($f)+$Z,$o={},$e=[];for(var $i=0;$i<$n;$i++){var $v=$f.q[--$f.r],$k0=$f.q[--$f.r];$e.push([$k0,$v]);}for(var $i=$e.length-1;$i>=0;$i--){$o[$e[$i][0]]=$e[$i][1];}$f.q[$f.r++]=$o;' },
-    [OP_ARR]: { body: 'var $n=$rd($f)+$Z,$a=[];for(var $i=$n-1;$i>=0;$i--)$a[$i]=$f.q[--$f.r];$f.q[$f.r++]=$a;' },
-    [OP_LDU]: { body: '$f.q[($f.r++)+$Z]=$f.u[$rd($f)][0]();' },
-    [OP_STU]: { body: '$f.u[$rd($f)][1]($f.q[(--$f.r)+$Z]);' },
-    [OP_DIV]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a/$b;' },
-    [OP_MOD]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a%$b;' },
-    [OP_SHL]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a<<$b;' },
-    [OP_SHR]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a>>$b;' },
-    [OP_USHR]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a>>>$b;' },
-    [OP_POW]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a**$b;' },
-    [OP_EQ]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a==$b;' },
-    [OP_TYPEOF]: { body: '$f.q[($f.r-1)+$Z]=typeof $f.q[$f.r-1];' },
-    [OP_IN]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a in $b;' },
-    [OP_INSTOF]: { body: 'var $b=$f.q[--$f.r],$a=$f.q[(--$f.r)+$Z];$f.q[$f.r++]=$a instanceof $b;' },
-    [OP_NEW]: { body: 'var $n=$rd($f)+$Z,$g=[];for(var $i=$n-1;$i>=0;$i--)$g[$i]=$f.q[--$f.r];var $fn=$f.q[--$f.r];$f.q[$f.r++]=new $fn(...$g);' },
-    [OP_THIS]: { body: '$f.q[($f.r++)+$Z]=$f.t;' },
-    [OP_POP]: { body: '--$f.r;$f.r+=$Z;' },
-    [OP_TRY]: { body: 'var $cp=$rd($f)+$Z,$cs=$f.c[$f.p++]^$f.st,$ca=$f.c[$f.p++]^$f.ac;$f.e.push({p:$cp,r:$f.r,s:$cs,a:$ca});' },
-    [OP_ENDTRY]: { body: '$f.e.pop();$f.r+=$Z;' },
-    [OP_NULLISH]: { body: 'var $v=$f.q[($f.r-1)+$Z];$f.q[$f.r-1]=($v===null||$v===void 0);' },
-    [OP_DUP]: { body: 'var $top=$f.q[($f.r-1)+$Z];$f.q[$f.r++]=$top;' },
+    [OP_OBJ]: { body: 'var $n=($rd($f)-$Z)&0xffff,$o={},$e=[];for(var $i=0;$i<$n;$i++){var $v=$f.q[--$f.r],$ky=$f.q[--$f.r];$e.push([$ky,$v]);}for(var $i=$e.length-1;$i>=0;$i--){$o[$e[$i][0]]=$e[$i][1];}$f.q[$f.r++]=$o;' },
+    [OP_ARR]: { body: 'var $n=($rd($f)-$Z)&0xffff,$a=[];for(var $i=$n-1;$i>=0;$i--)$a[$i]=$f.q[--$f.r];$f.q[$f.r++]=$a;' },
+    [OP_LDU]: { body: '$f.q[$f.r++]=$f.u[($rd($f)-$Z)&0xffff][0]();' },
+    [OP_STU]: { body: '$f.u[($rd($f)-$Z)&0xffff][1]($f.q[--$f.r]);' },
+    [OP_DIV]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a/$b;$f.r=($f.r-$B)|0;' },
+    [OP_MOD]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a%$b;$f.r=($f.r-$B)|0;' },
+    [OP_SHL]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a<<$b;$f.r=($f.r-$B)|0;' },
+    [OP_SHR]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a>>$b;$f.r=($f.r-$B)|0;' },
+    [OP_USHR]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a>>>$b;$f.r=($f.r-$B)|0;' },
+    [OP_POW]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a**$b;$f.r=($f.r-$B)|0;' },
+    [OP_EQ]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a==$b;$f.r=($f.r-$B)|0;' },
+    [OP_TYPEOF]: { body: '$f.r=($f.r+$Z)|0;$f.q[$f.r-(1+$B)]=typeof $f.q[$f.r-(1+$B)];$f.r=($f.r-$B)|0;' },
+    [OP_IN]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a in $b;$f.r=($f.r-$B)|0;' },
+    [OP_INSTOF]: { body: '$f.r=($f.r+$Z)|0;var $b=$f.q[($f.r-=1)-$B],$a=$f.q[($f.r-=1)-$B];$f.q[($f.r++)-$B]=$a instanceof $b;$f.r=($f.r-$B)|0;' },
+    [OP_NEW]: { body: 'var $n=($rd($f)-$Z)&0xffff,$g=[];for(var $i=$n-1;$i>=0;$i--)$g[$i]=$f.q[--$f.r];var $fn=$f.q[--$f.r];$f.q[$f.r++]=new $fn(...$g);' },
+    [OP_THIS]: { body: '$f.r=($f.r+$Z)|0;$f.q[($f.r++)-$B]=$f.t;$f.r=($f.r-$B)|0;' },
+    [OP_POP]: { body: '$f.r=($f.r+$Z)|0;$f.r=($f.r-(1+$B))|0;' },
+    [OP_TRY]: { body: 'var $cp=($rd($f)-$Z)&0xffff,$cs=$f.c[$f.p++]^$f.st,$ca=$f.c[$f.p++]^$f.ac;$f.e.push({p:$cp,r:$f.r,s:$cs,a:$ca});' },
+    [OP_ENDTRY]: { body: '$f.r=($f.r+$Z)|0;$f.e.pop();$f.r=($f.r-$B)|0;' },
+    [OP_NULLISH]: { body: '$f.r=($f.r+$Z)|0;var $v=$f.q[$f.r-(1+$B)];$f.q[$f.r-(1+$B)]=($v===null||$v===void 0);$f.r=($f.r-$B)|0;' },
+    [OP_DUP]: { body: '$f.r=($f.r+$Z)|0;var $top=$f.q[$f.r-(1+$B)];$f.q[($f.r++)-$B]=$top;$f.r=($f.r-$B)|0;' },
   };
 
   const handlers = new Array<string>(opCount);
@@ -335,6 +340,8 @@ export function createInterpreterSource(
 
   const hasSym = Boolean(windowKeySymbol);
   const hasExpDelta = Boolean(hasSym && expectedDelta !== undefined);
+  const hasExpHash = Boolean(hasSym && expectedStateHash !== undefined);
+  const hasDigest = hasExpDelta || hasExpHash;
   const symPropAccess = hasSym
     ? /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(windowKeySymbol!)
       ? `.${windowKeySymbol}`
@@ -352,31 +359,53 @@ export function createInterpreterSource(
     : '';
 
   const expD = hasExpDelta ? expectedDelta! & 0xffff : 0;
+  const expH = hasExpHash ? expectedStateHash! | 0 : 0;
   const seed32 = seed | 0;
   const seedU32 = seed >>> 0;
   const scopeKey = hasSym
-    ? computeFnv1aHash(`${windowKeySymbol}:${hasExpDelta ? expD : ''}`, seed) >>> 0
+    ? computeFnv1aHash(
+        `${windowKeySymbol}:${hasExpDelta ? expD : ''}${hasExpHash ? `:${expH}` : ''}`,
+        seed
+      ) >>> 0
     : 0;
   const expDigest = hasExpDelta
-    ? (Math.imul((expD ^ seed32) | 0, 0x9e3779b1) ^ ((expD << 16) | (seed32 >>> 16)) ^ 0x85ebca6b) | 0
-    : 0;
+    ? hasExpHash
+      ? (Math.imul((expD ^ expH ^ seed32) | 0, 0x9e3779b1) ^
+          ((expD << 16) | (seed32 >>> 16)) ^
+          ((expH >>> 13) | (expH << 19)) ^
+          0x85ebca6b) | 0
+      : (Math.imul((expD ^ seed32) | 0, 0x9e3779b1) ^
+          ((expD << 16) | (seed32 >>> 16)) ^
+          0x85ebca6b) | 0
+    : hasExpHash
+      ? (Math.imul((expH ^ seed32) | 0, 0x9e3779b1) ^
+          ((expH >>> 13) | (expH << 19)) ^
+          0x85ebca6b) | 0
+      : 0;
 
   // Hybrid browser-context + self-hash + order-independent tamper gate:
   // - Checks Function.prototype.toString.call($vm) and $I for pretty-printing (\n).
-  // - In browser/worker (window/document/self present), globalThis[sym] === undefined remains order-independent.
-  // - In bare node:vm harvesting (no window/document/self) with shieldCoupled active and sv === undefined, fails closed.
-  // - Active tamper (__unpeek_tampered / sym_t === true / sym_s[0] === 2 / mismatched slot) always fails closed.
-  // Uses <=3-char split join to avoid static >=4-char string literals.
+  // - Narrowed sv === void 0 async tolerance: only real loading DOM (with document.scripts) or Web Worker (self.importScripts).
+  // - Bare window = {} or readyState === 'complete' with missing shield fails closed.
+  // - When expectedStateHash is provided, verifies Array.isArray($sr) && $sr[0] === 1 and folds 32-bit ($sr[1] | 0) into $sh === $D.
+  // - Uses <=3-char split join to avoid static >=4-char string literals.
   const selfPrettyCheck = '$pp||/\\n/.test(Function.prototype.toString.call($vm))';
-  const tamperCheckExpr = hasSym
-    ? `var $bad=${selfPrettyCheck}||($G&&($G[$tk]===!0||$G${symTamperPropAccess}===!0||($G${symStatePropAccess}&&$G${symStatePropAccess}[0]===2))),$sv=$G?$G${symPropAccess}:void 0;if(!$bad){if($sv===void 0){if(typeof window>"u"&&typeof document>"u"&&typeof self>"u")$bad=!0;}else if(Array.isArray($sv)){if($sv[0]===2)$bad=!0;}${
+  const asyncEnvGuard =
+    "var $br=(typeof window<'u'&&typeof document<'u'&&window.document===document&&document.nodeType===9&&document.scripts&&document.scripts.length>0&&document.readyState!==['co','mp','le','te'].join(''))||(typeof self<'u'&&typeof self.importScripts===['fu','nct','ion'].join(''));";
+  const svPresentBranch = hasExpHash
+    ? hasExpDelta
+      ? 'else if(!Array.isArray($sr)||$sr[0]!==1||$sv!==($sv|0)){$bad=!0;}else{var $s1=$sr[1]|0,$sh=(Math.imul(($sv^$s1^$S)|0,0x9e3779b1)^(($sv<<16)|($S>>>16))^(($s1>>>13)|($s1<<19))^0x85ebca6b)|0;if($sh!==$D)$bad=!0;}'
+      : 'else if(!Array.isArray($sr)||$sr[0]!==1){$bad=!0;}else{var $s1=$sr[1]|0,$sh=(Math.imul(($s1^$S)|0,0x9e3779b1)^(($s1>>>13)|($s1<<19))^0x85ebca6b)|0;if($sh!==$D)$bad=!0;}'
+    : `else if(Array.isArray($sv)){if($sv[0]===2)$bad=!0;}${
         hasExpDelta
-          ? `else if($sv!==($sv|0)){$bad=!0;}else{var $sh=(Math.imul(($sv^$S)|0,0x9e3779b1)^(($sv<<16)|($S>>>16))^0x85ebca6b)|0;if($sh!==$D)$bad=!0;}`
+          ? 'else if($sv!==($sv|0)){$bad=!0;}else{var $sh=(Math.imul(($sv^$S)|0,0x9e3779b1)^(($sv<<16)|($S>>>16))^0x85ebca6b)|0;if($sh!==$D)$bad=!0;}'
           : ''
-      }}`
+      }`;
+  const tamperCheckExpr = hasSym
+    ? `var $sr=$G?$G${symStatePropAccess}:void 0,$bad=${selfPrettyCheck}||($G&&($G[$tk]===!0||$G${symTamperPropAccess}===!0||($sr&&$sr[0]===2))),$sv=$G?$G${symPropAccess}:void 0;if(!$bad){${asyncEnvGuard}if($sv===void 0){if(!$br)$bad=!0;}${svPresentBranch}}`
     : `var $bad=${selfPrettyCheck}||($G&&$G[$tk]===!0);`;
 
-  const paramsList = hasExpDelta ? '$P,$A,$B,$C,$S,$D' : '$P,$A,$B,$C,$S';
+  const paramsList = hasDigest ? '$P,$A,$B,$C,$S,$D' : '$P,$A,$B,$C,$S';
 
   const factoryRaw = `(function $I(${paramsList}){var $G=typeof globalThis<"u"?globalThis:(typeof window<"u"?window:(typeof self<"u"?self:this));var $pp=/\\n/.test(Function.prototype.toString.call($I));var $rk=['__','unp','eek','_vm'].join('');var $rg=0,$rs=0;try{$rg=$G?($G[$rk]||($G[$rk]={})) : 0;$rs=$rg?($rg[${scopeKey}]||($rg[${scopeKey}]={})) : 0;if(!$pp&&$rs&&$rs[${seedU32}])return $rs[${seedU32}];}catch($e){}var $tk=['__','unp','eek','_ta','mpe','red'].join('');var $M=[],$ok=$A&255,$sk=$B&255,$vk=$C|0;for(var $j=0;$j<$P.length;$j+=2)$M[$P[$j]]=$P[$j+1];function $rd($f){var $p=$f.p++;var $x0=$f.st=(Math.imul($f.st^($p+1),0x45d9f3b)+(($f.ac|0x9e3779b9)+($f.ac&0x9e3779b9)))|0;var $w=$f.c[$p],$v=$w^(($x0>>>16)&0xffff);$f.st=($f.st^Math.imul($w+1,0x85ebca6b))|0;$f.ac=(Math.imul($f.ac^$v,0x27d4eb2d)^(($f.st>>>13)|($f.st<<19)))|0;return $v;}var $H=[${handlers.join(
     ','
@@ -393,7 +422,7 @@ export function createInterpreterSource(
   const argC = vmKey | 0;
 
   return `var ${vmHelperName}=(${compactFactory})([${pairs.join(',')}],${argA},${argB},${argC},${seed32}${
-    hasExpDelta ? `,${expDigest}` : ''
+    hasDigest ? `,${expDigest}` : ''
   });`;
 }
 
@@ -695,12 +724,15 @@ function definitelyTerminates(stmt: any): boolean {
 export function compileFunctionToBytecode(
   fnNode: any,
   opMap: number[],
-  enclosingBindings?: Set<string>
+  enclosingBindings?: Set<string>,
+  seed = 0x9e3779b9
 ): CompiledFunction | null {
   const bytecode: number[] = [];
   const consts: any[] = [];
   const stateSlots = new Set<number>();
   const accSlots = new Set<number>();
+  const jumpTargets = new Map<number, number>();
+  const jumpOps = new Map<number, number>();
   const fnScope = new Map<string, number>();
   const scopeStack: Map<string, number>[] = [fnScope];
   const upvalues: UpvalueDescriptor[] = [];
@@ -852,19 +884,26 @@ export function compileFunctionToBytecode(
 
   function emit(op: number, ...args: number[]): void {
     bytecode.push(opMap[op]);
-    for (const a of args) bytecode.push(a);
+    if (args.length === 1) {
+      bytecode.push((args[0] + computeHandlerBias(seed, op)) & 0xffff);
+    } else {
+      for (const a of args) bytecode.push(a);
+    }
   }
 
   function emitJumpPlaceholder(op: number): number {
     const pos = bytecode.length;
     emit(op, 0, 0, 0);
+    jumpOps.set(pos, op);
     stateSlots.add(pos + 2);
     accSlots.add(pos + 3);
     return pos;
   }
 
   function patchJump(pos: number, targetPc: number): void {
-    bytecode[pos + 1] = targetPc;
+    const op = jumpOps.get(pos) ?? OP_JMP;
+    jumpTargets.set(pos + 1, targetPc);
+    bytecode[pos + 1] = (targetPc + computeHandlerBias(seed, op)) & 0xffff;
   }
 
   function compilePatternAssignFromSlot(pattern: any, sourceSlot: number): boolean {
@@ -1725,7 +1764,7 @@ export function compileFunctionToBytecode(
     emit(OP_RET);
   }
 
-  return { bytecode, consts, localCount, stateSlots, accSlots, upvalues };
+  return { bytecode, consts, localCount, stateSlots, accSlots, jumpTargets, upvalues };
 }
 
 function findInjectedVmHelperName(ast: acorn.Program): string | null {
@@ -2063,7 +2102,7 @@ export function applyMicroVm(
       continue;
     }
 
-    const compiled = compileFunctionToBytecode(lowered.loweredFn, opMap, enclosingBindings);
+    const compiled = compileFunctionToBytecode(lowered.loweredFn, opMap, enclosingBindings, seed);
     if (!compiled) {
       continue;
     }
@@ -2074,7 +2113,8 @@ export function applyMicroVm(
       fnSalt,
       vmKey,
       compiled.stateSlots,
-      compiled.accSlots
+      compiled.accSlots,
+      compiled.jumpTargets
     );
 
     const constElements = compiled.consts.map((c) => {
@@ -2201,7 +2241,8 @@ export function applyMicroVm(
       opMap,
       seed,
       windowKeySymbol,
-      expectedDelta
+      expectedDelta,
+      extraOpts?.expectedStateHash
     );
     const parsedHelper = acorn.parse(interpreterSource, {
       ecmaVersion: 'latest',

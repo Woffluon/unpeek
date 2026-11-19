@@ -2,6 +2,11 @@ import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
 import type { HotPathReport } from './types.js';
 import type { UnpeekConfig } from '../config.js';
+import type { AnySourceMap } from '../core/vlq.js';
+import {
+  resolveSourceMapCriticalNodes,
+  type FunctionLocationEntry,
+} from './sourcemap-critical.js';
 
 const LOOP_NODE_TYPES = new Set([
   'ForStatement',
@@ -62,6 +67,17 @@ const CRITICAL_COLD_CALLEE_REGEX =
 
 const DEFAULT_HOOK_REGEX = /^use[A-Z0-9]/;
 
+const JSX_FACTORY_CALLS = new Set([
+  'jsx',
+  'jsxs',
+  '_jsx',
+  '_jsxs',
+  'jsxDEV',
+  '_jsxDEV',
+  'createElement',
+  'cloneElement',
+]);
+
 const REACT_HOOK_OR_RENDER_CALLS = new Set([
   'useState',
   'useEffect',
@@ -76,7 +92,10 @@ const REACT_HOOK_OR_RENDER_CALLS = new Set([
   'jsxs',
   '_jsx',
   '_jsxs',
+  'jsxDEV',
+  '_jsxDEV',
   'createElement',
+  'cloneElement',
 ]);
 
 const FUNCTION_NODE_TYPES = new Set([
@@ -138,9 +157,17 @@ export function parseJavaScriptAst(
   return ast;
 }
 
-function isHocCall(callNode: any, hocWrappers?: Set<string>): boolean {
-  if (!callNode || callNode.type !== 'CallExpression') return false;
-  const callee = callNode.callee;
+function unwrapCallee(callee: any): any {
+  let cur = callee;
+  while (cur?.type === 'SequenceExpression' && Array.isArray(cur.expressions) && cur.expressions.length > 0) {
+    cur = cur.expressions[cur.expressions.length - 1];
+  }
+  return cur;
+}
+
+function isHocCall(callNode: any, hocWrappers?: Set<string>, depth = 0): boolean {
+  if (!callNode || callNode.type !== 'CallExpression' || depth > 4) return false;
+  const callee = unwrapCallee(callNode.callee);
   if (!callee) return false;
   const wrappers = hocWrappers ?? DEFAULT_HOC_WRAPPERS;
   if (callee.type === 'Identifier') {
@@ -156,6 +183,9 @@ function isHocCall(callNode: any, hocWrappers?: Set<string>): boolean {
       const full = `${callee.object.name}.${callee.property.name}`;
       if (wrappers.has(full)) return true;
     }
+  }
+  if (callee.type === 'CallExpression') {
+    return isHocCall(callee, wrappers, depth + 1);
   }
   return false;
 }
@@ -216,8 +246,126 @@ function getFunctionLabel(
   return `anonymous_${node.start}`;
 }
 
-function isPascalCaseComponent(name: string): boolean {
-  return /^[A-Z][a-zA-Z0-9]*$/.test(name);
+function hasUiComponentSignal(
+  node: any,
+  ancestors: acorn.Node[],
+  hocWrappers: Set<string>,
+  isHookFn: (name: string) => boolean
+): boolean {
+  if (!node) return false;
+
+  // 1. HOC wrapping in ancestor chain (memo, forwardRef, React.memo, React.forwardRef, observer, connect, etc.)
+  for (let i = ancestors.length - 2; i >= 0; i--) {
+    const anc = ancestors[i];
+    if (anc.type === 'CallExpression') {
+      if (isHocCall(anc, hocWrappers)) {
+        return true;
+      }
+    } else {
+      break;
+    }
+  }
+
+  if (!node.body) return false;
+
+  // 2. Own-body scan without descending into unrelated nested inner functions
+  const stack: any[] = [node.body];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== 'object') continue;
+
+    if (cur.type === 'JSXElement' || cur.type === 'JSXFragment') {
+      return true;
+    }
+
+    if (cur.type === 'CallExpression') {
+      const callee = unwrapCallee(cur.callee);
+      let calleeName = '';
+      let memberProp = '';
+      let qualifiedCall = '';
+      if (callee?.type === 'Identifier') {
+        calleeName = callee.name;
+        qualifiedCall = calleeName;
+      } else if (
+        callee?.type === 'MemberExpression' &&
+        !callee.computed &&
+        callee.property?.type === 'Identifier'
+      ) {
+        memberProp = callee.property.name;
+        if (callee.object?.type === 'Identifier') {
+          qualifiedCall = `${callee.object.name}.${memberProp}`;
+        }
+      }
+
+      if (
+        JSX_FACTORY_CALLS.has(calleeName) ||
+        JSX_FACTORY_CALLS.has(memberProp) ||
+        qualifiedCall === 'React.createElement' ||
+        qualifiedCall === 'React.cloneElement' ||
+        REACT_HOOK_OR_RENDER_CALLS.has(calleeName) ||
+        REACT_HOOK_OR_RENDER_CALLS.has(memberProp) ||
+        isHookFn(calleeName) ||
+        isHookFn(memberProp)
+      ) {
+        return true;
+      }
+
+      if (
+        calleeName === 'h' &&
+        Array.isArray(cur.arguments) &&
+        (cur.arguments.length >= 2 ||
+          (cur.arguments.length === 1 &&
+            cur.arguments[0]?.type === 'Literal' &&
+            typeof cur.arguments[0].value === 'string'))
+      ) {
+        return true;
+      }
+    }
+
+    for (const key of Object.keys(cur)) {
+      if (key === 'loc' || key === 'start' || key === 'end') continue;
+      const val = cur[key];
+      if (Array.isArray(val)) {
+        for (let i = val.length - 1; i >= 0; i--) {
+          const item = val[i];
+          if (
+            item &&
+            typeof item === 'object' &&
+            typeof item.type === 'string' &&
+            !FUNCTION_NODE_TYPES.has(item.type)
+          ) {
+            stack.push(item);
+          }
+        }
+      } else if (
+        val &&
+        typeof val === 'object' &&
+        typeof val.type === 'string' &&
+        !FUNCTION_NODE_TYPES.has(val.type)
+      ) {
+        stack.push(val);
+      }
+    }
+  }
+
+  return false;
+}
+
+function isPascalCaseComponent(
+  name: string,
+  node?: any,
+  ancestors?: acorn.Node[],
+  hocWrappers?: Set<string>,
+  isHookFn?: (name: string) => boolean
+): boolean {
+  if (!/^[A-Z][a-zA-Z0-9]*$/.test(name)) return false;
+  if (!node || !ancestors) return false;
+  return hasUiComponentSignal(
+    node,
+    ancestors,
+    hocWrappers ?? DEFAULT_HOC_WRAPPERS,
+    isHookFn ?? ((n) => DEFAULT_HOOK_REGEX.test(n))
+  );
 }
 
 function isEventHandlerName(
@@ -330,7 +478,8 @@ function containsLoopOrAnimation(
 
 export function analyzeAstHotPaths(
   ast: acorn.Program,
-  config?: UnpeekConfig
+  config?: UnpeekConfig,
+  originalSourceMap?: AnySourceMap
 ): HotPathAnalysis {
   const hotFunctionNodes = new WeakSet<acorn.Node>();
   const coldFunctionNodes = new WeakSet<acorn.Node>();
@@ -345,7 +494,12 @@ export function analyzeAstHotPaths(
   const directHotNodes = new Set<acorn.Node>();
 
   const serializerHelperNodes = new Set<acorn.Node>();
-  const allFunctions: { node: acorn.Node; name: string; anchorStart: number }[] = [];
+  const allFunctions: {
+    node: acorn.Node;
+    name: string;
+    anchorStart: number;
+    idNode?: acorn.Node | null;
+  }[] = [];
   const fnByName = new Map<string, acorn.Node>();
   const scopeFunctions = new Map<acorn.Node, Map<string, acorn.Node>>();
   const fnScopeChain = new Map<acorn.Node, acorn.Node[]>();
@@ -515,9 +669,51 @@ export function analyzeAstHotPaths(
     return anchorStart;
   }
 
+  function getFunctionIdNode(node: any, ancestors: acorn.Node[]): acorn.Node | null {
+    if (node.id) return node.id;
+    const parent = ancestors[ancestors.length - 2] as any;
+    if (!parent) return null;
+    if (parent.type === 'VariableDeclarator' && parent.id?.type === 'Identifier') {
+      return parent.id;
+    }
+    if (parent.type === 'AssignmentExpression' && parent.left?.type === 'Identifier') {
+      return parent.left;
+    }
+    if ((parent.type === 'Property' || parent.type === 'MethodDefinition') && parent.key?.type === 'Identifier') {
+      return parent.key;
+    }
+    if (parent.type === 'CallExpression') {
+      let idx = ancestors.length - 2;
+      let matchedHoc = false;
+      while (idx >= 0 && ancestors[idx].type === 'CallExpression') {
+        if (isHocCall(ancestors[idx], hocWrappers)) {
+          matchedHoc = true;
+          idx--;
+        } else {
+          break;
+        }
+      }
+      if (matchedHoc && idx >= 0) {
+        const outer = ancestors[idx] as any;
+        if (outer.type === 'VariableDeclarator' && outer.id?.type === 'Identifier') {
+          return outer.id;
+        }
+        if (outer.type === 'AssignmentExpression' && outer.left?.type === 'Identifier') {
+          return outer.left;
+        }
+      }
+    }
+    return null;
+  }
+
   function registerFunctionNode(node: any, ancestors: acorn.Node[]): void {
     const name = getFunctionLabel(node, ancestors, hocWrappers);
-    allFunctions.push({ node, name, anchorStart: computeFunctionAnchorStart(node, ancestors) });
+    allFunctions.push({
+      node,
+      name,
+      anchorStart: computeFunctionAnchorStart(node, ancestors),
+      idNode: getFunctionIdNode(node, ancestors),
+    });
     fnByName.set(name, node);
 
     const paramSet = new Set<string>();
@@ -589,7 +785,11 @@ export function analyzeAstHotPaths(
     }
     fnScopeChain.set(node, chain);
 
-    if (isPascalCaseComponent(name) && !excludedComponents.has(name)) {
+    if (
+      isPascalCaseComponent(name, node, ancestors, hocWrappers, isHookName) &&
+      !excludedComponents.has(name)
+    ) {
+      (node as any)._unpeekIsComponent = true;
       shallowComponentNodes.add(node);
       hotFunctionNodes.add(node);
       directHotNodes.add(node);
@@ -732,7 +932,7 @@ export function analyzeAstHotPaths(
       }
     },
     CallExpression(node: any, _state, ancestors) {
-      const callee = node.callee;
+      const callee = unwrapCallee(node.callee);
       let calleeName = '';
       let memberProp = '';
       let qualifiedCall = '';
@@ -930,6 +1130,14 @@ export function analyzeAstHotPaths(
         isHookName(memberProp)
       ) {
         if (enclosingFn) {
+          if (
+            JSX_FACTORY_CALLS.has(calleeName) ||
+            JSX_FACTORY_CALLS.has(memberProp) ||
+            REACT_HOOK_OR_RENDER_CALLS.has(calleeName) ||
+            REACT_HOOK_OR_RENDER_CALLS.has(memberProp)
+          ) {
+            (enclosingFn as any)._unpeekIsComponent = true;
+          }
           shallowComponentNodes.add(enclosingFn);
           hotFunctionNodes.add(enclosingFn);
           directHotNodes.add(enclosingFn);
@@ -1146,6 +1354,143 @@ export function analyzeAstHotPaths(
     }
   }
 
+  const criticalAnnotation =
+    typeof (config as any)?.critical?.annotation === 'string' &&
+    (config as any).critical.annotation.length > 0
+      ? (config as any).critical.annotation
+      : '@unpeek-critical';
+  const astComments: acorn.Comment[] =
+    ((ast as any)?.__unpeekComments as acorn.Comment[] | undefined) ??
+    ((ast as any)?.comments as acorn.Comment[] | undefined) ??
+    [];
+  const criticalComments = astComments.filter(
+    (c) => typeof c?.value === 'string' && c.value.includes(criticalAnnotation)
+  );
+  const criticalCommentNodes = new Set<acorn.Node>();
+  if (criticalComments.length > 0 && allFunctions.length > 0) {
+    const stmtRanges: { start: number; end: number }[] = [];
+    walk.full(ast, (n: any) => {
+      if (
+        n &&
+        typeof n.start === 'number' &&
+        typeof n.end === 'number' &&
+        n.type !== 'Program' &&
+        n.type !== 'BlockStatement' &&
+        n.type !== 'EmptyStatement' &&
+        (n.type.endsWith('Statement') ||
+          n.type === 'VariableDeclaration' ||
+          n.type === 'FunctionDeclaration' ||
+          n.type === 'ClassDeclaration' ||
+          n.type === 'ImportDeclaration' ||
+          n.type === 'ExportNamedDeclaration' ||
+          n.type === 'ExportDefaultDeclaration')
+      ) {
+        stmtRanges.push({ start: n.start, end: n.end });
+      }
+    });
+    const sortedFns = [...allFunctions].sort(
+      (a, b) => ((a.node as any).start ?? 0) - ((b.node as any).start ?? 0)
+    );
+    for (const c of criticalComments) {
+      const cStart = typeof c.start === 'number' ? c.start : 0;
+      const cEnd = typeof c.end === 'number' ? c.end : 0;
+
+      // Find innermost function enclosing this comment, if any
+      let enclosingFnEntry: (typeof sortedFns)[number] | undefined;
+      for (const fn of sortedFns) {
+        const s = (fn.node as any).start;
+        const e = (fn.node as any).end;
+        if (typeof s === 'number' && typeof e === 'number' && s <= cStart && cEnd <= e) {
+          enclosingFnEntry = fn;
+        }
+      }
+
+      const target = sortedFns.find(
+        (fn) => typeof (fn.node as any).start === 'number' && (fn.node as any).start >= cEnd
+      );
+      const enclosingEnd = enclosingFnEntry
+        ? ((enclosingFnEntry.node as any).end as number)
+        : Infinity;
+
+      if (target && ((target.node as any).end as number) <= enclosingEnd) {
+        const fnStart = (target.node as any).start as number;
+        const fnEnd = (target.node as any).end as number;
+        const blockedByStmt = stmtRanges.some(
+          (s) =>
+            !(s.start <= fnStart && fnEnd <= s.end) &&
+            s.end > cEnd &&
+            s.end <= target.anchorStart
+        );
+        if (!blockedByStmt) {
+          criticalCommentNodes.add(target.node);
+          continue;
+        }
+      }
+
+      // Support leading /*! @unpeek-critical */ inside a function body (before any statement in that body)
+      if (enclosingFnEntry) {
+        const body = (enclosingFnEntry.node as any).body;
+        if (body && typeof body.start === 'number' && cStart >= body.start) {
+          const hasPriorStmtInBody = stmtRanges.some(
+            (s) => s.start >= body.start && s.end <= cStart
+          );
+          if (!hasPriorStmtInBody) {
+            criticalCommentNodes.add(enclosingFnEntry.node);
+          }
+        }
+      }
+    }
+  }
+
+  const rawCriticalInclude = (config as any)?.critical?.include;
+  const criticalIncludeList = Array.isArray(rawCriticalInclude)
+    ? rawCriticalInclude
+    : rawCriticalInclude !== undefined
+      ? [rawCriticalInclude]
+      : [];
+  const criticalIncludeMatchers: ((name: string) => boolean)[] = [];
+  for (const pat of criticalIncludeList) {
+    if (pat instanceof RegExp) {
+      criticalIncludeMatchers.push((name) => pat.test(name));
+    } else if (typeof pat === 'string' && pat.length > 0) {
+      try {
+        const re = new RegExp(pat);
+        criticalIncludeMatchers.push((name) => re.test(name));
+      } catch {
+        criticalIncludeMatchers.push((name) => name.includes(pat));
+      }
+    }
+  }
+
+  const sourceMapCriticalNodes = resolveSourceMapCriticalNodes(
+    allFunctions as FunctionLocationEntry[],
+    originalSourceMap,
+    {
+      criticalAnnotation,
+      criticalIncludeMatchers,
+      rawIncludePatterns: criticalIncludeList,
+    }
+  );
+
+  const matchedCriticalNodes = new Set<acorn.Node>();
+  for (const fn of allFunctions) {
+    if (
+      criticalCommentNodes.has(fn.node) ||
+      sourceMapCriticalNodes.has(fn.node) ||
+      criticalIncludeMatchers.some((match) => match(fn.name))
+    ) {
+      matchedCriticalNodes.add(fn.node);
+      if (!trueHotNodes.has(fn.node) && !serializedWorkerNodes.has(fn.node)) {
+        shallowComponentNodes.delete(fn.node);
+        hotFunctionNodes.delete(fn.node);
+        directHotNodes.delete(fn.node);
+        hotExemptNodes.delete(fn.node);
+        delete (fn.node as any)._unpeekIsComponent;
+        coldForcedNodes.add(fn.node);
+      }
+    }
+  }
+
   // Count callers per callee to distinguish dedicated pipeline sub-functions from shared utility loops
   const calleeToCallers = new Map<acorn.Node, Set<acorn.Node>>();
   for (const [callerNode, calleeNames] of callerToCallees.entries()) {
@@ -1196,84 +1541,9 @@ export function analyzeAstHotPaths(
 
   // Sanitize cold-forced nodes: ensure they are completely removed from hot and hotExempt sets
   for (const node of coldForcedNodes) {
+    shallowComponentNodes.delete(node);
     hotFunctionNodes.delete(node);
     hotExemptNodes.delete(node);
-  }
-
-  const criticalAnnotation =
-    typeof (config as any)?.critical?.annotation === 'string' &&
-    (config as any).critical.annotation.length > 0
-      ? (config as any).critical.annotation
-      : '@unpeek-critical';
-  const astComments: acorn.Comment[] =
-    ((ast as any)?.__unpeekComments as acorn.Comment[] | undefined) ??
-    ((ast as any)?.comments as acorn.Comment[] | undefined) ??
-    [];
-  const criticalComments = astComments.filter(
-    (c) => typeof c?.value === 'string' && c.value.includes(criticalAnnotation)
-  );
-  const criticalCommentNodes = new Set<acorn.Node>();
-  if (criticalComments.length > 0 && allFunctions.length > 0) {
-    const stmtRanges: { start: number; end: number }[] = [];
-    walk.full(ast, (n: any) => {
-      if (
-        n &&
-        typeof n.start === 'number' &&
-        typeof n.end === 'number' &&
-        n.type !== 'Program' &&
-        n.type !== 'BlockStatement' &&
-        (n.type.endsWith('Statement') ||
-          n.type === 'VariableDeclaration' ||
-          n.type === 'FunctionDeclaration' ||
-          n.type === 'ClassDeclaration' ||
-          n.type === 'ImportDeclaration' ||
-          n.type === 'ExportNamedDeclaration' ||
-          n.type === 'ExportDefaultDeclaration')
-      ) {
-        stmtRanges.push({ start: n.start, end: n.end });
-      }
-    });
-    const sortedFns = [...allFunctions].sort(
-      (a, b) => ((a.node as any).start ?? 0) - ((b.node as any).start ?? 0)
-    );
-    for (const c of criticalComments) {
-      const cEnd = typeof c.end === 'number' ? c.end : 0;
-      const target = sortedFns.find(
-        (fn) => typeof (fn.node as any).start === 'number' && (fn.node as any).start >= cEnd
-      );
-      if (!target) continue;
-      const fnStart = (target.node as any).start as number;
-      const fnEnd = (target.node as any).end as number;
-      const blockedByStmt = stmtRanges.some(
-        (s) =>
-          !(s.start <= fnStart && fnEnd <= s.end) &&
-          s.end > cEnd &&
-          s.end <= target.anchorStart
-      );
-      if (!blockedByStmt) {
-        criticalCommentNodes.add(target.node);
-      }
-    }
-  }
-
-  const rawCriticalInclude = (config as any)?.critical?.include;
-  const criticalIncludeList = Array.isArray(rawCriticalInclude)
-    ? rawCriticalInclude
-    : rawCriticalInclude !== undefined
-      ? [rawCriticalInclude]
-      : [];
-  const criticalIncludeMatchers: ((name: string) => boolean)[] = [];
-  for (const pat of criticalIncludeList) {
-    if (pat instanceof RegExp) {
-      criticalIncludeMatchers.push((name) => pat.test(name));
-    } else if (typeof pat === 'string' && pat.length > 0) {
-      try {
-        const re = new RegExp(pat);
-        criticalIncludeMatchers.push((name) => re.test(name));
-      } catch {
-        criticalIncludeMatchers.push((name) => name.includes(pat));
-      }
-    }
   }
 
   const hotFunctionsSkipped: string[] = [];
@@ -1286,8 +1556,9 @@ export function analyzeAstHotPaths(
       coldFunctionNodes.add(fn.node);
       coldFunctionsProtected.push(fn.name);
       if (
-        criticalCommentNodes.has(fn.node) ||
-        criticalIncludeMatchers.some((match) => match(fn.name))
+        matchedCriticalNodes.has(fn.node) &&
+        !trueHotNodes.has(fn.node) &&
+        !serializedWorkerNodes.has(fn.node)
       ) {
         criticalFunctionNodes.add(fn.node);
       }

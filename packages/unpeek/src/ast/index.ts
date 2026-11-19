@@ -5,6 +5,7 @@ import type {
   InternalTransformOptions,
   InternalTransformResult,
 } from '../internal/types.js';
+import type { AnySourceMap } from '../core/vlq.js';
 import { UnpeekError, type UnpeekErrorCode } from '../shared/errors.js';
 import { computeFnv1aHash } from '../shared/hash.js';
 import {
@@ -79,18 +80,19 @@ function isAstAlreadyProtected(ast: acorn.Program): boolean {
         const name = d.id?.type === 'Identifier' ? d.id.name : undefined;
         if (typeof name === 'string') {
           if (
-            name === '_d' ||
             name.startsWith('_uC') ||
             name.startsWith('_uD') ||
             name.startsWith('_uS') ||
+            name.startsWith('_uSb') ||
+            name.startsWith('_uDec') ||
+            name.startsWith('_uAl') ||
+            name.startsWith('_uAm') ||
+            name.startsWith('_uZt') ||
             name.startsWith('_uVm') ||
             name.startsWith('_wKdf') ||
             name.startsWith('_uP') ||
             name.startsWith('_uCache') ||
             name.startsWith('_uDc') ||
-            name.startsWith('_m') ||
-            name.startsWith('_w') ||
-            name.startsWith('_k') ||
             (d.init?.type === 'CallExpression' &&
               d.init.callee?.type === 'FunctionExpression' &&
               d.init.callee?.id?.name === 'f' &&
@@ -116,7 +118,7 @@ function isAstAlreadyProtected(ast: acorn.Program): boolean {
         (fnName.startsWith('_uD') ||
           fnName.startsWith('_uVm') ||
           fnName.startsWith('_wKdf') ||
-          fnName.startsWith('_hX'))
+          fnName === '_hX')
       ) {
         return true;
       }
@@ -129,12 +131,8 @@ function isAstAlreadyProtected(ast: acorn.Program): boolean {
       if (callee?.type === 'FunctionExpression') {
         const name = callee.id?.name;
         if (
-          typeof name === 'string' &&
-          (name.startsWith('_u$') ||
-            name.startsWith('_$') ||
-            name.startsWith('_s') ||
-            name.startsWith('$b') ||
-            containsUnpeekShieldMarker(callee.body))
+          (typeof name === 'string' && name.startsWith('_u$')) ||
+          containsUnpeekShieldMarker(callee.body)
         ) {
           return true;
         }
@@ -226,7 +224,12 @@ export function transformJavaScript(
   const effectiveProfile = options.profile ?? effectiveConfig?.profile;
 
   // 1. Detect hot paths (loops, array HOF callbacks, rAF, UI components, and their callees)
-  const hotRes = analyzeAstHotPaths(ast, effectiveConfig);
+  const originalSourceMap = (
+    internalOptions as InternalTransformOptions & {
+      originalSourceMap?: AnySourceMap;
+    }
+  ).originalSourceMap;
+  const hotRes = analyzeAstHotPaths(ast, effectiveConfig, originalSourceMap);
   const {
     report: hotPathReport,
     coldFunctionNodes,
@@ -260,25 +263,43 @@ export function transformJavaScript(
     ? internalOptions.windowKeySymbol ?? deriveWindowKeySymbol(seed)
     : undefined;
   let shieldDelta = shieldCoupled ? internalOptions.expectedDelta : undefined;
-  if (shieldCoupled && shieldDelta === undefined) {
+  let expectedStateHash = shieldCoupled
+    ? (
+        internalOptions as InternalTransformOptions & {
+          expectedStateHash?: number;
+        }
+      ).expectedStateHash
+    : undefined;
+  if (
+    shieldCoupled &&
+    (shieldDelta === undefined || expectedStateHash === undefined)
+  ) {
     const shieldInfo = generateRuntimeShield({
       seed,
       windowKeySymbol: sym,
       deterrentMode,
       detectHeadless,
-    }) as InternalShieldPayload;
-    shieldDelta = shieldInfo.expectedDelta ?? 0;
+    }) as InternalShieldPayload & { expectedStateHash?: number };
+    if (shieldDelta === undefined) {
+      shieldDelta = shieldInfo.expectedDelta ?? 0;
+    }
+    if (expectedStateHash === undefined) {
+      expectedStateHash = shieldInfo.expectedStateHash;
+    }
   }
 
   let virtualizedFunctionsCount = 0;
   if (isAggressive) {
     const extraVmOpts =
-      criticalFunctionNodes || effectiveConfig?.critical?.maxFunctionsPerChunk !== undefined
+      criticalFunctionNodes ||
+      effectiveConfig?.critical?.maxFunctionsPerChunk !== undefined ||
+      expectedStateHash !== undefined
         ? {
             ...(criticalFunctionNodes ? { criticalFunctionNodes } : {}),
             ...(effectiveConfig?.critical?.maxFunctionsPerChunk !== undefined
               ? { maxFunctionsPerChunk: effectiveConfig.critical.maxFunctionsPerChunk }
               : {}),
+            ...(expectedStateHash !== undefined ? { expectedStateHash } : {}),
           }
         : undefined;
     const vmRes = extraVmOpts
@@ -293,6 +314,7 @@ export function transformJavaScript(
             g?: {
               criticalFunctionNodes?: WeakSet<acorn.Node>;
               maxFunctionsPerChunk?: number;
+              expectedStateHash?: number;
             }
           ) => { virtualizedCount: number }
         )(
@@ -317,7 +339,25 @@ export function transformJavaScript(
 
   // 2. Inject polymorphic opaque guards only on cold functions (<2% runtime CPU budget), skipped in Tier 1 minimal
   if (effectiveProfile !== 'minimal' && effectiveConfig?.coldFlow !== false) {
-    applyColdFlowGuard(ast, coldFunctionNodes, seed, hotExemptNodes);
+    (
+      applyColdFlowGuard as (
+        ast: acorn.Program,
+        coldFunctionNodes: WeakSet<acorn.Node>,
+        seed?: number,
+        hotExemptNodes?: WeakSet<acorn.Node>,
+        windowKeySymbol?: string,
+        expectedDelta?: number,
+        shieldCoupled?: boolean
+      ) => number
+    )(
+      ast,
+      coldFunctionNodes,
+      seed,
+      hotExemptNodes,
+      sym,
+      shieldDelta,
+      shieldCoupled
+    );
   }
 
   // 3. Mangle local parameters & function-scoped variables safely

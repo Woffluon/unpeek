@@ -98,12 +98,27 @@ function clonePatterns(patterns?: PatternInput[]): PatternInput[] | undefined {
   return patterns ? [...patterns] : undefined;
 }
 
+function validateSeed(val: unknown): number | undefined {
+  if (val === undefined) return undefined;
+  if (typeof val !== 'number' || !Number.isFinite(val)) {
+    throw new UnpeekError(
+      'ERR_CONFIG_INVALID',
+      'Configuration "seed" must be a finite number.',
+    );
+  }
+  return val;
+}
+
 export function normalizeConfig(raw: Record<string, unknown>): UnpeekConfig {
   if (!isRecord(raw)) {
     return {};
   }
 
   const result: UnpeekConfig = { ...(raw as UnpeekConfig) };
+
+  if ('seed' in raw && raw.seed !== undefined) {
+    result.seed = validateSeed(raw.seed);
+  }
 
   if (isRecord(raw.hotPath)) {
     result.hotPath = {
@@ -152,6 +167,7 @@ function mergeTwoConfigs(base: UnpeekConfig, override: UnpeekConfig): UnpeekConf
     target: override.target ?? base.target,
     profile: override.profile ?? base.profile,
     tier: override.tier ?? base.tier,
+    seed: override.seed ?? base.seed,
     coldFlow: override.coldFlow ?? base.coldFlow,
     outDir: override.outDir ?? base.outDir,
     scrubPaths: override.scrubPaths ?? base.scrubPaths,
@@ -256,9 +272,11 @@ function mergeTwoConfigs(base: UnpeekConfig, override: UnpeekConfig): UnpeekConf
 }
 
 export function mergeUnpeekConfig(base: UnpeekConfig, override?: UnpeekConfig): UnpeekConfig {
+  validateSeed(base.seed);
   if (!override) {
     return { ...base };
   }
+  validateSeed(override.seed);
 
   const effectiveBase = override.profile
     ? mergeTwoConfigs(base, PRESETS[override.profile])

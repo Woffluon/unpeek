@@ -1,5 +1,6 @@
 import type { TransformOptions, TransformResult } from '../ast/types.js';
 import type { ShieldPayload } from '../runtime/types.js';
+import type { AnySourceMap } from '../core/vlq.js';
 
 export interface InternalSourceMap {
   version: number;
@@ -14,6 +15,8 @@ export interface InternalTransformOptions extends TransformOptions {
   shieldCoupled?: boolean;
   windowKeySymbol?: string;
   expectedDelta?: number;
+  expectedStateHash?: number;
+  originalSourceMap?: AnySourceMap;
   rootDir?: string;
   generateMap?: boolean;
 }

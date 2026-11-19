@@ -18,7 +18,11 @@ export interface Mba4ContextOptions {
   aliasIdentA?: string;
   aliasIdentB?: string;
   scratchVarIdent?: string;
+  mxIdent?: string;
   returnDomain?: ColdReturnDomain;
+  windowKeySymbol?: string;
+  expectedDelta?: number;
+  shieldCoupled?: boolean;
 }
 
 const NEUTRAL_DECOY_KEYS = [
@@ -671,22 +675,75 @@ function buildLiveVariables4(
   return [candidates[0], candidates[1], candidates[2], candidates[3]];
 }
 
-const QNR_RESIDUE_FAMILIES: readonly { add: number; mask: number; target: number }[] = [
-  { add: 1, mask: 3, target: 3 },
-  { add: 3, mask: 7, target: 6 },
-  { add: 5, mask: 7, target: 3 },
-  { add: 7, mask: 15, target: 13 },
+interface QnrFamilySpec {
+  add: number;
+  mask: number;
+  target: number;
+  outBoundOp: '>' | '<';
+  outBoundVal: number;
+  bitKind: 'xor1' | 'or2';
+  expectedBit: 0 | 1;
+}
+
+const QNR_RESIDUE_FAMILIES: readonly QnrFamilySpec[] = [
+  // LHS in {1, 2}: > 2 is false; ((v ^ (v >> 1)) & 1) === 1
+  { add: 1, mask: 3, target: 3, outBoundOp: '>', outBoundVal: 2, bitKind: 'xor1', expectedBit: 1 },
+  // LHS in {3, 4, 7}: < 3 is false; ((v | (v >> 2)) & 1) === 1
+  { add: 3, mask: 7, target: 6, outBoundOp: '<', outBoundVal: 3, bitKind: 'or2', expectedBit: 1 },
+  // LHS in {1, 5, 6}: > 6 is false; ((v ^ (v >> 1)) & 1) === 1
+  { add: 5, mask: 7, target: 3, outBoundOp: '>', outBoundVal: 6, bitKind: 'xor1', expectedBit: 1 },
+  // LHS in {0, 7, 8, 11}: > 11 is false; ((v ^ (v >> 1)) & 1) === 0
+  { add: 7, mask: 15, target: 13, outBoundOp: '>', outBoundVal: 11, bitKind: 'xor1', expectedBit: 0 },
 ];
+
+function makeTypeofGlobalLen(): any {
+  return {
+    type: 'MemberExpression',
+    computed: false,
+    object: makeUnary('typeof', { type: 'Identifier', name: 'globalThis' }),
+    property: { type: 'Identifier', name: 'length' },
+  };
+}
+
+function makePropAccess(objExpr: any, propName: string): any {
+  if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(propName)) {
+    return {
+      type: 'MemberExpression',
+      computed: false,
+      object: objExpr,
+      property: { type: 'Identifier', name: propName },
+    };
+  }
+  return {
+    type: 'MemberExpression',
+    computed: true,
+    object: objExpr,
+    property: makeLiteral(propName),
+  };
+}
+
+function buildQnrBitExpr(qnrValRef: any, bitKind: 'xor1' | 'or2'): any {
+  const shiftAmt = bitKind === 'xor1' ? 1 : 2;
+  const combOp = bitKind === 'xor1' ? '^' : '|';
+  return makeBinary(
+    '&',
+    makeBinary(
+      combOp,
+      cloneNode(qnrValRef),
+      makeBinary('>>', cloneNode(qnrValRef), makeLiteral(shiftAmt))
+    ),
+    makeLiteral(1)
+  );
+}
 
 /**
  * Generates a non-zero-identical Quadratic Non-Residue (QNR) opaque predicate
- * across 4 modular residue families (mod 4, mod 8, mod 16):
- * - Family 0: ((Math.imul(z, z) + 1) & 3) === 3  (LHS in {1, 2})
- * - Family 1: ((Math.imul(z, z) + 3) & 7) === 6  (LHS in {3, 4, 7})
- * - Family 2: ((Math.imul(z, z) + 5) & 7) === 3  (LHS in {1, 5, 6})
- * - Family 3: ((Math.imul(z, z) + 7) & 15) === 13 (LHS in {0, 7, 8, 11})
- * where z is derived from >=4 live variables via semi-linear MBA with folded constants,
- * Rivest degree-3 permutation polynomial, and optional 256-entry S-Box mixing.
+ * across 4 modular residue families (mod 4, mod 8, mod 16) and 4 diversified
+ * runtime state- and shield-coupled predicate forms (eliminating fixed `=== R` suffixes):
+ * - Form 0: Dual-path state invariant `(pathA ^ pathB) !== 0`
+ * - Form 1: Shield-coupled compound condition (`qnrFail || globalThis[sym + '_s'][0] === 2`)
+ * - Form 2: Cross-slot alias inequality (`>` / `<` over two distinct `_uAl`/`_uAm` slots)
+ * - Form 3: State-masked non-literal QNR target comparison
  */
 export function createSotaMbaPredicate(
   seed: number,
@@ -702,9 +759,112 @@ export function createSotaMbaPredicate(
   const qnrFamilyIdx = ((seed ^ Math.imul(fnIndex + 1, 0x9e3779b1)) >>> 0) % QNR_RESIDUE_FAMILIES.length;
   const qnrFamily = QNR_RESIDUE_FAMILIES[qnrFamilyIdx];
 
+  const slotA = (fnIndex + (seed & 3)) & 3;
+  const slotB = (slotA + 1 + ((seed >>> 2) & 1)) & 3;
+  const hasAlias = Boolean(ctxOpts?.aliasIdentA);
+  const aliasReadIdent = ctxOpts?.aliasIdentB ?? ctxOpts?.aliasIdentA ?? '';
+
   let qnrLeft: any;
+  let qnrValForForm0: any;
   let zRefForDecoy: any;
-  if (ctxOpts?.scratchVarIdent) {
+  let aliasInvZero: any = null;
+
+  if (ctxOpts?.mxIdent && ctxOpts?.scratchVarIdent && hasAlias) {
+    const scratchId = { type: 'Identifier', name: ctxOpts.scratchVarIdent };
+    const names = [...(ctxOpts?.liveVars ?? []), ...extractParamNames(paramNode)];
+    const uniqueNames: string[] = [];
+    for (const n of names) {
+      if (n && n !== 'arguments' && n !== 'eval' && !uniqueNames.includes(n)) {
+        uniqueNames.push(n);
+      }
+    }
+    const arg0 =
+      uniqueNames.length >= 1
+        ? makeSafeNumericParam(uniqueNames[0])
+        : !isArrowFn
+          ? {
+              type: 'MemberExpression',
+              computed: false,
+              object: { type: 'Identifier', name: 'arguments' },
+              property: { type: 'Identifier', name: 'length' },
+            }
+          : makeTypeofGlobalLen();
+    const arg1 =
+      uniqueNames.length >= 2
+        ? makeSafeNumericParam(uniqueNames[1])
+        : uniqueNames.length === 1 && !isArrowFn
+          ? {
+              type: 'MemberExpression',
+              computed: false,
+              object: { type: 'Identifier', name: 'arguments' },
+              property: { type: 'Identifier', name: 'length' },
+            }
+          : makeTypeofGlobalLen();
+
+    const a0 = mixSeed32(seed, fnIndex * 13 + 3);
+    const a1 = mixSeed32(seed, fnIndex * 13 + 5) | 1;
+    const a2 = mixSeed32(seed, fnIndex * 13 + 7) & ~1;
+    const a3 = mixSeed32(seed, fnIndex * 13 + 9) & ~1;
+    const maskConst = mixSeed32(seed, fnIndex + 97) | 1;
+    const r0 = mixSeed32(seed, fnIndex * 17 + 1);
+    const r1 = mixSeed32(seed, fnIndex * 17 + 3) | 1;
+
+    const seqExprs: any[] = [
+      {
+        type: 'AssignmentExpression',
+        operator: '=',
+        left: cloneNode(scratchId),
+        right: {
+          type: 'CallExpression',
+          callee: { type: 'Identifier', name: ctxOpts.mxIdent },
+          arguments: [
+            arg0,
+            arg1,
+            makeLiteral(slotA),
+            makeLiteral(slotB),
+            makeInt32Literal(maskConst),
+            makeInt32Literal(a0),
+            makeInt32Literal(a1),
+            makeInt32Literal(a2),
+            makeInt32Literal(a3),
+          ],
+          optional: false,
+        },
+      },
+      {
+        type: 'AssignmentExpression',
+        operator: '=',
+        left: cloneNode(scratchId),
+        right: makeBinary(
+          '|',
+          makeBinary('+', makeInt32Literal(r0), makeImul(cloneNode(scratchId), makeInt32Literal(r1))),
+          makeLiteral(0)
+        ),
+      },
+    ];
+    const qnrCore = makeBinary(
+      '&',
+      makeBinary('+', makeImul(cloneNode(scratchId), cloneNode(scratchId)), makeLiteral(qnrFamily.add)),
+      makeLiteral(qnrFamily.mask)
+    );
+    qnrLeft = {
+      type: 'SequenceExpression',
+      expressions: [...seqExprs, qnrCore],
+    };
+    qnrValForForm0 = {
+      type: 'SequenceExpression',
+      expressions: [
+        {
+          type: 'AssignmentExpression',
+          operator: '=',
+          left: cloneNode(scratchId),
+          right: cloneNode(qnrCore),
+        },
+        buildQnrBitExpr(scratchId, qnrFamily.bitKind),
+      ],
+    };
+    zRefForDecoy = cloneNode(scratchId);
+  } else if (ctxOpts?.scratchVarIdent) {
     const scratchId = { type: 'Identifier', name: ctxOpts.scratchVarIdent };
     const rivestOnScratch = buildRivestPermAst(seed, fnIndex, scratchId);
     const seqExprs: any[] = [
@@ -729,43 +889,62 @@ export function createSotaMbaPredicate(
         right: buildSboxMixAst(ctxOpts.sboxIdent, ctxOpts.scratchVarIdent),
       });
     }
-    if (ctxOpts.aliasIdentA) {
-      const aliasSlot = (fnIndex + (seed & 3)) & 3;
-      const aliasMem = makeMemberIndex(ctxOpts.aliasIdentA, makeLiteral(aliasSlot));
+    if (hasAlias) {
+      const aliasWriteMemA = makeMemberIndex(ctxOpts.aliasIdentA!, makeLiteral(slotA));
+      const maskConst = mixSeed32(seed, fnIndex + 97) | 1;
+      const updateMask = makeBinary(
+        '^',
+        makeBinary('<<', cloneNode(scratchId), makeLiteral(3)),
+        makeInt32Literal(maskConst)
+      );
       seqExprs.push({
         type: 'AssignmentExpression',
         operator: '=',
-        left: cloneNode(aliasMem),
-        right: makeBinary(
-          '|',
-          makeBinary(
-            '^',
-            cloneNode(aliasMem),
-            makeBinary('&', cloneNode(scratchId), makeLiteral(0))
-          ),
-          makeLiteral(0)
-        ),
+        left: cloneNode(aliasWriteMemA),
+        right: makeBinary('|', makeBinary('^', cloneNode(aliasWriteMemA), cloneNode(updateMask)), makeLiteral(0)),
       });
+      aliasInvZero = makeBinary(
+        '^',
+        makeBinary('|', makeBinary('^', cloneNode(aliasWriteMemA), cloneNode(updateMask)), makeLiteral(0)),
+        {
+          type: 'AssignmentExpression',
+          operator: '=',
+          left: cloneNode(aliasWriteMemA),
+          right: makeBinary('|', makeBinary('^', cloneNode(aliasWriteMemA), cloneNode(updateMask)), makeLiteral(0)),
+        }
+      );
     }
-    seqExprs.push(
-      makeBinary(
-        '&',
-        makeBinary('+', makeImul(cloneNode(scratchId), cloneNode(scratchId)), makeLiteral(qnrFamily.add)),
-        makeLiteral(qnrFamily.mask)
-      )
+    const qnrCore = makeBinary(
+      '&',
+      makeBinary('+', makeImul(cloneNode(scratchId), cloneNode(scratchId)), makeLiteral(qnrFamily.add)),
+      makeLiteral(qnrFamily.mask)
     );
     qnrLeft = {
       type: 'SequenceExpression',
-      expressions: seqExprs,
+      expressions: [...seqExprs, qnrCore],
+    };
+    qnrValForForm0 = {
+      type: 'SequenceExpression',
+      expressions: [
+        {
+          type: 'AssignmentExpression',
+          operator: '=',
+          left: cloneNode(scratchId),
+          right: cloneNode(qnrCore),
+        },
+        buildQnrBitExpr(scratchId, qnrFamily.bitKind),
+      ],
     };
     zRefForDecoy = cloneNode(scratchId);
   } else {
     const zExpr = buildRivestPermAst(seed, fnIndex, mba4);
-    qnrLeft = makeBinary(
+    const qnrCore = makeBinary(
       '&',
       makeBinary('+', makeImul(cloneNode(zExpr), cloneNode(zExpr)), makeLiteral(qnrFamily.add)),
       makeLiteral(qnrFamily.mask)
     );
+    qnrLeft = qnrCore;
+    qnrValForForm0 = buildQnrBitExpr(qnrCore, qnrFamily.bitKind);
     zRefForDecoy = zExpr;
   }
 
@@ -777,14 +956,119 @@ export function createSotaMbaPredicate(
     zRefForDecoy
   );
 
+  const hasShieldCoupling = Boolean(ctxOpts?.shieldCoupled && ctxOpts?.windowKeySymbol);
+  const predForm = (fnIndex + (hasShieldCoupling ? 1 : ((seed >>> 2) & 3))) & 3;
+
+  let testExpr: any;
+  if (predForm === 0) {
+    // Form 0: Dual-path state invariant (pathA ^ pathB) !== 0
+    // Evaluate seqExprs first, then aliasInvZero (while scratchId still holds S-box value), then qnrValForForm0.
+    let pathACore = qnrValForForm0;
+    if (aliasInvZero) {
+      pathACore = makeBinary('^', aliasInvZero, qnrValForForm0);
+    }
+    if (hasAlias) {
+      pathACore = makeBinary(
+        '^',
+        pathACore,
+        makeBinary('&', makeMemberIndex(aliasReadIdent, makeLiteral(slotB)), makeLiteral(1))
+      );
+    }
+    const pathA = ctxOpts?.scratchVarIdent
+      ? {
+          type: 'SequenceExpression',
+          expressions: [...qnrLeft.expressions.slice(0, -1), pathACore],
+        }
+      : pathACore;
+    const pathB = hasAlias
+      ? makeBinary(
+          '^',
+          makeLiteral(qnrFamily.expectedBit),
+          makeBinary('&', makeMemberIndex(ctxOpts!.aliasIdentA!, makeLiteral(slotB)), makeLiteral(1))
+        )
+      : makeLiteral(qnrFamily.expectedBit);
+    testExpr = makeBinary('!==', makeBinary('^', pathA, pathB), makeLiteral(0));
+  } else if (predForm === 1) {
+    // Form 1: Shield-state coupled compound predicate (always evaluates qnrFail + aliasInvZero first)
+    const qnrLhs = aliasInvZero
+      ? makeBinary('+', qnrLeft, makeBinary('&', aliasInvZero, makeLiteral(1)))
+      : qnrLeft;
+    const qnrFail = makeBinary(qnrFamily.outBoundOp, qnrLhs, makeLiteral(qnrFamily.outBoundVal));
+    const hasGlobal = makeBinary(
+      '<',
+      makeUnary('typeof', { type: 'Identifier', name: 'globalThis' }),
+      makeLiteral('u')
+    );
+    const tamperCheck = hasShieldCoupling
+      ? {
+          type: 'LogicalExpression',
+          operator: '&&',
+          left: hasGlobal,
+          right: {
+            type: 'LogicalExpression',
+            operator: '&&',
+            left: makePropAccess({ type: 'Identifier', name: 'globalThis' }, `${ctxOpts!.windowKeySymbol}_s`),
+            right: makeBinary(
+              '===',
+              {
+                type: 'MemberExpression',
+                computed: true,
+                object: makePropAccess({ type: 'Identifier', name: 'globalThis' }, `${ctxOpts!.windowKeySymbol}_s`),
+                property: makeLiteral(0),
+              },
+              makeLiteral(2)
+            ),
+          },
+        }
+      : {
+          type: 'LogicalExpression',
+          operator: '&&',
+          left: hasGlobal,
+          right: makeBinary(
+            '===',
+            makePropAccess({ type: 'Identifier', name: 'globalThis' }, '__unpeek_tampered'),
+            makeUnary('!', makeLiteral(0))
+          ),
+        };
+    testExpr = {
+      type: 'LogicalExpression',
+      operator: '||',
+      left: qnrFail,
+      right: tamperCheck,
+    };
+  } else if (predForm === 2) {
+    // Form 2: Inequality (> / <) over two distinct _uAl / _uAm slots
+    const slotReadB = hasAlias
+      ? makeBinary('&', makeMemberIndex(aliasReadIdent, makeLiteral(slotB)), makeLiteral(7))
+      : makeBinary('&', makeTypeofGlobalLen(), makeLiteral(7));
+    const slotWriteB = hasAlias
+      ? makeBinary('&', makeMemberIndex(ctxOpts!.aliasIdentA!, makeLiteral(slotB)), makeLiteral(7))
+      : makeBinary('&', makeTypeofGlobalLen(), makeLiteral(7));
+    let lhsExpr = makeBinary('+', qnrLeft, slotReadB);
+    if (aliasInvZero) {
+      lhsExpr = makeBinary('+', lhsExpr, makeBinary('&', aliasInvZero, makeLiteral(3)));
+    }
+    const rhsExpr = makeBinary('+', makeLiteral(qnrFamily.outBoundVal), slotWriteB);
+    testExpr = makeBinary(qnrFamily.outBoundOp, lhsExpr, rhsExpr);
+  } else {
+    // Form 3: State-masked QNR target (non-literal RHS)
+    const tagLhs = hasAlias
+      ? makeBinary('&', makeMemberIndex(ctxOpts!.aliasIdentA!, makeLiteral(slotB)), makeLiteral(0xf0))
+      : makeBinary('&', makeBinary('<<', makeTypeofGlobalLen(), makeLiteral(4)), makeLiteral(0xf0));
+    const tagRhsBase = hasAlias
+      ? makeBinary('&', makeMemberIndex(aliasReadIdent, makeLiteral(slotB)), makeLiteral(0xf0))
+      : makeBinary('&', makeBinary('<<', makeTypeofGlobalLen(), makeLiteral(4)), makeLiteral(0xf0));
+    const tagRhs = aliasInvZero
+      ? makeBinary('^', tagRhsBase, makeBinary('&', aliasInvZero, makeLiteral(0x0f)))
+      : tagRhsBase;
+    const lhsExpr = makeBinary('|', makeBinary('^', qnrLeft, tagLhs), makeLiteral(0));
+    const rhsExpr = makeBinary('|', makeBinary('^', makeLiteral(qnrFamily.target), tagRhs), makeLiteral(0));
+    testExpr = makeBinary('===', lhsExpr, rhsExpr);
+  }
+
   return {
     type: 'IfStatement',
-    test: {
-      type: 'BinaryExpression',
-      operator: '===',
-      left: qnrLeft,
-      right: makeLiteral(qnrFamily.target),
-    },
+    test: testExpr,
     consequent,
     alternate: null,
   } as unknown as acorn.IfStatement;
@@ -859,7 +1143,8 @@ function createSboxAndAliasDeclarations(
   aliasIdentA: string,
   aliasIdentB: string,
   scratchVarIdent: string,
-  seed: number
+  seed: number,
+  mxIdent?: string
 ): acorn.VariableDeclaration {
   const sboxInit = acorn.parseExpressionAt(
     `(function(){var a=[],i,s=${seed | 0},j,t;for(i=0;i<256;i++)a[i]=i;for(i=255;i>0;i--){s=(Math.imul(s,1664525)+1013904223)|0;j=(s>>>0)%(i+1);t=a[i];a[i]=a[j];a[j]=t;}return a;})()`,
@@ -874,34 +1159,175 @@ function createSboxAndAliasDeclarations(
     mixSeed32(seed, 109),
   ];
 
+  const declarations: any[] = [
+    {
+      type: 'VariableDeclarator',
+      id: { type: 'Identifier', name: sboxIdent },
+      init: sboxInit,
+    },
+    {
+      type: 'VariableDeclarator',
+      id: { type: 'Identifier', name: aliasIdentA },
+      init: {
+        type: 'ArrayExpression',
+        elements: stateVals.map((v) => makeInt32Literal(v)),
+      },
+    },
+    {
+      type: 'VariableDeclarator',
+      id: { type: 'Identifier', name: aliasIdentB },
+      init: { type: 'Identifier', name: aliasIdentA },
+    },
+    {
+      type: 'VariableDeclarator',
+      id: { type: 'Identifier', name: scratchVarIdent },
+      init: makeLiteral(0),
+    },
+  ];
+
+  if (mxIdent) {
+    const mbaAst = buildMba4Ast(
+      seed,
+      0,
+      { type: 'Identifier', name: '$u' },
+      { type: 'Identifier', name: '$v' },
+      { type: 'Identifier', name: '$p' },
+      { type: 'Identifier', name: '$q' }
+    );
+    const mxFn = {
+      type: 'FunctionExpression',
+      id: null,
+      params: [
+        { type: 'Identifier', name: '$a' },
+        { type: 'Identifier', name: '$b' },
+        { type: 'Identifier', name: '$c' },
+        { type: 'Identifier', name: '$d' },
+        { type: 'Identifier', name: '$e' },
+        { type: 'Identifier', name: '$f' },
+        { type: 'Identifier', name: '$g' },
+        { type: 'Identifier', name: '$h' },
+        { type: 'Identifier', name: '$i' },
+      ],
+      body: {
+        type: 'BlockStatement',
+        body: [
+          {
+            type: 'VariableDeclaration',
+            kind: 'var',
+            declarations: [
+              { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$u' }, init: makeBinary('|', { type: 'Identifier', name: '$a' }, makeLiteral(0)) },
+              { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$v' }, init: makeBinary('|', { type: 'Identifier', name: '$b' }, makeLiteral(0)) },
+              { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$p' }, init: makeBinary('|', makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$c' }), makeLiteral(0)) },
+              { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$q' }, init: makeBinary('|', makeMemberIndex(aliasIdentB, { type: 'Identifier', name: '$d' }), makeLiteral(0)) },
+              { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$z' }, init: mbaAst },
+            ],
+          },
+          {
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'AssignmentExpression',
+              operator: '=',
+              left: { type: 'Identifier', name: '$z' },
+              right: makeBinary(
+                '|',
+                makeBinary(
+                  '+',
+                  { type: 'Identifier', name: '$f' },
+                  makeImul(
+                    { type: 'Identifier', name: '$z' },
+                    makeBinary(
+                      '+',
+                      { type: 'Identifier', name: '$g' },
+                      makeImul(
+                        { type: 'Identifier', name: '$z' },
+                        makeBinary(
+                          '+',
+                          { type: 'Identifier', name: '$h' },
+                          makeImul({ type: 'Identifier', name: '$z' }, { type: 'Identifier', name: '$i' })
+                        )
+                      )
+                    )
+                  )
+                ),
+                makeLiteral(0)
+              ),
+            },
+          },
+          {
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'AssignmentExpression',
+              operator: '=',
+              left: { type: 'Identifier', name: '$z' },
+              right: buildSboxMixAst(sboxIdent, '$z'),
+            },
+          },
+          {
+            type: 'VariableDeclaration',
+            kind: 'var',
+            declarations: [
+              {
+                type: 'VariableDeclarator',
+                id: { type: 'Identifier', name: '$m' },
+                init: makeBinary('^', makeBinary('<<', { type: 'Identifier', name: '$z' }, makeLiteral(3)), { type: 'Identifier', name: '$e' }),
+              },
+            ],
+          },
+          {
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'AssignmentExpression',
+              operator: '=',
+              left: makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$c' }),
+              right: makeBinary('|', makeBinary('^', makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$c' }), { type: 'Identifier', name: '$m' }), makeLiteral(0)),
+            },
+          },
+          {
+            type: 'VariableDeclaration',
+            kind: 'var',
+            declarations: [
+              {
+                type: 'VariableDeclarator',
+                id: { type: 'Identifier', name: '$w' },
+                init: makeBinary(
+                  '^',
+                  makeBinary('|', makeBinary('^', makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$c' }), { type: 'Identifier', name: '$m' }), makeLiteral(0)),
+                  {
+                    type: 'AssignmentExpression',
+                    operator: '=',
+                    left: makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$c' }),
+                    right: makeBinary('|', makeBinary('^', makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$c' }), { type: 'Identifier', name: '$m' }), makeLiteral(0)),
+                  }
+                ),
+              },
+            ],
+          },
+          {
+            type: 'ReturnStatement',
+            argument: {
+              type: 'AssignmentExpression',
+              operator: '=',
+              left: { type: 'Identifier', name: scratchVarIdent },
+              right: makeBinary('|', makeBinary('^', { type: 'Identifier', name: '$z' }, { type: 'Identifier', name: '$w' }), makeLiteral(0)),
+            },
+          },
+        ],
+      },
+      generator: false,
+      async: false,
+      expression: false,
+    };
+    declarations.push({
+      type: 'VariableDeclarator',
+      id: { type: 'Identifier', name: mxIdent },
+      init: mxFn,
+    });
+  }
+
   return {
     type: 'VariableDeclaration',
     kind: 'var',
-    declarations: [
-      {
-        type: 'VariableDeclarator',
-        id: { type: 'Identifier', name: sboxIdent },
-        init: sboxInit,
-      },
-      {
-        type: 'VariableDeclarator',
-        id: { type: 'Identifier', name: aliasIdentA },
-        init: {
-          type: 'ArrayExpression',
-          elements: stateVals.map((v) => makeInt32Literal(v)),
-        },
-      },
-      {
-        type: 'VariableDeclarator',
-        id: { type: 'Identifier', name: aliasIdentB },
-        init: { type: 'Identifier', name: aliasIdentA },
-      },
-      {
-        type: 'VariableDeclarator',
-        id: { type: 'Identifier', name: scratchVarIdent },
-        init: makeLiteral(0),
-      },
-    ],
+    declarations,
   } as unknown as acorn.VariableDeclaration;
 }
 
@@ -915,14 +1341,18 @@ export function applyColdFlowGuard(
   ast: acorn.Program,
   coldFunctionNodes: WeakSet<acorn.Node>,
   seed = 0x9e3779b9,
-  hotExemptNodes?: WeakSet<acorn.Node>
+  hotExemptNodes?: WeakSet<acorn.Node>,
+  windowKeySymbol?: string,
+  expectedDelta?: number,
+  shieldCoupled = false
 ): number {
-  const decoyIdent = '_d';
   const sfx = (seed >>> 0).toString(36).slice(0, 4);
+  const decoyIdent = `_uDec${sfx}`;
   const sboxIdent = `_uSb${sfx}`;
   const aliasIdentA = `_uAl${sfx}`;
   const aliasIdentB = `_uAm${sfx}`;
   const scratchVarIdent = `_uZt${sfx}`;
+  const mxIdent = `_uMx${sfx}`;
 
   if (Array.isArray(ast.body)) {
     const alreadyGuarded = ast.body.some(
@@ -931,7 +1361,7 @@ export function applyColdFlowGuard(
         stmt.declarations?.some(
           (d: any) =>
             d.id?.type === 'Identifier' &&
-            (d.id.name === decoyIdent || d.id.name === sboxIdent)
+            (d.id.name === decoyIdent || d.id.name === sboxIdent || d.id.name === mxIdent)
         )
     );
     if (alreadyGuarded) return 0;
@@ -966,7 +1396,11 @@ export function applyColdFlowGuard(
         aliasIdentA,
         aliasIdentB,
         scratchVarIdent,
+        mxIdent,
         returnDomain,
+        windowKeySymbol,
+        expectedDelta,
+        shieldCoupled,
       }
     );
     guardedCount++;
@@ -1005,12 +1439,18 @@ export function applyColdFlowGuard(
       aliasIdentA,
       aliasIdentB,
       scratchVarIdent,
-      seed
+      seed,
+      mxIdent
     );
 
     if (hotExemptNodes) {
       hotExemptNodes.add(sharedDecoyDecl);
       hotExemptNodes.add(sboxAliasDecl);
+      for (const decl of sboxAliasDecl.declarations || []) {
+        if (decl.init?.type === 'FunctionExpression') {
+          hotExemptNodes.add(decl.init);
+        }
+      }
       for (const decl of sharedDecoyDecl.declarations || []) {
         if (decl.init?.type === 'ArrayExpression' && decl.init.elements) {
           for (const el of decl.init.elements) {
