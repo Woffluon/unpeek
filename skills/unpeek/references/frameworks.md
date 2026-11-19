@@ -198,8 +198,10 @@ await esbuild.build({
 });
 ```
 
-### Service Worker & Web Worker Isolation
+### Service Worker, Web Worker Isolation & Glob Filtering
 By default (`target: 'browser'`), `sw.js`, `service-worker.js`, `workbox-*.js`, and `*.worker*.(js|mjs|cjs)` files are excluded from browser chunk scanning to avoid breaking worker registration. Set `target: 'worker'` in `unpeek.config.js` when intentionally protecting standalone worker bundles (the `globalThis`/`self` runtime shield runs safely in `WorkerGlobalScope`).
+
+Both CLI `scanClientBundles` (`detector.ts`) and `unplugin` (`isExcludedClientAsset`) also evaluate `config.filter.include` and `config.filter.exclude` glob patterns against relative asset paths, pass `originalSourceMap` into `transformJavaScript` for Source Map v3 `/*! @unpeek-critical */` enclave targeting even when bundlers strip comments, and automatically stamp deterministic SHA-256 `debugId` values when generating maps.
 
 ---
 

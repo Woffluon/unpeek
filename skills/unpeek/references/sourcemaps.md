@@ -10,9 +10,10 @@ When unpeek protects a project (`protectProject` / `unpeek protect`):
 
 1. **Physical Relocation**: All `.js.map` and `.mjs.map` files in the client output folder are moved into `.unpeek-maps/` (or `--private-maps-dir`).
 2. **Multi-Pass $M_1 \circ M_2$ Composition & ECMA-426 `.sections`**: `vlq.ts` automatically flattens ECMA-426 `.sections` index maps, shifts lines for any injected preamble (`shiftSourceMapLines`), and composes the bundler's $M_1$ map with unpeek's $M_2$ compact codegen map (`chainSourceMaps`) so line/column mappings stay exact.
-3. **Deterministic SHA-256 `debugId` Sync**: Stamps an identical SHA-256 UUIDv4 `debugId` onto both the protected JS bundle footer and the vaulted `.map` file (checked by `unpeek check` via the `debugid-mismatch` rule).
-4. **Comment Stripping & Path Decoding**: Public `.js` bundles have `//# sourceMappingURL=...` stripped. `symbolicateStackTrace` decodes URL-encoded App Router segments (`%28public%29` -> `(public)`, `%5Bparam%5D` -> `[param]`) and Windows `\` paths.
-5. **Directory Mirroring**: Subdirectory structures (e.g., `dist/assets/chunk.js.map`) are mirrored inside `.unpeek-maps/assets/chunk.js.map`.
+3. **Automatic Deterministic SHA-256 `debugId` Sync**: Whenever `keepPrivateMaps: true` (default) or `unplugin` emits a composed source map, `unpeek` automatically stamps an identical deterministic SHA-256 UUIDv4 `debugId` onto both the protected JS bundle footer and the vaulted `.map` file—even if the input build lacked a `debugId` (verified by `unpeek check` via the `debugid-mismatch` rule).
+4. **Source Map v3 Critical Targeting**: When bundlers minify or strip inline comments, `protectProject` and `unplugin` pass the pre-protection Source Map v3 into the AST pipeline (`sourcemap-critical.ts`) so `/*! @unpeek-critical */` annotations and `critical.include` names resolve back to compiled functions.
+5. **Comment Stripping & Path Decoding**: Public `.js` bundles have `//# sourceMappingURL=...` stripped. `symbolicateStackTrace` decodes URL-encoded App Router segments (`%28public%29` -> `(public)`, `%5Bparam%5D` -> `[param]`) and Windows `\` paths.
+6. **Directory Mirroring**: Subdirectory structures (e.g., `dist/assets/chunk.js.map`) are mirrored inside `.unpeek-maps/assets/chunk.js.map`.
 
 ---
 

@@ -31,8 +31,9 @@ Conventional obfuscators degrade performance by wrapping every statement and fun
    - Loop/Function-Scoped Array Higher-Order Methods: Callbacks in `.map()`, `.filter()`, `.forEach()`, `.reduce()`, etc.
    - **Propagation**: Transitive top-down (`Hot Caller -> Callee`) and bottom-up (`Caller -> Hot Callee`) exemption is preserved.
 2. **`SHALLOW_RENDER_COMPONENT`**:
-   - UI Render Functions: PascalCase component declarations (React, Preact), functions calling `useState`, `useEffect`, `createElement`, `_jsx`, `_jsxs`.
+   - UI Render Functions: PascalCase component declarations (React, Preact) carrying an explicit JSX (`createElement`, `cloneElement`, `jsx`, `jsxs`, `_jsx`, `_jsxs`, `jsxDEV`, `_jsxDEV`), React hook (`use*`), or HOC (`memo`, `forwardRef`) UI signal—non-UI PascalCase helpers/classes (e.g., `LicenseValidator`) stay cold and protected.
    - **Propagation Boundary**: Component render bodies stay hot (0% tax for 60fps renders and SSR Hydration), but downward lexical propagation (`1A`) and bottom-up propagation (`2`) are disabled. Nested `async` handlers (`onSubmit`, `handleSave`) and top-level 1-time `.map()` initializers are classified as **cold paths** and hardened.
+   - **Source Map v3 Critical Targeting**: `analyzeAstHotPaths` accepts an optional Source Map v3 (`sourcemap-critical.ts`) so `/*! @unpeek-critical */` annotations and `critical.include` names resolve accurately via VLQ mappings, `sourcesContent`, and `names` even when bundlers strip comments or rename functions.
 3. **`SERIALIZED_WORKER`**:
    - Worker factories and descriptors calling `.toString()`, `importScripts()`, or `onmessage`. Entire sub-trees are exempted from mangling and transformation to prevent runtime serialization errors.
 
@@ -61,8 +62,8 @@ String literals in cold paths (`length >= minStringLength`, default: 4) are prot
 - Strings matching SVG path coordinates (`M...`) or containing >=3 tokens with >=50% Tailwind CSS class prefix matches are exempted from vault encryption, preventing bundle bloat.
 
 ### In-Place Re-Encrypting Shader Vault (`Uint8Array`)
-- Shaders and large template literals (>=256 B or matching WebGPU `@vgpu/wgsl` / GLSL signatures outside direct loops) are packed into compact XOR-encrypted `Uint8Array` buffers across both Tier 2 (`recommended`) and Tier 3 (`strict` / `--aggressive`).
-- At runtime, `_uS(idx)` decrypts the buffer in-place, extracts the string via `TextDecoder`, and **immediately re-encrypts the buffer in-place inside `finally`**.
+- Shaders and large template literals (>=256 B or matching WebGPU `@vgpu/wgsl` / GLSL signatures outside direct loops) are packed into compact XOR-encrypted `Uint8Array` buffers across both Tier 2 (`recommended`) and Tier 3 (`strict` / `--aggressive`), while exempting universal binary/Base64 WASM payloads (`AGFzbQE`), binary `data:` URIs (`application/wasm`, `application/octet-stream`, `image/`, `font/`, `audio/`, `video/`), and large pure Base64 blobs (`>=4096` chars).
+- At runtime, `_uS(idx)` verifies runtime shield coupling (`sym`, `expectedDelta`, `NARROWED_ASYNC_BR_DECL`), decrypts the buffer in-place, extracts the string via `TextDecoder`, and **immediately re-encrypts the buffer in-place inside `finally`** (bypassing cache and perturbing key derivation on tamper).
 - Prevents plaintext shaders from lingering in heap memory and guarantees 100% idempotence under React `StrictMode` double-mounts.
 
 ---
@@ -71,7 +72,7 @@ String literals in cold paths (`length >= minStringLength`, default: 4) are prot
 
 In cold functions (`coldFlow: true`; event handlers, authentication, payment logic — skipping already-virtualized Micro-VM bodies):
 - Eliminates static single-variable `0 === odd` identities and hardcoded `0x7fffffff` signatures, while type-guarding parameter coercions (`typeof param === 'number' ? param | 0 : 0`) so `Object.create(null)`, `Symbol`, and `BigInt` inputs never throw `TypeError`.
-- Combines `>=4`-variable semi-linear Mixed Boolean-Arithmetic (MBA) predicates with folded constants, degree-3 Rivest permutation polynomials mod $2^{32}$, a 256-entry seeded S-Box, and 4 diverse quadratic non-residue (QNR) modular residue families ($\pmod 4, \pmod 8, \pmod{16}$) with alias-table write-read perturbation (mathematically unsatisfiable for any 32-bit integer `z`).
+- Combines `>=4`-variable semi-linear Mixed Boolean-Arithmetic (MBA) predicates with folded constants, degree-3 Rivest permutation polynomials mod $2^{32}$, a 256-entry seeded S-Box, and 4 state- and shield-coupled predicate forms across 4 quadratic non-residue (QNR) modular residue families ($\pmod 4, \pmod 8, \pmod{16}$) with alias-table write-read perturbation (removing fixed `=== R` AST suffixes).
 - Existing application `if/else` branches are never mutated; neutral, return-domain-aligned contextual decoy bridges (`number`/`boolean`/`string`/`void`/`object`) avoid leaking source identifiers or hardcoded decoy routes.
 - Bundler runtime headers (`globalThis.TURBOPACK.push` headers/IDs/keys, `self.webpackChunk*`, `__rspack_chunk*`) and `serializedFunctionNodes` (including nested worker helpers) are exempted selectively while keeping module factory bodies inside vault coverage, and `compactGenerator` preserves spacing around consecutive unary/update operators (`y + +!T * P`).
 
@@ -80,8 +81,8 @@ In cold functions (`coldFlow: true`; event handlers, authentication, payment log
 ## 5. Order-Independent `globalThis` Anti-Tamper Shield
 
 Injected exclusively into entry chunks as a `WorkerGlobalScope`-safe (`self`/`globalThis`), self-executing IIFE:
-- **Hybrid Browser-Context & Order-Independent Attestation**: Writes `globalThis[sym]` and companion state record `globalThis[sym + '_s']` synchronously without `queueMicrotask` races. In browser and Worker contexts (`window`, `document`, or `self` present), async split chunks (such as Next.js 16 Turbopack) executing before the entry shield initializes (`globalThis[sym] === undefined`) resolve valid plaintext without poisoning cache (`d = -1` removed); in bare non-browser VMs (`node:vm` without `window`/`document`/`self`), `shieldCoupled` vaults and Micro-VM v2 fail closed when `globalThis[sym] === undefined`.
-- **Tamper & Proxy Trap Detection**: Detects DevTools pretty-printing (`/\n/.test(src)`), headless browsers (`navigator.webdriver`), or `Reflect.apply` / `Object.getOwnPropertyDescriptor` / `Function.prototype.toString` / `Function.prototype.call` spoofing—including naive and self-spoofing `Proxy(Function.prototype.toString)` and `Proxy(Reflect.apply)` traps via descriptor locks, native signature regexes, cross-call probes, and V8 stack-trace trap inspection.
+- **Hybrid Browser-Context & Order-Independent Attestation**: Writes `globalThis[sym]` and companion state record `globalThis[sym + '_s']` synchronously without `queueMicrotask` races. Narrowed async tolerance (`sv === void 0`) applies only to genuine loading DOM (`document.scripts.length > 0 && document.readyState !== 'complete'`) or Web Worker (`typeof self.importScripts === 'function'`) contexts so async split chunks (such as Next.js 16 Turbopack) executing before the entry shield initializes resolve cleanly without poisoning cache (`d = -1` removed); bare non-browser VMs (`node:vm`, bare `{}`) and already-complete documents without a shield fail closed.
+- **Tamper & Proxy Trap Detection**: Detects DevTools pretty-printing (`/\n/.test(src)`), headless browsers (`navigator.webdriver`), or `Reflect.apply` / `Object.getOwnPropertyDescriptor` / `Function.prototype.toString` / `Function.prototype.call` / `Error.prepareStackTrace` / `Error.prototype.stack` spoofing—including naive and self-spoofing `Proxy` traps via descriptor locks, prototype-chain checks, native signature regexes, cross-call probes, and V8 stack-trace trap inspection.
 - **Fail-Closed Poisoning**: On active tampering (`__unpeek_tampered === true`, `status === 2`, or mismatched delta) or bare VM harvesting, decoders fail closed without writing to cache, while dispatching `CustomEvent('unpeek:tamper')` (and silencing `console` in `gradual` mode).
 
 ---
@@ -93,10 +94,10 @@ When `--aggressive` or `tier: 'Tier 3'` (`--profile strict`) is enabled:
 ### Bytecode Micro-VM v2 (43-Opcode Direct-Threaded Trampoline)
 - Priority-scores cold functions for `maxFunctionsPerChunk` (`@unpeek-critical` / `critical.include` > submit/validation/auth/checkout/server-action/`fetch` handlers > multi-statement logic; default `12`, `[8, 400]` AST node window) without touching hot paths.
 - Pre-VM AST lowering supports `&&`/`||`/`??`, `?:`, sequence expressions, `for`/`while`/`do..while` loops, `try/throw` (`OP_THROW`), `this`, `new`, template literals, destructuring/default parameters, and `obj.arguments`/`obj.eval` member accesses, and prunes unreachable post-`RET`/`THROW` epilogues.
-- Shares per-`(scope, seed)` runtime instances on `globalThis.__unpeek_vm`, checks `_uVm*` `Function.prototype.toString()` for pretty-print formatting (`$flt = 1`), and executes via a `$step` direct-threaded closure trampoline with an inter-block `$f.ac` accumulator ratchet and non-zero per-opcode MBA-wrapped handler offsets—zero `eval()` or `new Function()`, 100% strict CSP compliant.
+- Shares per-`(scope, seed)` runtime instances on `globalThis.__unpeek_vm`, checks `_uVm*` `Function.prototype.toString()` for pretty-print formatting (`$flt = 1`), verifies 32-bit `sym_s[1]` (`expectedStateHash`), and executes via a `$step` direct-threaded closure trampoline with an inter-block `$f.ac` accumulator ratchet and per-`(seed, op)` non-zero semantic handler biases (`1..31`)—zero `eval()` or `new Function()`, 100% strict CSP compliant.
 
 ### Shared Host-Coupled WASM KDF (<1.2 KB Singleton)
-- Synthesizes a compact `371 B` (`<1.2 KB`) WebAssembly binary importing `env.g(i32)->i32` and `env.m(i32, i32)->i32` host hooks (with `bulkMix` and `mem` exports; zero-import instantiation fails with `TypeError`/`LinkError`).
+- Synthesizes a compact `<1.2 KB` WebAssembly binary importing masked `env.g(i32)->i32` and `env.m(i32, i32)->i32` host hooks (`gMask`, `pcMask`, plus `bulkMix` and `mem` exports; zero-import instantiation fails with `TypeError`/`LinkError`).
 - Compiled once into a shared `globalThis` polymorphic singleton slot across split chunks, eliminating per-chunk WASM bloat, with a bit-identical non-linear Rivest + 256-entry affine S-Box JavaScript fallback (`kdfParityVerified: true`) when CSP blocks WebAssembly.
 
 ### Idempotent 64-Bit Call-Site Salted Lazy Vault

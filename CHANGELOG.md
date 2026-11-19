@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.1.0] - 2026-11-19
+
+### Added
+- **Source Map v3 Critical Enclave Targeting (P0)**: Added `packages/unpeek/src/ast/sourcemap-critical.ts` (`resolveSourceMapCriticalNodes`, wired into `analyzeAstHotPaths`) to resolve `/*! @unpeek-critical */` annotations and `critical.include` names via VLQ mappings, original `sourcesContent`, and `names` even when bundlers strip comments or rename functions.
+- **Glob Asset Filtering & Config Seed (P1 / P2)**: Implemented `matchesGlobPattern` for `config.filter.include` and `config.filter.exclude` across both CLI `scanClientBundles` (`detector.ts`) and bundler `isExcludedClientAsset` (`unplugin.ts`), added finite-number validated `UnpeekConfig.seed?: number` (`config.ts`, `internal/config.ts`, `protect.ts`, `unplugin.ts`), and added `deterrentMode` and `detectHeadless` fields to `ProtectSummary`.
+- **Automatic Deterministic `debugId` Minting (P2)**: When `keepPrivateMaps: true` (or `shouldGenerateMap` in `unplugin.ts`) and a source map is processed, `protectProject` and `unplugin` automatically stamp an identical deterministic SHA-256 `debugId` across the protected JS bundle and vaulted `.map` file even if no pre-existing `debugId` was present.
+
+### Changed
+- **JSX/Hook UI Signal Requirement for `isPascalCaseComponent` (P0)**: Updated `hasUiComponentSignal` in `hot-path-detector.ts` so PascalCase functions/classes require an explicit JSX (`createElement`, `cloneElement`, `jsx`, `jsxs`, `_jsx`, `_jsxs`, `jsxDEV`, `_jsxDEV`), React hook (`use*`), or HOC (`memo`, `forwardRef`, etc.) signal instead of exempting arbitrary PascalCase helpers such as `LicenseValidator` or `TokenSigner` as `SHALLOW_RENDER_COMPONENT`.
+- **Universal Binary/Base64 WASM Shader Exemption (P1)**: Added `isBinaryOrBase64Payload` in `string-vault.ts` to exempt universal Base64 WASM headers (`AGFzbQE`), binary `data:` URIs (`application/wasm`, `application/octet-stream`, `image/`, `font/`, `audio/`, `video/`), and large pure Base64 blobs (`>= 4096` chars) from `ShaderVault` and `StringVault` double-encoding.
+- **CLI Tier 1–3 Alignment & Shield Summary (P2)**: Updated `printHelp` and `printSummaryTable` in `cli/index.ts` to report all three protection tiers (`Tier 1 (minimal)`, `Tier 2 (recommended, default)`, `Tier 3 (strict / --aggressive)`) and display the effective `shield` row (`deterrentMode` and `detectHeadless`).
+
+### Security & Fixed
+- **`isAstAlreadyProtected` False-Positive Cleanup (P1b)**: Removed short-prefix matches (`_d`, `_m`, `_w`, `_k`, `_$`, `_s`, `$b`, `_hX*` prefix) in `ast/index.ts`, retaining explicit unpeek identifiers (`_uC`, `_uD`, `_uS`, `_uSb`, `_uDec`, `_uAl`, `_uAm`, `_uZt`, `_uVm`, `_wKdf`, `_uP`, `_uCache`, `_uDc`, `_u$`, exact `_hX`, and `containsUnpeekShieldMarker`).
+- **Shield `Error.prepareStackTrace` & `InPlaceVault` Hardening (P1c)**: Hardened `integrity-guard.ts` against `Error.prepareStackTrace` and `Error.prototype.stack` descriptor/getter tampering, coupled `InPlaceVault` (`createShaderVaultAst`) to the runtime shield (`sym`, `expectedDelta`, `shieldCoupled`), narrowed `sv === void 0` async tolerance (`NARROWED_ASYNC_BR_DECL`) to loading DOM (`document.scripts.length > 0 && document.readyState !== 'complete'`) or Web Worker (`typeof self.importScripts === 'function'`) contexts, and masked WASM KDF host imports (`gMask`, `pcMask`) in `wasm-vault.ts`.
+- **State-Coupled QNR Predicates & Micro-VM v2 State Verification (P2)**: Diversified `createSotaMbaPredicate` (`cold-flow-guard.ts`) into 4 state- and shield-coupled predicate forms across 4 modular QNR families (removing fixed `=== R` suffixes), added per-`(seed, op)` non-zero semantic handler biases (`computeHandlerBias`, `1..31`), and added 32-bit `sym_s[1]` (`expectedStateHash`) verification in Micro-VM v2 (`micro-vm.ts`, `runtime/index.ts`).
+
+---
+
 ## [4.0.1] - 2026-11-18
 
 ### Security & Fixed
