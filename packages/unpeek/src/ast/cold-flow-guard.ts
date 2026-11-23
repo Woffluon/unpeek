@@ -25,6 +25,18 @@ export interface Mba4ContextOptions {
   shieldCoupled?: boolean;
 }
 
+export interface AffineMbaParams {
+  readonly m: number;
+  readonly m2: number;
+  readonly mInv: number;
+  readonly c: number;
+  readonly d: number;
+}
+
+export interface ApplyColdFlowGuardOptions {
+  enableBitwiseMba?: boolean;
+}
+
 const NEUTRAL_DECOY_KEYS = [
   'telemetryOk',
   'retryBudget',
@@ -48,6 +60,36 @@ function mixSeed32(seed: number, salt: number): number {
   h = Math.imul(h, 0xc2b2ae35) >>> 0;
   h ^= h >>> 16;
   return h | 0;
+}
+
+/**
+ * Computes the multiplicative inverse of an odd 32-bit integer modulo 2^32
+ * via 5 Newton-Raphson iterations: m * mInv === 1 (mod 2^32).
+ */
+export function modInverseUint32(oddValue: number): number {
+  const m = (oddValue | 1) >>> 0;
+  let inv = 1;
+  for (let i = 0; i < 5; i++) {
+    inv = Math.imul(inv, (2 - Math.imul(m, inv)) | 0) >>> 0;
+  }
+  return inv >>> 0;
+}
+
+/**
+ * Derives non-canonical parameterized affine MBA parameters over Z_{2^32}
+ * satisfying m * mInv === 1 (mod 2^32) and d = -(mInv * c) mod 2^32.
+ */
+export function deriveAffineMbaParams(seed: number, salt: number): AffineMbaParams {
+  let m = (mixSeed32(seed, salt) | 1) >>> 0;
+  if (m === 1 || m === 0xffffffff || m === 0x9e3779b9) {
+    m = ((m ^ 0x5bd1e995) | 1) >>> 0;
+  }
+  const m2 = Math.imul(m, 2) >>> 0;
+  const mInv = modInverseUint32(m);
+  let c = mixSeed32(seed, salt + 0x9e37) >>> 0;
+  if (c === 0) c = 0x27d4eb2f;
+  const d = (-Math.imul(mInv, c)) >>> 0;
+  return { m, m2, mInv, c, d };
 }
 
 function cloneNode<T>(node: T): T {
@@ -737,13 +779,15 @@ function buildQnrBitExpr(qnrValRef: any, bitKind: 'xor1' | 'or2'): any {
 }
 
 /**
- * Generates a non-zero-identical Quadratic Non-Residue (QNR) opaque predicate
- * across 4 modular residue families (mod 4, mod 8, mod 16) and 4 diversified
- * runtime state- and shield-coupled predicate forms (eliminating fixed `=== R` suffixes):
+ * Generates a non-zero-identical Quadratic Non-Residue (QNR) / MBA opaque predicate
+ * across 4 modular residue families (mod 4, mod 8, mod 16) and 6 diversified
+ * runtime state-, shield-, and domain-coupled predicate forms (eliminating fixed `=== R` suffixes):
  * - Form 0: Dual-path state invariant `(pathA ^ pathB) !== 0`
  * - Form 1: Shield-coupled compound condition (`qnrFail || globalThis[sym + '_s'][0] === 2`)
  * - Form 2: Cross-slot alias inequality (`>` / `<` over two distinct `_uAl`/`_uAm` slots)
  * - Form 3: State-masked non-literal QNR target comparison
+ * - Form 4: Unsigned-domain MBA inequality (`((u | (u - 1 >>> 0)) >>> 0) < ((u ^ (u - 1 >>> 0)) >>> 0)`)
+ * - Form 5: Parameterized affine-inverse MBA identity over `Z_{2^32}`
  */
 export function createSotaMbaPredicate(
   seed: number,
@@ -957,7 +1001,8 @@ export function createSotaMbaPredicate(
   );
 
   const hasShieldCoupling = Boolean(ctxOpts?.shieldCoupled && ctxOpts?.windowKeySymbol);
-  const predForm = (fnIndex + (hasShieldCoupling ? 1 : ((seed >>> 2) & 3))) & 3;
+  const predOffset = hasShieldCoupling ? 1 : (seed >>> 2) % 6;
+  const predForm = (((fnIndex + predOffset) % 6) + 6) % 6;
 
   let testExpr: any;
   if (predForm === 0) {
@@ -1050,7 +1095,7 @@ export function createSotaMbaPredicate(
     }
     const rhsExpr = makeBinary('+', makeLiteral(qnrFamily.outBoundVal), slotWriteB);
     testExpr = makeBinary(qnrFamily.outBoundOp, lhsExpr, rhsExpr);
-  } else {
+  } else if (predForm === 3) {
     // Form 3: State-masked QNR target (non-literal RHS)
     const tagLhs = hasAlias
       ? makeBinary('&', makeMemberIndex(ctxOpts!.aliasIdentA!, makeLiteral(slotB)), makeLiteral(0xf0))
@@ -1064,6 +1109,85 @@ export function createSotaMbaPredicate(
     const lhsExpr = makeBinary('|', makeBinary('^', qnrLeft, tagLhs), makeLiteral(0));
     const rhsExpr = makeBinary('|', makeBinary('^', makeLiteral(qnrFamily.target), tagRhs), makeLiteral(0));
     testExpr = makeBinary('===', lhsExpr, rhsExpr);
+  } else if (predForm === 4) {
+    // Form 4: Unsigned-domain MBA inequality over uint32 (breaks signed static reasoning)
+    // (((u | ((u - 1) >>> 0)) >>> 0) < ((u ^ ((u - 1) >>> 0)) >>> 0)), u = (scratch ^ k) >>> 0
+    const k4 = (mixSeed32(seed, fnIndex * 29 + 13) >>> 0) || 1;
+    if (ctxOpts?.scratchVarIdent) {
+      const scratchId = { type: 'Identifier', name: ctxOpts.scratchVarIdent };
+      const preU = aliasInvZero
+        ? makeBinary('^', cloneNode(scratchId), aliasInvZero)
+        : cloneNode(scratchId);
+      const uAssign = {
+        type: 'AssignmentExpression',
+        operator: '=',
+        left: cloneNode(scratchId),
+        right: makeBinary('>>>', makeBinary('^', preU, makeLiteral(k4)), makeLiteral(0)),
+      };
+      const uMinus1Lhs = makeBinary('>>>', makeBinary('-', cloneNode(scratchId), makeLiteral(1)), makeLiteral(0));
+      const uMinus1Rhs = makeBinary('>>>', makeBinary('-', cloneNode(scratchId), makeLiteral(1)), makeLiteral(0));
+      const orU = makeBinary('>>>', makeBinary('|', cloneNode(scratchId), uMinus1Lhs), makeLiteral(0));
+      const xorU = makeBinary('>>>', makeBinary('^', cloneNode(scratchId), uMinus1Rhs), makeLiteral(0));
+      const lhsSeq = {
+        type: 'SequenceExpression',
+        expressions: [...qnrLeft.expressions.slice(0, -1), uAssign, orU],
+      };
+      testExpr = makeBinary('<', lhsSeq, xorU);
+    } else {
+      const uExpr = makeBinary('>>>', makeBinary('^', cloneNode(zRefForDecoy), makeLiteral(k4)), makeLiteral(0));
+      const uMinus1Lhs = makeBinary('>>>', makeBinary('-', cloneNode(uExpr), makeLiteral(1)), makeLiteral(0));
+      const uMinus1Rhs = makeBinary('>>>', makeBinary('-', cloneNode(uExpr), makeLiteral(1)), makeLiteral(0));
+      const orU = makeBinary('>>>', makeBinary('|', cloneNode(uExpr), uMinus1Lhs), makeLiteral(0));
+      const xorU = makeBinary('>>>', makeBinary('^', cloneNode(uExpr), uMinus1Rhs), makeLiteral(0));
+      testExpr = makeBinary('<', orU, xorU);
+    }
+  } else {
+    // Form 5: Parameterized affine-inverse MBA identity over Z_{2^32}
+    // (((Math.imul(mInv, (Math.imul(m, scratch ^ k) + Math.imul(m2, scratch & k) + c) | 0) + d) | 0) !== ((scratch + k) | 0))
+    const k5 = (mixSeed32(seed, fnIndex * 31 + 17) >>> 0) || 3;
+    const { m, m2, mInv, c, d } = deriveAffineMbaParams(seed, fnIndex * 37 + 23);
+    const buildAffineLhs = (valNode: any): any => {
+      const inner = makeBinary(
+        '|',
+        makeBinary(
+          '+',
+          makeBinary(
+            '+',
+            makeImul(makeLiteral(m), makeBinary('^', cloneNode(valNode), makeLiteral(k5))),
+            makeImul(makeLiteral(m2), makeBinary('&', cloneNode(valNode), makeLiteral(k5)))
+          ),
+          makeLiteral(c)
+        ),
+        makeLiteral(0)
+      );
+      return makeBinary(
+        '|',
+        makeBinary('+', makeImul(makeLiteral(mInv), inner), makeLiteral(d)),
+        makeLiteral(0)
+      );
+    };
+    const buildAffineRhs = (valNode: any): any =>
+      makeBinary('|', makeBinary('+', cloneNode(valNode), makeLiteral(k5)), makeLiteral(0));
+
+    if (ctxOpts?.scratchVarIdent) {
+      const scratchId = { type: 'Identifier', name: ctxOpts.scratchVarIdent };
+      const preSeqs = [...qnrLeft.expressions.slice(0, -1)];
+      if (aliasInvZero) {
+        preSeqs.push({
+          type: 'AssignmentExpression',
+          operator: '=',
+          left: cloneNode(scratchId),
+          right: makeBinary('|', makeBinary('^', cloneNode(scratchId), aliasInvZero), makeLiteral(0)),
+        });
+      }
+      const lhsSeq = {
+        type: 'SequenceExpression',
+        expressions: [...preSeqs, buildAffineLhs(scratchId)],
+      };
+      testExpr = makeBinary('!==', lhsSeq, buildAffineRhs(scratchId));
+    } else {
+      testExpr = makeBinary('!==', buildAffineLhs(zRefForDecoy), buildAffineRhs(zRefForDecoy));
+    }
   }
 
   return {
@@ -1337,6 +1461,460 @@ function createSboxAndAliasDeclarations(
  */
 export const MAX_COLD_GUARDS_PER_CHUNK = 12;
 
+/**
+ * O1: Maximum cold-path bitwise instruction substitutions per bundle chunk
+ * in strict / aggressive builds.
+ */
+export const MAX_COLD_BITWISE_MBA_PER_CHUNK = 8;
+
+const BITWISE_MBA_OPS = new Set(['^', '|', '&']);
+
+const BITWISE_LOOP_NODE_TYPES = new Set([
+  'ForStatement',
+  'WhileStatement',
+  'DoWhileStatement',
+  'ForInStatement',
+  'ForOfStatement',
+]);
+
+const BITWISE_FUNCTION_TYPES = new Set([
+  'FunctionDeclaration',
+  'FunctionExpression',
+  'ArrowFunctionExpression',
+]);
+
+const BITWISE_LEXICAL_SCOPE_TYPES = new Set([
+  'Program',
+  'FunctionDeclaration',
+  'FunctionExpression',
+  'ArrowFunctionExpression',
+  'BlockStatement',
+  'ForStatement',
+  'ForInStatement',
+  'ForOfStatement',
+  'SwitchStatement',
+  'CatchClause',
+  'StaticBlock',
+]);
+
+const FORBIDDEN_BITWISE_IDENTIFIERS = new Set([
+  'arguments',
+  'eval',
+  'undefined',
+  'NaN',
+  'Infinity',
+  'globalThis',
+  'window',
+  'self',
+  'Math',
+  'BigInt',
+]);
+
+function collectBoundPatternNames(pattern: any, out: string[]): void {
+  if (!pattern || typeof pattern !== 'object') return;
+  switch (pattern.type) {
+    case 'Identifier':
+      out.push(pattern.name);
+      break;
+    case 'AssignmentPattern':
+      collectBoundPatternNames(pattern.left, out);
+      break;
+    case 'RestElement':
+      collectBoundPatternNames(pattern.argument, out);
+      break;
+    case 'ArrayPattern':
+      for (const el of pattern.elements || []) {
+        if (el) collectBoundPatternNames(el, out);
+      }
+      break;
+    case 'ObjectPattern':
+      for (const prop of pattern.properties || []) {
+        if (prop.type === 'Property') {
+          collectBoundPatternNames(prop.value, out);
+        } else if (prop.type === 'RestElement') {
+          collectBoundPatternNames(prop.argument, out);
+        }
+      }
+      break;
+  }
+}
+
+interface BitwiseMbaScopeAnalysis {
+  unsafe: boolean;
+  scopeBindings: Map<acorn.Node, Set<string>>;
+}
+
+function analyzeBitwiseMbaScopes(ast: acorn.Program): BitwiseMbaScopeAnalysis {
+  const scopeBindings = new Map<acorn.Node, Set<string>>();
+  let unsafe = false;
+
+  const addBinding = (scopeNode: acorn.Node, name: string): void => {
+    if (name === 'Math') {
+      unsafe = true;
+      return;
+    }
+    let set = scopeBindings.get(scopeNode);
+    if (!set) {
+      set = new Set();
+      scopeBindings.set(scopeNode, set);
+    }
+    set.add(name);
+  };
+
+  const scopeStack: acorn.Node[] = [];
+  const varTargetStack: acorn.Node[] = [];
+
+  const getNearestLexicalScope = (): acorn.Node => scopeStack[scopeStack.length - 1] ?? ast;
+  const getNearestVarScope = (): acorn.Node => varTargetStack[varTargetStack.length - 1] ?? ast;
+
+  function scan(node: any): void {
+    if (unsafe || !node || typeof node !== 'object' || typeof node.type !== 'string') {
+      return;
+    }
+
+    if (node.type === 'WithStatement') {
+      unsafe = true;
+      return;
+    }
+    if (
+      (node.type === 'Literal' && (typeof node.value === 'bigint' || typeof node.bigint === 'string')) ||
+      node.type === 'BigIntLiteral'
+    ) {
+      unsafe = true;
+      return;
+    }
+    if (node.type === 'Identifier' && node.name === 'BigInt') {
+      unsafe = true;
+      return;
+    }
+
+    if (
+      node.type === 'ImportSpecifier' ||
+      node.type === 'ImportDefaultSpecifier' ||
+      node.type === 'ImportNamespaceSpecifier'
+    ) {
+      if (node.local?.type === 'Identifier') {
+        addBinding(ast, node.local.name);
+      }
+    } else if (node.type === 'FunctionDeclaration') {
+      if (node.id?.type === 'Identifier') {
+        addBinding(getNearestLexicalScope(), node.id.name);
+        addBinding(getNearestVarScope(), node.id.name);
+      }
+    } else if (node.type === 'ClassDeclaration') {
+      if (node.id?.type === 'Identifier') {
+        addBinding(getNearestLexicalScope(), node.id.name);
+      }
+    } else if (node.type === 'VariableDeclaration') {
+      const targetScope = node.kind === 'var' ? getNearestVarScope() : getNearestLexicalScope();
+      for (const decl of node.declarations || []) {
+        const names: string[] = [];
+        collectBoundPatternNames(decl.id, names);
+        for (const name of names) {
+          addBinding(targetScope, name);
+        }
+      }
+    }
+
+    if (unsafe) return;
+
+    const pushesLexical = BITWISE_LEXICAL_SCOPE_TYPES.has(node.type);
+    const isFn = BITWISE_FUNCTION_TYPES.has(node.type);
+    const isStaticBlock = node.type === 'StaticBlock';
+
+    if (pushesLexical) {
+      scopeStack.push(node);
+      if (!scopeBindings.has(node)) {
+        scopeBindings.set(node, new Set());
+      }
+    }
+
+    if (isFn) {
+      if (node.id?.type === 'Identifier') {
+        addBinding(node, node.id.name);
+      }
+      for (const param of node.params || []) {
+        const names: string[] = [];
+        collectBoundPatternNames(param, names);
+        for (const name of names) {
+          addBinding(node, name);
+        }
+      }
+      // Hoist `var` bindings in a function body onto the body BlockStatement so
+      // parameter default initializers cannot treat body `var`s as in-scope.
+      const bodyScope = node.body?.type === 'BlockStatement' ? node.body : node;
+      varTargetStack.push(bodyScope);
+    } else if (node.type === 'Program' || isStaticBlock) {
+      varTargetStack.push(node);
+    } else if (node.type === 'CatchClause' && node.param) {
+      const names: string[] = [];
+      collectBoundPatternNames(node.param, names);
+      for (const name of names) {
+        addBinding(node, name);
+      }
+    } else if (node.type === 'ClassExpression' && node.id?.type === 'Identifier') {
+      addBinding(node, node.id.name);
+    }
+
+    try {
+      for (const key of Object.keys(node)) {
+        if (key === 'loc' || key === 'range' || key === 'start' || key === 'end' || key === 'comments' || key === 'tokens') {
+          continue;
+        }
+        const child = node[key];
+        if (Array.isArray(child)) {
+          for (const item of child) {
+            scan(item);
+            if (unsafe) return;
+          }
+        } else if (child && typeof child === 'object') {
+          scan(child);
+          if (unsafe) return;
+        }
+      }
+    } finally {
+      if (isFn || node.type === 'Program' || isStaticBlock) {
+        varTargetStack.pop();
+      }
+      if (pushesLexical) {
+        scopeStack.pop();
+      }
+    }
+  }
+
+  scan(ast);
+  return { unsafe, scopeBindings };
+}
+
+function isSafeAtomicIntegerLiteral(node: any): boolean {
+  return Boolean(
+    node &&
+      node.type === 'Literal' &&
+      typeof node.value === 'number' &&
+      Number.isInteger(node.value) &&
+      node.value >= 0 &&
+      node.value <= 0xffffffff
+  );
+}
+
+function isZeroNumericLiteral(node: any): boolean {
+  return Boolean(node && node.type === 'Literal' && typeof node.value === 'number' && node.value === 0);
+}
+
+function isLocalBoundIdentifier(
+  node: any,
+  scopeStack: acorn.Node[],
+  scopeBindings: Map<acorn.Node, Set<string>>,
+  programNode: acorn.Program
+): boolean {
+  if (!node || node.type !== 'Identifier') return false;
+  if (FORBIDDEN_BITWISE_IDENTIFIERS.has(node.name)) return false;
+  for (let i = scopeStack.length - 1; i >= 0; i--) {
+    const scopeNode = scopeStack[i];
+    if (scopeNode === programNode) return false;
+    const bindings = scopeBindings.get(scopeNode);
+    if (bindings && bindings.has(node.name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildColdBitwiseConditional(
+  op: '^' | '|' | '&',
+  left: any,
+  right: any,
+  seed: number,
+  subIndex: number,
+  hotExemptNodes?: WeakSet<acorn.Node>
+): any {
+  const { m, mInv, c, d } = deriveAffineMbaParams(seed, 0x4100 + subIndex * 43);
+
+  const a1 = cloneNode(left);
+  const b1 = cloneNode(right);
+  const a2 = cloneNode(left);
+  const b2 = cloneNode(right);
+
+  let affineComb: any;
+  if (op === '^') {
+    affineComb = makeBinary(
+      '-',
+      makeImul(makeLiteral(m), makeBinary('|', a1, b1)),
+      makeImul(makeLiteral(m), makeBinary('&', a2, b2))
+    );
+  } else if (op === '|') {
+    affineComb = makeBinary(
+      '+',
+      makeImul(makeLiteral(m), makeBinary('&', a1, b1)),
+      makeImul(makeLiteral(m), makeBinary('^', a2, b2))
+    );
+  } else {
+    affineComb = makeBinary(
+      '-',
+      makeImul(makeLiteral(m), makeBinary('|', a1, b1)),
+      makeImul(makeLiteral(m), makeBinary('^', a2, b2))
+    );
+  }
+
+  const innerWithC = makeBinary('|', makeBinary('+', affineComb, makeLiteral(c)), makeLiteral(0));
+  const consequent = makeBinary(
+    '|',
+    makeBinary('+', makeImul(makeLiteral(mInv), innerWithC), makeLiteral(d)),
+    makeLiteral(0)
+  );
+  const alternate = makeBinary(op, cloneNode(left), cloneNode(right));
+
+  const exemptNodes: any[] = [];
+  const uniqueIdents: any[] = [];
+  const seenNames = new Set<string>();
+  for (const operand of [left, right]) {
+    if (operand?.type === 'Identifier' && !seenNames.has(operand.name)) {
+      seenNames.add(operand.name);
+      uniqueIdents.push(operand);
+    }
+  }
+
+  const makeIsNumberExpr = (ident: any): any => {
+    const numLit = makeLiteral('number');
+    const eqNode = makeBinary('===', makeUnary('typeof', { type: 'Identifier', name: ident.name }), numLit);
+    exemptNodes.push(numLit, eqNode);
+    return eqNode;
+  };
+
+  const testExpr =
+    uniqueIdents.length === 2
+      ? {
+          type: 'LogicalExpression',
+          operator: '&&',
+          left: makeIsNumberExpr(uniqueIdents[0]),
+          right: makeIsNumberExpr(uniqueIdents[1]),
+        }
+      : makeIsNumberExpr(uniqueIdents[0]);
+
+  const replacement: any = {
+    type: 'ConditionalExpression',
+    test: testExpr,
+    consequent,
+    alternate,
+    _unpeekGuardSubtree: true,
+  };
+
+  if (hotExemptNodes) {
+    hotExemptNodes.add(replacement);
+    hotExemptNodes.add(testExpr);
+    for (const nodeToExempt of exemptNodes) {
+      hotExemptNodes.add(nodeToExempt);
+    }
+  }
+
+  return replacement;
+}
+
+/**
+ * O1: Substitutes cold-path 32-bit bitwise operations (`^`, `|`, `&`, excluding `x | 0`)
+ * with number-guarded parameterized affine MBA expressions when strict / aggressive mode
+ * is active, preserving exact semantics for BigInt and object operands via fallback.
+ */
+export function applyColdBitwiseMba(
+  ast: acorn.Program,
+  coldFunctionNodes: WeakSet<acorn.Node>,
+  seed = 0x9e3779b9,
+  hotExemptNodes?: WeakSet<acorn.Node>,
+  guardSubtreeNodes?: WeakSet<acorn.Node>
+): number {
+  const { unsafe, scopeBindings } = analyzeBitwiseMbaScopes(ast);
+  if (unsafe) return 0;
+
+  let mbaCount = 0;
+  const scopeStack: acorn.Node[] = [];
+
+  function walkTransform(
+    node: any,
+    setInParent: (replacement: any) => void,
+    inColdFn: boolean
+  ): void {
+    if (mbaCount >= MAX_COLD_BITWISE_MBA_PER_CHUNK) return;
+    if (!node || typeof node !== 'object' || typeof node.type !== 'string') return;
+    if (hotExemptNodes?.has(node) || guardSubtreeNodes?.has(node)) return;
+    if ((node as any)._unpeekGuardSubtree === true) return;
+    if ((node as any)._unpeekSerialized || (node as any)._unpeekVirtualized === true) return;
+    if (BITWISE_LOOP_NODE_TYPES.has(node.type)) return;
+
+    const pushedScope = scopeBindings.has(node);
+    if (pushedScope) scopeStack.push(node);
+
+    try {
+      const childInColdFn = BITWISE_FUNCTION_TYPES.has(node.type)
+        ? coldFunctionNodes.has(node)
+        : inColdFn;
+
+      if (childInColdFn && node.type === 'BinaryExpression' && BITWISE_MBA_OPS.has(node.operator)) {
+        const op = node.operator as '^' | '|' | '&';
+        const { left, right } = node;
+        const isCoercionOrZero = op === '|' && isZeroNumericLiteral(right);
+        if (!isCoercionOrZero) {
+          const leftAtomic =
+            isSafeAtomicIntegerLiteral(left) ||
+            isLocalBoundIdentifier(left, scopeStack, scopeBindings, ast);
+          const rightAtomic =
+            isSafeAtomicIntegerLiteral(right) ||
+            isLocalBoundIdentifier(right, scopeStack, scopeBindings, ast);
+          const hasIdent = left?.type === 'Identifier' || right?.type === 'Identifier';
+          if (leftAtomic && rightAtomic && hasIdent) {
+            const replacement = buildColdBitwiseConditional(
+              op,
+              left,
+              right,
+              seed,
+              mbaCount,
+              hotExemptNodes
+            );
+            mbaCount++;
+            setInParent(replacement);
+            return;
+          }
+        }
+      }
+
+      for (const key of Object.keys(node)) {
+        if (mbaCount >= MAX_COLD_BITWISE_MBA_PER_CHUNK) break;
+        if (key === 'loc' || key === 'range' || key === 'start' || key === 'end' || key === 'comments' || key === 'tokens') {
+          continue;
+        }
+        const child = node[key];
+        if (Array.isArray(child)) {
+          for (let i = 0; i < child.length; i++) {
+            if (mbaCount >= MAX_COLD_BITWISE_MBA_PER_CHUNK) break;
+            const item = child[i];
+            if (item && typeof item === 'object' && typeof item.type === 'string') {
+              walkTransform(
+                item,
+                (rep) => {
+                  child[i] = rep;
+                },
+                childInColdFn
+              );
+            }
+          }
+        } else if (child && typeof child === 'object' && typeof child.type === 'string') {
+          walkTransform(
+            child,
+            (rep) => {
+              node[key] = rep;
+            },
+            childInColdFn
+          );
+        }
+      }
+    } finally {
+      if (pushedScope) scopeStack.pop();
+    }
+  }
+
+  walkTransform(ast, () => {}, false);
+  return mbaCount;
+}
+
 export function applyColdFlowGuard(
   ast: acorn.Program,
   coldFunctionNodes: WeakSet<acorn.Node>,
@@ -1344,7 +1922,8 @@ export function applyColdFlowGuard(
   hotExemptNodes?: WeakSet<acorn.Node>,
   windowKeySymbol?: string,
   expectedDelta?: number,
-  shieldCoupled = false
+  shieldCoupled = false,
+  options?: ApplyColdFlowGuardOptions
 ): number {
   const sfx = (seed >>> 0).toString(36).slice(0, 4);
   const decoyIdent = `_uDec${sfx}`;
@@ -1365,6 +1944,10 @@ export function applyColdFlowGuard(
         )
     );
     if (alreadyGuarded) return 0;
+  }
+
+  if (options?.enableBitwiseMba) {
+    applyColdBitwiseMba(ast, coldFunctionNodes, seed, hotExemptNodes);
   }
 
   let guardedCount = 0;
@@ -1404,6 +1987,7 @@ export function applyColdFlowGuard(
       }
     );
     guardedCount++;
+    (guardStmt as any)._unpeekGuardSubtree = true;
 
     if (hotExemptNodes) {
       hotExemptNodes.add(guardStmt);

@@ -83,6 +83,7 @@ export interface CheckOptions {
   maxGzipDelta?: number;
   requireZeroEval?: boolean;
   strictCsp?: boolean;
+  failOnPlaintextSecrets?: boolean;
 }
 
 export interface CheckViolation {
@@ -92,7 +93,8 @@ export interface CheckViolation {
     | 'ignore-missing'
     | 'gzip-budget'
     | 'eval-csp'
-    | 'debugid-mismatch';
+    | 'debugid-mismatch'
+    | 'plaintext-secret';
   severity: 'error' | 'warning';
   message: string;
   file?: string;

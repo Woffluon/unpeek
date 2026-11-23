@@ -38,7 +38,7 @@ console.log(result.message);
 ```
 
 ### `checkProject(options?: CheckOptions): Promise<CheckResult>`
-Read-only CI gate that checks for leaked `.map` files, `sourceMappingURL` comments, missing ignore entries, Gzip budget, and `eval()`/`new Function()` usage.
+Read-only CI gate that checks for leaked `.map` files, `sourceMappingURL` comments, missing ignore entries, Gzip budget, `eval()`/`new Function()` usage, `debugId` integrity, and residual `'plaintext-secret'` literals/regexes via Acorn AST (reporting `'warning'` by default, or `'error'` when `failOnPlaintextSecrets: true`).
 
 ### `symbolicateStackTrace(options: SymbolicateOptions): SymbolicateResult`
 Resolves a minified stack trace locally using source maps stored in `.unpeek-maps/`.
@@ -196,6 +196,7 @@ export interface ManglerConfig {
 Runtime integrity shield options:
 ```ts
 export interface ShieldOptionsConfig {
+  /** Treat webdriver / HeadlessChrome and __playwright / __puppeteer_evaluation_script__ / __nightmare / frida / _frida_ markers as tamper */
   detectHeadless?: boolean;
   deterrentMode?: DeterrentMode; // 'gradual' | 'passive'
 }
@@ -353,6 +354,42 @@ export interface InitResult {
   framework?: UnpeekFramework;
   isNext162Plus?: boolean;
   message: string;
+}
+```
+
+### `CheckOptions`, `CheckViolation` & `CheckResult`
+```ts
+export interface CheckOptions {
+  cwd?: string;
+  outDir?: string;
+  privateMapsDir?: string;
+  maxGzipDelta?: number;
+  requireZeroEval?: boolean;
+  strictCsp?: boolean;
+  /** Promote AST 'plaintext-secret' findings (entropy + bigram + regex audit) from warning to error (default: false) */
+  failOnPlaintextSecrets?: boolean;
+}
+
+export interface CheckViolation {
+  rule:
+    | 'public-map'
+    | 'sourcemap-comment'
+    | 'ignore-missing'
+    | 'gzip-budget'
+    | 'eval-csp'
+    | 'debugid-mismatch'
+    | 'plaintext-secret';
+  severity: 'error' | 'warning';
+  message: string;
+  file?: string;
+}
+
+export interface CheckResult {
+  passed: boolean;
+  outDir: string;
+  checkedFiles: number;
+  violations: CheckViolation[];
+  warnings: CheckViolation[];
 }
 ```
 

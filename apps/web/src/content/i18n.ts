@@ -196,7 +196,7 @@ export function validateLicense($k0){
 export const DICTIONARY: Record<Locale, Dictionary> = {
   en: {
     meta: {
-      version: "v4.1.0",
+      version: "v4.2.0",
       license: "MIT License",
     },
     nav: {
@@ -604,15 +604,15 @@ export default {
           {
             title: "Zero-Escape 92-Char Vault, Noise Filters & In-Place Shader Vault",
             body: [
-              "In Tier 2 (`recommended`, default), cold literals (`>= minStringLength`, default `4`) pass through a noise filter (exempting SVG path coordinates and Tailwind utility class chains) and encode via a seed-shuffled 92-character involutory ASCII permutation (`P[P[c]] == c`) that never emits `\\u00xx` escapes, keeping LZ77/Gzip compression tight.",
+              "In Tier 2 (`recommended`, default), cold literals (`>= minStringLength`, default `4`), static quasis inside interpolated `TemplateLiteral` nodes (`ToPrimitive(\"string\")` evaluation order preserved; tagged templates, dynamic `import()`, and hot paths exempted), and secret-bearing `RegExp` literals wrapped as `new RegExp(vault(...), flags)` (outside loops and `RegExp`-shadowed/`with` scopes via `secret-patterns.ts`) pass through a noise filter (exempting SVG path coordinates and Tailwind utility class chains) and encode via a seed-shuffled 92-character involutory ASCII permutation (`P[P[c]] == c`) that never emits `\\u00xx` escapes, keeping LZ77/Gzip compression tight.",
               "Large template literals and GPU shaders (`>= 256 B` or WebGPU `@vgpu/wgsl` / GLSL signatures outside direct loops, while exempting universal binary/Base64 WASM `AGFzbQE`, binary `data:` URIs, and large pure Base64 payloads) enter a shield-coupled, encrypted `Uint8Array` buffer decoded in-place via `TextDecoder` and immediately re-encrypted in `finally` across both Tier 2 (`recommended`) and Tier 3 (`strict` / `--aggressive`), preventing lingering heap plaintext and keeping React StrictMode remounts idempotent.",
             ],
           },
           {
             title: "Order-Independent Shield & Non-Linear Rivest MBA Guards",
             body: [
-              "Entry chunks execute a `WorkerGlobalScope`-safe (`self`/`globalThis`) FNV-1a integrity IIFE with `Reflect.apply`, `Function.prototype.toString()`, `Error.prepareStackTrace`, and `Error.prototype.stack` descriptor, native-signature, cross-call, and V8 stack-trace `Proxy` trap checks. Async `sv === void 0` tolerance is narrowed to genuine loading DOM (`document.scripts.length > 0 && document.readyState !== 'complete'`) or Web Worker (`self.importScripts`) contexts without cache poisoning (`d = -1` removed), while bare non-browser VMs (`node:vm`, bare `{}`), already-complete documents without a shield, and active tampering fail closed.",
-              "Cold functions (`coldFlow: true`) receive type-guarded `>=4`-variable semi-linear MBA predicates (safe across `Object.create(null)`, `Symbol`, and `BigInt` inputs) paired with degree-3 Rivest $\\mathbb{Z}_{2^{32}}$ permutation polynomials, a 256-entry seeded S-Box, 4 state- and shield-coupled predicate forms across 4 QNR modular residue families ($\\pmod 4, \\pmod 8, \\pmod{16}$) without fixed `=== R` suffixes, alias-table perturbation, and neutral return-domain-aligned decoy bridges without mutating application branches or leaking source identifiers.",
+              "Entry chunks execute a single-line (`<2.3 KB`), `WorkerGlobalScope`-safe (`self`/`globalThis`) FNV-1a integrity IIFE with `Reflect.apply`, `Function.prototype.toString()`, `Error.prepareStackTrace`, and `Error.prototype.stack` descriptor, native-signature, cross-call, and V8 stack-trace `Proxy` trap checks, plus synchronous `detectHeadless: true` checks for `navigator.webdriver`, `HeadlessChrome`, `__playwright`, `__puppeteer_evaluation_script__`, `__nightmare`, `frida`, and `_frida_`. Async `sv === void 0` tolerance is narrowed to genuine loading DOM (`document.scripts.length > 0 && document.readyState !== 'complete'`) or Web Worker (`self.importScripts`) contexts without cache poisoning (`d = -1` removed), while bare non-browser VMs (`node:vm`, bare `{}`), already-complete documents without a shield, and active tampering fail closed.",
+              "Cold functions (`coldFlow: true`) receive type-guarded `>=4`-variable semi-linear MBA predicates (safe across `Object.create(null)`, `Symbol`, and `BigInt` inputs) paired with degree-3 Rivest $\\mathbb{Z}_{2^{32}}$ permutation polynomials, a 256-entry seeded S-Box, 6 state-, shield-, and domain-coupled predicate forms (including Form 4 unsigned-domain MBA inequalities and Form 5 parameterized affine-inverse MBA identities via `modInverseUint32`) across 4 QNR modular residue families ($\\pmod 4, \\pmod 8, \\pmod{16}$) without fixed `=== R` suffixes, alias-table perturbation, and neutral return-domain-aligned decoy bridges without mutating application branches or leaking source identifiers; under `strict` / `--aggressive`, `applyColdBitwiseMba` substitutes up to 8 cold-path `^`/`|`/`&` expressions per chunk with `typeof`-guarded affine MBA (skipping chunks with `BigInt`, `with`, or local `Math` shadowing).",
             ],
           },
           {
@@ -622,8 +622,8 @@ export default {
             ],
             bullets: [
               "`Bytecode Micro-VM v2 (43 Opcodes)`: Pre-VM lowering supports `&&`/`||`/`??`, `?:`, `for`/`while`/`do..while`, `try`/`throw`, `this`, `new`, `obj.arguments`, and closures across an `[8, 400]` AST node window using a `globalThis`-shared singleton `$step` direct-threaded trampoline, inter-block `$f.ac` ratchet, per-`(seed, op)` non-zero semantic handler biases (`1..31`), 32-bit `sym_s[1]` (`expectedStateHash`) verification, dead post-`RET` epilogue pruning, and `_uVm*` pretty-print self-hashing—zero `eval()` or `new Function()`.",
-              "`Singleton Host-Coupled WASM KDF (<1.2 KB)`: Synthesizes a compact WebAssembly binary importing masked `env.g`/`env.m` host hooks (`gMask`, `pcMask`), compiled once into a shared `globalThis` singleton across split chunks, with a bit-identical non-linear Rivest + S-Box JavaScript fallback when WebAssembly is blocked by CSP.",
-              "`64-Bit Call-Site Salted Vault`: Replaces sequential counters with 31-bit salts derived via 64-bit mixing (`_uD(stringIndex, callSiteSalt)`), guaranteeing complete idempotence under React 19 Concurrent Mode and StrictMode.",
+              "`Singleton Host-Coupled WASM KDF (<1.2 KB)`: Synthesizes a `<512 B` WebAssembly binary with seed-derived 2–3 char polymorphic import/export ABI names and shuffled export order (`deriveWasmAbiNames`) over masked `env.g`/`env.m` host hooks (`gMask`, `pcMask`), compiled once into a shared `globalThis` singleton across split chunks, with a bit-identical non-linear Rivest + S-Box JavaScript fallback when WebAssembly is blocked by CSP.",
+              "`64-Bit Call-Site Salted Vault`: Replaces sequential counters with 31-bit salts derived via 64-bit mixing (`_uD(stringIndex, callSiteSalt)`), covering literals, interpolated template static quasis, and secret-bearing `RegExp` instances with complete idempotence under React 19 Concurrent Mode and StrictMode.",
             ],
             codeBlocks: [
               {
@@ -730,8 +730,8 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
             body: [
               "The `unpeek` binary supports `init`, `protect`, `check`, and `symbolicate` commands across three defense tiers:",
               "Tier 1 (`--profile minimal`): Fast baseline with `coldFlow: false`, `mangler.minLength: 1`, hot-path exemption, and order-independent `globalThis` shield (<2% CPU, <15% Gzip).",
-              "Tier 2 (`--profile recommended` / Default): Adds 92-char zero-escape string vaulting, `>=4`-var semi-linear MBA + degree-3 Rivest QNR cold-flow guards, and in-place `Uint8Array` shader vaulting.",
-              "Tier 3 (`--profile strict` / `--aggressive`): Targets `@unpeek-critical` enclaves and `critical.include` functions with the 43-opcode Micro-VM v2, shared `<1.2 KB` host-coupled WASM KDF, 64-bit call-site salted decoders, and CWE-540 path scrubbing.",
+              "Tier 2 (`--profile recommended` / Default): Adds 92-char zero-escape string vault (including interpolated `TemplateLiteral` static quasis and secret-bearing `RegExp` literals), `>=4`-var semi-linear MBA + degree-3 Rivest QNR & Form 4/5 unsigned/affine-inverse MBA guards, and in-place `Uint8Array` shader vaulting.",
+              "Tier 3 (`--profile strict` / `--aggressive`): Targets `@unpeek-critical` enclaves and `critical.include` functions with the 43-opcode Micro-VM v2, shared `<1.2 KB` host-coupled WASM KDF (`deriveWasmAbiNames` polymorphic ABI + shuffled exports `<512 B`), 64-bit call-site salted decoders, cold-path `^`/`|`/`&` affine bitwise MBA (`applyColdBitwiseMba`, max 8/chunk), and CWE-540 path scrubbing.",
             ],
             codeBlocks: [
               {
@@ -743,7 +743,7 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
   Usage:
     unpeek init [--dry-run] [--profile <name>]   wire postbuild and the .unpeek-maps/ vault
     unpeek protect [options]                     protect client bundles in place (Tier 2 default: <2% CPU, <15% Gzip)
-    unpeek check [options]                       read-only CI gate for leaks, ignores, budget, and CSP
+    unpeek check [options]                       read-only CI gate for leaks, ignores, budget, CSP, and plaintext secrets
     unpeek symbolicate [options]                 resolve stack traces locally using .unpeek-maps/
 
   Options (protect):
@@ -754,7 +754,7 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
     --seed <number>                deterministic polymorphic seed
     --passive                      passive deterrent mode (default: marks tamper, keeps console)
     --gradual                      gradual deterrent mode (silences console on tamper)
-    --detect-headless              treat navigator.webdriver / HeadlessChrome as tamper
+    --detect-headless              treat webdriver/HeadlessChrome, Playwright, Puppeteer, Nightmare, and Frida markers as tamper
     --no-maps                      delete .map files instead of vaulting them
     --min-string-length <num>      minimum string length for the vault (default: 4)
     --private-maps-dir <dir>       vault directory (default: .unpeek-maps)
@@ -776,7 +776,7 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
           {
             title: "Programmatic Node.js API & TypeScript Types",
             body: [
-              "Import `protectProject`, `transformJavaScript`, `checkProject`, `symbolicateStackTrace`, `PRESETS`, `isUnpeekError`, or bundler plugins directly from `unpeek` to build custom compilation pipelines.",
+              "Import `protectProject`, `transformJavaScript`, `checkProject`, `symbolicateStackTrace`, `PRESETS`, `isUnpeekError`, or bundler plugins directly from `unpeek` to build custom compilation pipelines. `checkProject(options)` also accepts `CheckOptions.failOnPlaintextSecrets` (`boolean`, default `false` -> `'warning'`) to audit bundles via Acorn AST for `'plaintext-secret'` hits (Shannon entropy, English bigram suppression, and secret-bearing regexes with redacted previews).",
             ],
             codeBlocks: [
               {
@@ -833,7 +833,7 @@ const summary: ProtectSummary = await protectProject({
               "`hotPath`: Configure `customAnimationCalls` (e.g. `['requestAnimationFrame', 'useFrame']`), `customHooks` (e.g. `['useSpring', 'useGesture']`), `arrayHofMethods`, `hocWrappers`, and `maxPipelineCallers` (default `2`) for transitive exemption.",
               "`vault`: Configure `minStringLength` (default `4`), `cssFramework` (`'tailwind'` | `'unocss'` | `'none'`), `customDirectives`, `reservedProps`, `semanticAnchors`, `polymorphicDecoys` (default `true`), and `fragmented` / `fragmentCount`.",
               "`critical` / `tier` / `coldFlow`: Select `'Tier 1' | 'Tier 2' | 'Tier 3'`, toggle `coldFlow`, and target `/*! @unpeek-critical */` annotations (including via Source Map v3 when bundlers strip comments) or `critical.include` patterns (up to `maxFunctionsPerChunk`, default `12`).",
-              "`shield`: Configure `deterrentMode` (`'passive'` | `'gradual'`) and `detectHeadless` (also reported in the CLI `shield` summary row and `ProtectSummary`).",
+              "`shield`: Configure `deterrentMode` (`'passive'` | `'gradual'`) and `detectHeadless` (`navigator.webdriver`, `HeadlessChrome`, `__playwright`, `__puppeteer_evaluation_script__`, `__nightmare`, `frida`, `_frida_`, also reported in the CLI `shield` summary row and `ProtectSummary`).",
               "`mangler`: Set `minLength` (default `1` across presets) plus `reservedIdentifiers`, `excludePrefixes`, and `excludePatterns` (RegExp array) to protect critical runtime globals.",
               "`scrubPaths`: Strip local filesystem paths (`rootDir`, `[project]/`, `webpack://`, Windows `C:\\`) and residual dev metadata (CWE-540).",
               "`next` / `vite`: Specify `next.distDir` for custom Next.js output directories, or `vite.outDir` / `vite.assetsDir` for custom Vite distributions.",
@@ -1042,7 +1042,7 @@ unpeek protect --no-shield`,
   },
   tr: {
     meta: {
-      version: "v4.1.0",
+      version: "v4.2.0",
       license: "MIT Lisansı",
     },
     nav: {
@@ -1450,15 +1450,15 @@ export default {
           {
             title: "Kaçışsız 92-Karakter Kasa, Gürültü Filtresi & Yerinde Shader Kasası",
             body: [
-              "Tier 2 (`recommended`, varsayılan) içinde soğuk string'ler (`>= minStringLength`, varsayılan `4`) SVG yol verisini ve Tailwind sınıf zincirlerini muaf tutan gürültü filtresinden geçer; ardından `\\u00xx` kaçışı üretmeyen, LZ77/Gzip sıkıştırmasını koruyan 92 karakterli involutory ASCII permütasyonu (`P[P[c]] == c`) ile kodlanır.",
+              "Tier 2 (`recommended`, varsayılan) içinde soğuk string'ler (`>= minStringLength`, varsayılan `4`), enterpolasyonlu `TemplateLiteral` ifadelerindeki statik parçalar (`ToPrimitive(\"string\")` sırası korunarak; etiketli şablonlar, dinamik `import()` ve sıcak yollar muaf tutulur) ve `secret-patterns.ts` ile tespit edilip `new RegExp(vault(...), flags)` biçimine alınan sır taşıyan `RegExp` değişmezleri (döngüler ve `RegExp`-gölgeli/`with` kapsamları dışında) SVG yol verisini ve Tailwind sınıf zincirlerini muaf tutan gürültü filtresinden geçer; ardından `\\u00xx` kaçışı üretmeyen, LZ77/Gzip sıkıştırmasını koruyan 92 karakterli involutory ASCII permütasyonu (`P[P[c]] == c`) ile kodlanır.",
               "Doğrudan döngüler dışındaki büyük şablon metinleri ve GPU shader blokları (`>= 256 B` veya WebGPU `@vgpu/wgsl` / GLSL imzaları; evrensel ikili/Base64 WASM `AGFzbQE`, ikili `data:` URI'ları ve büyük saf Base64 blokları muaf tutularak) hem Tier 2 (`recommended`) hem Tier 3 (`strict` / `--aggressive`) modlarında kalkanla eşleşen (shield-coupled), XOR şifreli `Uint8Array` tamponunda tutulur; `TextDecoder` ile yerinde çözülüp `finally` bloğunda anında yeniden şifrelenerek React StrictMode uyumu sağlar.",
             ],
           },
           {
             title: "Sıra-Bağımsız Kalkan ve Non-Lineer Rivest MBA Koruyucuları",
             body: [
-              "Giriş paketleri, `WorkerGlobalScope` uyumlu (`self`/`globalThis`) FNV-1a bütünlük IIFE'i ile `Function.prototype.toString()`, `Reflect.apply`, `Error.prepareStackTrace` ve `Error.prototype.stack` tanımlayıcı, doğal imza, çapraz çağrı ve V8 yığın izi `Proxy` tuzak kontrollerini çalıştırır. `sv === void 0` için asenkron tolerans yalnızca yüklenmekte olan gerçek DOM (`document.scripts.length > 0 && document.readyState !== 'complete'`) veya Web Worker (`self.importScripts`) bağlamlarıyla sınırlandırılıp önbelleği zehirlemeden (`d = -1` kaldırıldı) çözülür; çıplak tarayıcı-dışı VM bağlamları (`node:vm`, boş `{}`), kalkanı eksik tamamlanmış belgeler ve aktif kurcalamalar kapalı başarısız olur.",
-              "Soğuk fonksiyonlar (`coldFlow: true`); `Object.create(null)`, `Symbol` ve `BigInt` girdilerinde tip güvenli `>=4`-değişkenli yarı-lineer MBA koşullarını derece-3 Rivest $\\mathbb{Z}_{2^{32}}$ permütasyon polinomları, 256-girişli tohum S-Box'ı, sabit `=== R` soneki taşımayan 4 durum/kalkan-bağlı koşul biçimi ve 4 farklı modüler QNR rezidü ailesi ($\\pmod 4, \\pmod 8, \\pmod{16}$) + alias tablosu karıştırması ve kaynak değişken adı sızdırmayan nötr tuzak köprüleriyle birleştirir.",
+              "Giriş paketleri, tek satırlık (`<2.3 KB`), `WorkerGlobalScope` uyumlu (`self`/`globalThis`) FNV-1a bütünlük IIFE'i ile `Function.prototype.toString()`, `Reflect.apply`, `Error.prepareStackTrace` ve `Error.prototype.stack` tanımlayıcı, doğal imza, çapraz çağrı ve V8 yığın izi `Proxy` tuzak kontrollerini çalıştırır ve `detectHeadless: true` etkinken `navigator.webdriver`, `HeadlessChrome`, `__playwright`, `__puppeteer_evaluation_script__`, `__nightmare`, `frida` ve `_frida_` işaretçilerini senkron denetler. `sv === void 0` için asenkron tolerans yalnızca yüklenmekte olan gerçek DOM (`document.scripts.length > 0 && document.readyState !== 'complete'`) veya Web Worker (`self.importScripts`) bağlamlarıyla sınırlandırılıp önbelleği zehirlemeden (`d = -1` kaldırıldı) çözülür; çıplak tarayıcı-dışı VM bağlamları (`node:vm`, boş `{}`), kalkanı eksik tamamlanmış belgeler ve aktif kurcalamalar kapalı başarısız olur.",
+              "Soğuk fonksiyonlar (`coldFlow: true`); `Object.create(null)`, `Symbol` ve `BigInt` girdilerinde tip güvenli `>=4`-değişkenli yarı-lineer MBA koşullarını derece-3 Rivest $\\mathbb{Z}_{2^{32}}$ permütasyon polinomları, 256-girişli tohum S-Box'ı, sabit `=== R` soneki taşımayan 6 durum-, kalkan- ve alan-bağlı koşul biçimi (Form 4 işaretsiz-alan MBA eşitsizliği ve `modInverseUint32` tabanlı Form 5 parametrik afin ters MBA özdeşliği dahil) ve 4 farklı modüler QNR rezidü ailesi ($\\pmod 4, \\pmod 8, \\pmod{16}$) + alias tablosu karıştırması ve kaynak değişken adı sızdırmayan nötr tuzak köprüleriyle birleştirir; `strict` / `--aggressive` modlarında `applyColdBitwiseMba`, parça başına en fazla 8 soğuk-yol `^`/`|`/`&` ifadesini `BigInt`, `with` ve `Math` gölgeleme kontrolü altında `typeof` korumalı afin MBA ile değiştirir.",
             ],
           },
           {
@@ -1468,8 +1468,8 @@ export default {
             ],
             bullets: [
               "`Bytecode Micro-VM v2 (43 Komut)`: Pre-VM düşürmesiyle `&&`/`||`/`??`, `?:`, `for`/`while`/`do..while`, `try`/`throw`, `this`, `new`, `obj.arguments` ve kapanışları `[8, 400]` AST düğüm penceresinde `globalThis` üzerinde paylaşılan tekil `$step` trambolini, bloklar arası `$f.ac` çarkı, `(seed, op)` başına sıfır-olmayan semantik handler sapmaları (`1..31`), 32-bit `sym_s[1]` (`expectedStateHash`) doğrulaması, ölü post-`RET` epilog budaması ve `_uVm*` formatlama öz-karmasıyla çalıştırır (`eval()` veya `new Function()` yok).",
-              "`Tekil Konak-Bağlı WASM KDF (<1.2 KB)`: Maskeli `env.g`/`env.m` konak kancalarını (`gMask`, `pcMask`) içe aktaran kompakt WebAssembly ikilisini ayrık parçalar arasında tek bir `globalThis` tekil yuvasında paylaşır; CSP WebAssembly'i engellerse bit-özdeş non-lineer Rivest + S-Box JavaScript yedeğine geçer.",
-              "`64-Bit Çağrı-Noktası Tuzlu Kasa`: Sıralı sayaçlar yerine 64-bit karıştırmadan türetilen 31-bit tuzlar (`_uD(stringIndex, callSiteSalt)`) kullanır; React 19 Eşzamanlı Mod ve StrictMode altında tam idempotent çalışır.",
+              "`Tekil Konak-Bağlı WASM KDF (<1.2 KB)`: Maskeli `env.g`/`env.m` konak kancaları (`gMask`, `pcMask`) üzerinde tohumdan türetilmiş 2–3 karakterli polimorfik içe/dışa aktarım ABI adları ve karıştırılmış export sırasıyla (`deriveWasmAbiNames`) `<512 B` boyutunda WebAssembly ikilisi sentezler ve ayrık parçalar arasında tek bir `globalThis` yuvasında paylaşır; CSP WebAssembly'i engellerse bit-özdeş non-lineer Rivest + S-Box JavaScript yedeğine geçer.",
+              "`64-Bit Çağrı-Noktası Tuzlu Kasa`: Sıralı sayaçlar yerine 64-bit karıştırmadan türetilen 31-bit tuzlar (`_uD(stringIndex, callSiteSalt)`) kullanarak metin sabitlerini, enterpolasyonlu şablon parçalarını ve sır taşıyan `RegExp` değişmezlerini React 19 Eşzamanlı Mod ve StrictMode altında tam idempotent çözer.",
             ],
             codeBlocks: [
               {
@@ -1576,8 +1576,8 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
             body: [
               "`unpeek` komut satırı aracı `init`, `protect`, `check` ve `symbolicate` komutlarını üç savunma kademesiyle sunar:",
               "Tier 1 (`--profile minimal`): `coldFlow: false`, `mangler.minLength: 1`, sıcak yol muafiyeti ve sıra-bağımsız `globalThis` kalkanıyla hızlı temel koruma (<%2 CPU, <%15 Gzip).",
-              "Tier 2 (`--profile recommended` / Varsayılan): 92-karakter kaçışsız metin kasası, `>=4`-değişkenli yarı-lineer MBA + derece-3 Rivest QNR koruması ve yerinde `Uint8Array` shader kasası ekler.",
-              "Tier 3 (`--profile strict` / `--aggressive`): `@unpeek-critical` kalelerini ve `critical.include` desenlerini 43-komutlu Micro-VM v2, paylaşımlı `<1.2 KB` konak-bağlı WASM KDF, 64-bit çağrı-noktası tuzlu kasa ve CWE-540 yol temizliğiyle korur.",
+              "Tier 2 (`--profile recommended` / Varsayılan): 92-karakter kaçışsız metin kasası (enterpolasyonlu `TemplateLiteral` statik parçaları ve sır taşıyan `RegExp` değişmezleri dahil), `>=4`-değişkenli yarı-lineer MBA + derece-3 Rivest QNR ile Form 4/5 işaretsiz/afin ters MBA koruması ve yerinde `Uint8Array` shader kasası ekler.",
+              "Tier 3 (`--profile strict` / `--aggressive`): `@unpeek-critical` kalelerini ve `critical.include` desenlerini 43-komutlu Micro-VM v2, paylaşımlı `<1.2 KB` konak-bağlı WASM KDF (`deriveWasmAbiNames` polimorfik ABI + karıştırılmış export sırası `<512 B`), 64-bit çağrı-noktası tuzlu kasa, soğuk-yol `^`/`|`/`&` afin bit düzeyinde MBA (`applyColdBitwiseMba`, en fazla 8/parça) ve CWE-540 yol temizliğiyle korur.",
             ],
             codeBlocks: [
               {
@@ -1589,7 +1589,7 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
   Usage:
     unpeek init [--dry-run] [--profile <name>]   wire postbuild and the .unpeek-maps/ vault
     unpeek protect [options]                     protect client bundles in place (Tier 2 default: <2% CPU, <15% Gzip)
-    unpeek check [options]                       read-only CI gate for leaks, ignores, budget, and CSP
+    unpeek check [options]                       read-only CI gate for leaks, ignores, budget, CSP, and plaintext secrets
     unpeek symbolicate [options]                 resolve stack traces locally using .unpeek-maps/
 
   Options (protect):
@@ -1600,7 +1600,7 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
     --seed <number>                deterministic polymorphic seed
     --passive                      passive deterrent mode (default: marks tamper, keeps console)
     --gradual                      gradual deterrent mode (silences console on tamper)
-    --detect-headless              treat navigator.webdriver / HeadlessChrome as tamper
+    --detect-headless              treat webdriver/HeadlessChrome, Playwright, Puppeteer, Nightmare, and Frida markers as tamper
     --no-maps                      delete .map files instead of vaulting them
     --min-string-length <num>      minimum string length for the vault (default: 4)
     --private-maps-dir <dir>       vault directory (default: .unpeek-maps)
@@ -1622,7 +1622,7 @@ npx unpeek protect --aggressive --seed 0x7f4a2c
           {
             title: "Programatik Node.js API & TypeScript Tipleri",
             body: [
-              "Özel derleme hatları oluşturmak için `protectProject`, `transformJavaScript`, `checkProject`, `symbolicateStackTrace`, `PRESETS`, `isUnpeekError` veya bundler eklentilerini doğrudan `unpeek` paketinden içe aktarabilirsiniz.",
+              "Özel derleme hatları oluşturmak için `protectProject`, `transformJavaScript`, `checkProject`, `symbolicateStackTrace`, `PRESETS`, `isUnpeekError` veya bundler eklentilerini doğrudan `unpeek` paketinden içe aktarabilirsiniz. `checkProject(options)` ayrıca Acorn AST üzerinden `'plaintext-secret'` denetimi için (Shannon entropi, İngilizce bigram süzgeci ve sır taşıyan regex taraması ile maskelenmiş önizlemeler) `CheckOptions.failOnPlaintextSecrets` (`boolean`, varsayılan `false` -> `'warning'`) seçeneğini kabul eder.",
             ],
             codeBlocks: [
               {
@@ -1679,7 +1679,7 @@ const summary: ProtectSummary = await protectProject({
               "`hotPath`: Geçişken muafiyet için `customAnimationCalls` (ör. `['requestAnimationFrame', 'useFrame']`), `customHooks` (ör. `['useSpring', 'useGesture']`), `arrayHofMethods`, `hocWrappers` ve `maxPipelineCallers` (varsayılan `2`) seçeneklerini belirler.",
               "`vault`: `minStringLength` (varsayılan `4`), `cssFramework` (`'tailwind'` | `'unocss'` | `'none'`), `customDirectives`, `reservedProps`, `semanticAnchors`, `polymorphicDecoys` (varsayılan `true`) ve `fragmented` / `fragmentCount` kurallarını yapılandırır.",
               "`critical` / `tier` / `coldFlow`: `'Tier 1' | 'Tier 2' | 'Tier 3'` katmanını seçer, `coldFlow` geçişini ayarlar ve (paketleyiciler yorumları temizlediğinde Source Map v3 üzerinden de çözümlenen) `/*! @unpeek-critical */` veya `critical.include` desenlerini hedefler (`maxFunctionsPerChunk` varsayılan: `12`).",
-              "`shield`: `deterrentMode` (`'passive'` | `'gradual'`) ve `detectHeadless` ayarlarını yapılandırır (CLI `shield` özet satırında ve `ProtectSummary` çıktısında da raporlanır).",
+              "`shield`: `deterrentMode` (`'passive'` | `'gradual'`) ve `detectHeadless` (`navigator.webdriver`, `HeadlessChrome`, `__playwright`, `__puppeteer_evaluation_script__`, `__nightmare`, `frida`, `_frida_`) ayarlarını yapılandırır (CLI `shield` özet satırında ve `ProtectSummary` çıktısında da raporlanır).",
               "`mangler`: `minLength` (tüm hazır profillerde varsayılan `1`) ile `reservedIdentifiers`, `excludePrefixes` ve `excludePatterns` (RegExp dizisi) kurallarını tanımlar.",
               "`scrubPaths`: Yerel dosya sistemi yollarını (`rootDir`, `[project]/`, `webpack://`, Windows `C:\\`) ve artık geliştirme meta verilerini temizler (CWE-540).",
               "`next` / `vite`: Özel Next.js çıktı dizinleri için `next.distDir`, özel Vite dağıtımları için `vite.outDir` / `vite.assetsDir` geçersiz kılmalarını tanımlar.",

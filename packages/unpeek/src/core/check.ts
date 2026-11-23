@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as acorn from 'acorn';
-import { simple as walkSimple } from 'acorn-walk';
+import { recursive as walkRecursive, simple as walkSimple } from 'acorn-walk';
 import type { CheckOptions, CheckResult, CheckViolation } from './types.js';
 import { loadUnpeekConfig } from '../config.js';
 import { detectTargetFramework, hasNextServerSegment, scanClientBundles } from './detector.js';
@@ -12,6 +12,11 @@ import {
   resolvePosition,
   safeDecodeURIComponent,
 } from './vlq.js';
+import {
+  classifyPlaintextSecret,
+  hasRegexSecretRun,
+  type PlaintextSecretCategory,
+} from '../ast/secret-patterns.js';
 
 function walkPublicMaps(
   currentDir: string,
@@ -128,11 +133,24 @@ function isHitFromNodeModules(
   return allSourcesNodeModules;
 }
 
-function findEvalOrFunctionCalls(code: string): EvalCallHit[] {
-  const hits: EvalCallHit[] = [];
-  let ast: acorn.Program;
+const MAX_PLAINTEXT_SECRET_FINDINGS_PER_FILE = 5;
+
+const UNPEEK_VAULT_IDENT_PREFIXES = ['_uP', '_uC', '_uD', '_uS', '_uSb', '_uDec'] as const;
+
+const BINARY_DATA_URI_RE =
+  /^data:(?:application\/(?:wasm|octet-stream|pdf|zip|gzip|(?:x-)?font-[a-z0-9-]+)|image\/|font\/|audio\/|video\/)/i;
+
+const SECRET_LIMIT_REACHED = {};
+
+interface PlaintextSecretHit {
+  category: PlaintextSecretCategory | 'regex-secret';
+  preview: string;
+  line: number;
+}
+
+function parseCheckAst(code: string): acorn.Program | null {
   try {
-    ast = acorn.parse(code, {
+    return acorn.parse(code, {
       ecmaVersion: 'latest',
       sourceType: 'module',
       allowReturnOutsideFunction: true,
@@ -140,15 +158,174 @@ function findEvalOrFunctionCalls(code: string): EvalCallHit[] {
     });
   } catch {
     try {
-      ast = acorn.parse(code, {
+      return acorn.parse(code, {
         ecmaVersion: 'latest',
         sourceType: 'script',
         allowReturnOutsideFunction: true,
         locations: true,
       });
     } catch {
-      return hits;
+      return null;
     }
+  }
+}
+
+function isUnpeekVaultIdentifier(name: string): boolean {
+  return UNPEEK_VAULT_IDENT_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
+
+function isUnpeekShaderVaultIife(init: acorn.Expression | null | undefined): boolean {
+  if (
+    !init ||
+    init.type !== 'CallExpression' ||
+    init.callee.type !== 'FunctionExpression' ||
+    init.callee.id?.name !== 'f' ||
+    init.callee.params.length !== 1 ||
+    init.arguments.length !== 1 ||
+    init.arguments[0]?.type !== 'ArrayExpression'
+  ) {
+    return false;
+  }
+  const first = init.callee.body?.body?.[0];
+  return (
+    first?.type === 'VariableDeclaration' &&
+    first.declarations.some(
+      (d) =>
+        d.id.type === 'Identifier' &&
+        d.id.name === 'h' &&
+        d.init?.type === 'Literal' &&
+        d.init.value === 0x811c9dc5
+    )
+  );
+}
+
+function isSkippedBinaryPayload(value: string): boolean {
+  return value.startsWith('AGFzbQE') || BINARY_DATA_URI_RE.test(value);
+}
+
+function redactSecretPreview(value: string): string {
+  const singleLine = value.replace(/[\r\n\t]+/g, ' ');
+  if (singleLine.length <= 10) {
+    return '[redacted]';
+  }
+  return `${singleLine.slice(0, 4)}...${singleLine.slice(-4)}`;
+}
+
+/**
+ * Audits a JavaScript bundle via Acorn AST for residual plaintext secrets,
+ * skipping unpeek vaults, module specifiers, directives, and binary data URIs.
+ */
+function findPlaintextSecrets(
+  code: string,
+  parsedAst?: acorn.Program | null
+): PlaintextSecretHit[] {
+  const ast = parsedAst !== undefined ? parsedAst : parseCheckAst(code);
+  if (!ast) {
+    return [];
+  }
+
+  const hits: PlaintextSecretHit[] = [];
+
+  const pushHit = (
+    category: PlaintextSecretCategory | 'regex-secret',
+    rawValue: string,
+    node: acorn.Node
+  ): void => {
+    hits.push({
+      category,
+      preview: redactSecretPreview(rawValue),
+      line: node.loc ? node.loc.start.line : 1,
+    });
+    if (hits.length >= MAX_PLAINTEXT_SECRET_FINDINGS_PER_FILE) {
+      throw SECRET_LIMIT_REACHED;
+    }
+  };
+
+  const inspectString = (value: string, node: acorn.Node): void => {
+    if (!value || isSkippedBinaryPayload(value)) return;
+    const match = classifyPlaintextSecret(value);
+    if (match) {
+      pushHit(match.category, value, node);
+    }
+  };
+
+  try {
+    walkRecursive(ast, undefined, {
+      VariableDeclarator(node, state, c) {
+        if (
+          (node.id.type === 'Identifier' && isUnpeekVaultIdentifier(node.id.name)) ||
+          isUnpeekShaderVaultIife(node.init)
+        ) {
+          return;
+        }
+        c(node.id, state);
+        if (node.init) {
+          c(node.init, state);
+        }
+      },
+      FunctionDeclaration(node, state, c) {
+        if (node.id && isUnpeekVaultIdentifier(node.id.name)) {
+          return;
+        }
+        for (const param of node.params) {
+          c(param, state);
+        }
+        c(node.body, state);
+      },
+      ExpressionStatement(node, state, c) {
+        if (node.directive) {
+          return;
+        }
+        c(node.expression, state);
+      },
+      ImportDeclaration() {},
+      ExportNamedDeclaration(node, state, c) {
+        if (node.declaration) {
+          c(node.declaration, state);
+        }
+      },
+      ExportAllDeclaration() {},
+      ImportExpression(node, state, c) {
+        if (node.options) {
+          c(node.options, state);
+        }
+      },
+      ImportSpecifier() {},
+      ExportSpecifier() {},
+      ImportAttribute() {},
+      Literal(node) {
+        if (typeof node.value === 'string') {
+          inspectString(node.value, node);
+        } else if (node.regex && typeof node.regex.pattern === 'string') {
+          if (hasRegexSecretRun(node.regex.pattern)) {
+            pushHit('regex-secret', node.regex.pattern, node);
+          }
+        }
+      },
+      TemplateElement(node) {
+        const val = node.value.cooked ?? node.value.raw;
+        if (typeof val === 'string') {
+          inspectString(val, node);
+        }
+      },
+    });
+  } catch (err) {
+    if (err !== SECRET_LIMIT_REACHED) {
+      throw err;
+    }
+  }
+
+  return hits;
+}
+
+function findEvalOrFunctionCalls(
+  code: string,
+  parsedAst?: acorn.Program | null
+): EvalCallHit[] {
+  const hits: EvalCallHit[] = [];
+  const ast = parsedAst !== undefined ? parsedAst : parseCheckAst(code);
+  if (!ast) {
+    return hits;
   }
 
   walkSimple(ast, {
@@ -327,8 +504,10 @@ export async function checkProject(options: CheckOptions = {}): Promise<CheckRes
       });
     }
 
+    const ast = parseCheckAst(content);
+
     // 4. Zero-eval CSP check via Acorn AST + vendor idiom / SourceMap provenance / baseline delta
-    const evalHits = findEvalOrFunctionCalls(content);
+    const evalHits = findEvalOrFunctionCalls(content, ast);
     if (evalHits.length > 0) {
       if (!requireZeroEval) {
         const kinds = Array.from(new Set(evalHits.map((h) => h.kind)));
@@ -397,6 +576,22 @@ export async function checkProject(options: CheckOptions = {}): Promise<CheckRes
             file: rel,
           });
         }
+      }
+    }
+
+    // 5. Plaintext secret audit via Acorn AST
+    const secretHits = findPlaintextSecrets(content, ast);
+    if (secretHits.length > 0) {
+      const failOnSecrets = options.failOnPlaintextSecrets === true;
+      const targetBucket = failOnSecrets ? violations : warnings;
+      const severity: CheckViolation['severity'] = failOnSecrets ? 'error' : 'warning';
+      for (const hit of secretHits) {
+        targetBucket.push({
+          rule: 'plaintext-secret',
+          severity,
+          message: `Plaintext secret (${hit.category}) "${hit.preview}" detected in "${rel}" at line ${hit.line}.`,
+          file: rel,
+        });
       }
     }
   }

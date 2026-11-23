@@ -10,10 +10,16 @@ import {
 import {
   SAFE_ALPHA,
   DIRECTIVE_STRINGS,
+  collectIdentifierShadowedScopes,
+  createNewRegExpAst,
   createShaderVaultAst,
   findVaultInsertIndex,
+  isEligibleSecretRegExp,
+  isExemptTemplateLiteral,
   isShaderPayload,
+  rebuildInterpolatedTemplates,
   shouldEncryptString,
+  type InterpolatedTemplatePlan,
 } from './string-vault.js';
 import { derivePolymorphicIdent, generateCompactJs } from './codegen.js';
 import { fallbackKdf, injectWasmVault } from './wasm-vault.js';
@@ -288,29 +294,68 @@ export function applySaltedStringVault(
     callSiteIdx: number;
     localSalt: number;
     rawString: string;
+    replaceMode?: 'node' | 'regexp';
+    flags?: string;
+    onReplace?: (exprAst: any) => void;
   }
 
   const targetsToReplace: TargetEntry[] = [];
   const encryptedPayloads: string[] = [];
   const shaderToIndex = new Map<string, number>();
   const shaderPayloads: string[] = [];
-  const shaderTargets: { node: any; parent: any; idx: number }[] = [];
+  const shaderTargets: {
+    node: any;
+    parent: any;
+    idx: number;
+    onReplace?: (exprAst: any) => void;
+  }[] = [];
+  const interpolatedTemplates: InterpolatedTemplatePlan[] = [];
+  let regExpShadowedScopes: WeakSet<acorn.Node> | undefined;
+  const getRegExpShadowedScopes = (): WeakSet<acorn.Node> => {
+    regExpShadowedScopes ??= collectIdentifierShadowedScopes(ast, 'RegExp');
+    return regExpShadowedScopes;
+  };
+
+  function pushSaltedTarget(
+    rawString: string,
+    node: any,
+    parent: any,
+    extra?: Pick<TargetEntry, 'replaceMode' | 'flags' | 'onReplace'>
+  ): void {
+    const callSiteIdx = targetsToReplace.length;
+    const [saltLo, saltHi] = computeCallSiteSalt64(
+      seed >>> 0,
+      callSiteIdx >>> 0,
+      seed >>> 0
+    );
+    const localSalt = (((saltLo ^ saltHi) & 0x7fffffff) | 1) >>> 0;
+
+    targetsToReplace.push({
+      node,
+      parent,
+      callSiteIdx,
+      localSalt,
+      rawString,
+      ...extra,
+    });
+  }
 
   function processSaltedCandidate(
     val: string,
     node: any,
     parent: any,
-    ancestors: any[]
-  ): void {
+    ancestors: any[],
+    onReplace?: (exprAst: any) => void
+  ): boolean {
     if (isNodeInExemptSubtree(ancestors, exemptSubtreeRoots)) {
-      return;
+      return false;
     }
 
     if (
       parent.type === 'ExpressionStatement' &&
       (Boolean(parent.directive) || activeDirectives.has(val))
     ) {
-      return;
+      return false;
     }
 
     for (let i = ancestors.length - 2; i >= 0; i--) {
@@ -318,7 +363,7 @@ export function applySaltedStringVault(
         ancestors[i].type === 'ExpressionStatement' &&
         Boolean((ancestors[i] as any).directive)
       ) {
-        return;
+        return false;
       }
     }
 
@@ -350,12 +395,12 @@ export function applySaltedStringVault(
         shaderToIndex.set(val, idx);
         shaderPayloads.push(val);
       }
-      shaderTargets.push({ node, parent, idx });
-      return;
+      shaderTargets.push({ node, parent, idx, ...(onReplace ? { onReplace } : {}) });
+      return true;
     }
 
     if (isHotExempt) {
-      return;
+      return false;
     }
 
     if (
@@ -367,28 +412,37 @@ export function applySaltedStringVault(
         customReserved
       )
     ) {
-      return;
+      return false;
     }
 
-    const callSiteIdx = targetsToReplace.length;
-    const [saltLo, saltHi] = computeCallSiteSalt64(
-      seed >>> 0,
-      callSiteIdx >>> 0,
-      seed >>> 0
-    );
-    const localSalt = (((saltLo ^ saltHi) & 0x7fffffff) | 1) >>> 0;
-
-    targetsToReplace.push({
-      node,
-      parent,
-      callSiteIdx,
-      localSalt,
-      rawString: val,
-    });
+    pushSaltedTarget(val, node, parent, onReplace ? { onReplace } : undefined);
+    return true;
   }
 
   walk.ancestor(ast, {
     Literal(node: any, ancestors: any[]) {
+      if (node.regex) {
+        if (
+          isEligibleSecretRegExp(
+            node,
+            ancestors,
+            hotExemptNodes,
+            exemptSubtreeRoots,
+            getRegExpShadowedScopes
+          )
+        ) {
+          pushSaltedTarget(
+            node.regex.pattern,
+            node,
+            ancestors[ancestors.length - 2],
+            {
+              replaceMode: 'regexp',
+              flags: node.regex.flags ?? '',
+            }
+          );
+        }
+        return;
+      }
       if (typeof node.value !== 'string') return;
       const val: string = node.value;
       if (activeDirectives.has(val)) return;
@@ -431,23 +485,48 @@ export function applySaltedStringVault(
     },
 
     TemplateLiteral(node: any, ancestors: any[]) {
-      if (!node.quasis || node.quasis.length !== 1) return;
-      if (node.expressions && node.expressions.length !== 0) return;
-
-      const val: string = node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
-      if (typeof val !== 'string' || activeDirectives.has(val)) return;
-
+      if (!Array.isArray(node.quasis) || node.quasis.length === 0) return;
       const parent = ancestors[ancestors.length - 2];
-      if (!parent) return;
+      if (isExemptTemplateLiteral(node, parent)) return;
 
-      if (parent.type === 'TaggedTemplateExpression' && parent.quasi === node) {
+      const exprCount = Array.isArray(node.expressions)
+        ? node.expressions.length
+        : 0;
+      if (exprCount === 0) {
+        if (node.quasis.length !== 1) return;
+        const val: string =
+          node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
+        if (typeof val !== 'string' || activeDirectives.has(val)) return;
+        processSaltedCandidate(val, node, parent, ancestors);
         return;
       }
-      if (parent.type === 'ImportExpression' && parent.source === node) {
+
+      if (node.quasis.length !== exprCount + 1) return;
+      if (node.quasis.some((q: any) => typeof q?.value?.cooked !== 'string')) {
         return;
       }
 
-      processSaltedCandidate(val, node, parent, ancestors);
+      const replacements = new Map<number, any>();
+      let queuedCount = 0;
+      for (let qIdx = 0; qIdx < node.quasis.length; qIdx++) {
+        const val: string = node.quasis[qIdx].value.cooked;
+        if (activeDirectives.has(val)) continue;
+        const queued = processSaltedCandidate(
+          val,
+          node,
+          parent,
+          ancestors,
+          (exprAst) => {
+            replacements.set(qIdx, exprAst);
+          }
+        );
+        if (queued) {
+          queuedCount++;
+        }
+      }
+      if (queuedCount > 0) {
+        interpolatedTemplates.push({ node, replacements });
+      }
     },
   });
 
@@ -593,7 +672,17 @@ export function applySaltedStringVault(
         optional: false,
       };
 
-      replaceNodeInParent(target.parent, target.node, callExpr);
+      if (target.onReplace) {
+        target.onReplace(callExpr);
+      } else if (target.replaceMode === 'regexp') {
+        replaceNodeInParent(
+          target.parent,
+          target.node,
+          createNewRegExpAst(callExpr, target.flags ?? '')
+        );
+      } else {
+        replaceNodeInParent(target.parent, target.node, callExpr);
+      }
     }
 
     const serializedTable = JSON.stringify(encryptedPayloads);
@@ -627,7 +716,11 @@ export function applySaltedStringVault(
         ],
         optional: false,
       };
-      replaceNodeInParent(target.parent, target.node, callExpr);
+      if (target.onReplace) {
+        target.onReplace(callExpr);
+      } else {
+        replaceNodeInParent(target.parent, target.node, callExpr);
+      }
     }
     const shaderHelperStmt = createShaderVaultAst(
       shaderVarName,
@@ -643,6 +736,8 @@ export function applySaltedStringVault(
       integrityToken = computeFnv1aHash(JSON.stringify(shaderPayloads), seed);
     }
   }
+
+  rebuildInterpolatedTemplates(interpolatedTemplates);
 
   return {
     encryptedStringsCount: targetsToReplace.length,

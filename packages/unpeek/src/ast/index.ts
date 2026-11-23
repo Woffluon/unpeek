@@ -339,24 +339,15 @@ export function transformJavaScript(
 
   // 2. Inject polymorphic opaque guards only on cold functions (<2% runtime CPU budget), skipped in Tier 1 minimal
   if (effectiveProfile !== 'minimal' && effectiveConfig?.coldFlow !== false) {
-    (
-      applyColdFlowGuard as (
-        ast: acorn.Program,
-        coldFunctionNodes: WeakSet<acorn.Node>,
-        seed?: number,
-        hotExemptNodes?: WeakSet<acorn.Node>,
-        windowKeySymbol?: string,
-        expectedDelta?: number,
-        shieldCoupled?: boolean
-      ) => number
-    )(
+    applyColdFlowGuard(
       ast,
       coldFunctionNodes,
       seed,
       hotExemptNodes,
       sym,
       shieldDelta,
-      shieldCoupled
+      shieldCoupled,
+      { enableBitwiseMba: isAggressive || effectiveProfile === 'strict' }
     );
   }
 

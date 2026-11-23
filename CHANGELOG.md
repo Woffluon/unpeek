@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.2.0] - 2026-11-23
+
+### Added
+- **Interpolated `TemplateLiteral` & Secret `RegExp` Vaulting**: Added static quasi encryption inside interpolated `TemplateLiteral` nodes (`rebuildInterpolatedTemplates` in `string-vault.ts` and `salted-vault.ts`), preserving `ToPrimitive("string")` evaluation order and exempting `TaggedTemplateExpression`, `ImportExpression`, and hot-loop/hot-exempt contexts. Added `secret-patterns.ts` (`hasRegexSecretRun`) and `isEligibleSecretRegExp` / `createNewRegExpAst` / `collectIdentifierShadowedScopes` to wrap secret-bearing `RegExp` literals as `new RegExp(vault(...), flags)` outside hot paths and `RegExp`-shadowed or `with` scopes.
+- **Plaintext Secret AST Audit (`checkProject`)**: Added Acorn AST-based `'plaintext-secret'` scanning (`findPlaintextSecrets` in `core/check.ts`, capped at 5 findings per file with `redactSecretPreview`) backed by `classifyPlaintextSecret` and `hasRegexSecretRun` in `ast/secret-patterns.ts` (PEM headers, known token prefixes, hex/Base64 heuristics, Shannon entropy, and English bigram Z-score suppression `NATURAL_TEXT_Z = 3.5`), alongside `CheckOptions.failOnPlaintextSecrets?: boolean` (default `false`, reporting `'warning'` unless `true` promotes findings to `'error'` violations) and `'plaintext-secret'` in `CheckViolation['rule']` (`core/types.ts`).
+
+### Changed
+- **Polymorphic WASM KDF ABI (`wasm-vault.ts`)**: Added `deriveWasmAbiNames(seed)` to generate seed-derived 2–3 character WASM import/export ABI names (`envMod`, `gImport`, `mImport`, `kdfExport`, `bulkMixExport`, `memExport`) and a shuffled `exportOrder` permutation (`[0, 1, 2]`), enabled in `injectWasmVault` via `generateWasmKdfBinary(seed, { polymorphicAbi: true })` under `<512 B` while preserving the default ABI contract when `polymorphicAbi` is omitted or `false`.
+- **Strict Cold-Path Bitwise MBA Substitution (`cold-flow-guard.ts`, `ast/index.ts`)**: Added `applyColdBitwiseMba` (O1, enabled via `ApplyColdFlowGuardOptions.enableBitwiseMba` under `strict` / `--aggressive`) to substitute cold-path `^`, `|`, `&` operations (excluding `x | 0` and loop bodies) with `typeof`-number-guarded parameterized affine MBA expressions (up to `MAX_COLD_BITWISE_MBA_PER_CHUNK = 8` per chunk), automatically skipping chunks with `BigInt`, `with`, or local `Math` shadowing (`analyzeBitwiseMbaScopes`).
+
+### Security & Fixed
+- **Unsigned-Domain & Affine-Inverse MBA Predicates (`cold-flow-guard.ts`)**: Added `modInverseUint32` (5 Newton-Raphson iterations), `deriveAffineMbaParams`, and predicate forms Form 4 (unsigned-domain MBA inequality) and Form 5 (parameterized affine-inverse MBA identity over $\mathbb{Z}_{2^{32}}$) to `createSotaMbaPredicate` (expanding predicate coverage from 4 to 6 forms).
+- **Extended Automation & Instrumentation Detection (`devtools-deterrent.ts`)**: Expanded `detectHeadless: true` synchronous checks in `createDeterrentSnippet` to detect `__playwright`, `__puppeteer_evaluation_script__`, `__nightmare`, `frida`, and `_frida_` on `window`/`globalThis` alongside `navigator.webdriver` and `HeadlessChrome` within the single-line `<2.3 KB` IIFE.
+- **MIT Attribution**: Entropy/bigram secret classification, interpolated template quasi vaulting, secret `RegExp` wrapping, polymorphic WASM ABI naming, and affine-inverse / bitwise MBA formulations adapt concepts from `qybaihe/bla` (MIT License) for `unpeek`'s Acorn AST and runtime shield pipeline.
+
+---
+
 ## [4.1.0] - 2026-11-19
 
 ### Added

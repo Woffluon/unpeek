@@ -19,6 +19,7 @@ import {
   createSaltedVaultHelperAst,
 } from './salted-vault.js';
 import { isNodeInExemptSubtree } from './boundary-classifier.js';
+import { hasRegexSecretRun } from './secret-patterns.js';
 
 export const SAFE_ALPHA =
   " !#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~";
@@ -645,6 +646,295 @@ function findLowestCommonScope(
   return lca[lca.length - 1] ?? ast;
 }
 
+export interface InterpolatedTemplatePlan {
+  node: any;
+  replacements: Map<number, any>;
+}
+
+export function isExemptTemplateLiteral(node: any, parent: any): boolean {
+  if (!parent) return true;
+  if (parent.type === 'TaggedTemplateExpression' && parent.quasi === node) {
+    return true;
+  }
+  if (parent.type === 'ImportExpression' && parent.source === node) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Rebuilds `node.quasis` and `node.expressions` in place for interpolated templates
+ * whose static quasis were replaced with decrypt expressions, preserving
+ * `quasis.length === expressions.length + 1` and `tail: true` only on the last quasi.
+ */
+export function rebuildInterpolatedTemplates(
+  plans: InterpolatedTemplatePlan[]
+): void {
+  for (const { node, replacements } of plans) {
+    if (replacements.size === 0) continue;
+    const origQuasis: any[] = node.quasis;
+    const origExprs: any[] = node.expressions;
+    const nextQuasis: any[] = [];
+    const nextExprs: any[] = [];
+    let pendingRaw = '';
+    let pendingCooked = '';
+
+    const flushQuasi = (tail: boolean): void => {
+      nextQuasis.push({
+        type: 'TemplateElement',
+        value: { raw: pendingRaw, cooked: pendingCooked },
+        tail,
+      });
+      pendingRaw = '';
+      pendingCooked = '';
+    };
+
+    for (let i = 0; i < origQuasis.length; i++) {
+      const quasi = origQuasis[i];
+      const replacement = replacements.get(i);
+      if (replacement !== undefined) {
+        flushQuasi(false);
+        nextExprs.push(replacement);
+      } else {
+        pendingRaw += quasi.value?.raw ?? '';
+        pendingCooked += quasi.value?.cooked ?? '';
+      }
+      if (i < origExprs.length) {
+        flushQuasi(false);
+        nextExprs.push(origExprs[i]);
+      }
+    }
+    flushQuasi(true);
+
+    node.quasis = nextQuasis;
+    node.expressions = nextExprs;
+  }
+}
+
+export function createNewRegExpAst(sourceExpr: any, flags: string): any {
+  return {
+    type: 'NewExpression',
+    callee: { type: 'Identifier', name: 'RegExp' },
+    arguments:
+      flags.length > 0
+        ? [
+            sourceExpr,
+            {
+              type: 'Literal',
+              value: flags,
+              raw: JSON.stringify(flags),
+            },
+          ]
+        : [sourceExpr],
+  };
+}
+
+function mutateNodeToNewRegExp(
+  node: any,
+  sourceExpr: any,
+  flags: string
+): void {
+  const newExpr = createNewRegExpAst(sourceExpr, flags);
+  node.type = 'NewExpression';
+  node.callee = newExpr.callee;
+  node.arguments = newExpr.arguments;
+  delete node.value;
+  delete node.raw;
+  delete node.regex;
+  delete node.optional;
+}
+
+const SCOPE_FUNCTION_TYPES = new Set([
+  'FunctionDeclaration',
+  'FunctionExpression',
+  'ArrowFunctionExpression',
+]);
+
+const SCOPE_LEXICAL_TYPES = new Set([
+  'Program',
+  'FunctionDeclaration',
+  'FunctionExpression',
+  'ArrowFunctionExpression',
+  'BlockStatement',
+  'ForStatement',
+  'ForInStatement',
+  'ForOfStatement',
+  'SwitchStatement',
+  'CatchClause',
+  'ClassDeclaration',
+  'ClassExpression',
+  'StaticBlock',
+]);
+
+function patternContainsIdentifier(pattern: any, targetName: string): boolean {
+  if (!pattern || typeof pattern !== 'object') return false;
+  switch (pattern.type) {
+    case 'Identifier':
+      return pattern.name === targetName;
+    case 'AssignmentPattern':
+      return patternContainsIdentifier(pattern.left, targetName);
+    case 'RestElement':
+      return patternContainsIdentifier(pattern.argument, targetName);
+    case 'ArrayPattern':
+      return (pattern.elements || []).some((el: any) =>
+        patternContainsIdentifier(el, targetName)
+      );
+    case 'ObjectPattern':
+      return (pattern.properties || []).some((prop: any) =>
+        prop?.type === 'Property'
+          ? patternContainsIdentifier(prop.value, targetName)
+          : prop?.type === 'RestElement'
+            ? patternContainsIdentifier(prop.argument, targetName)
+            : false
+      );
+    default:
+      return false;
+  }
+}
+
+function findEnclosingScope(
+  ancestors: acorn.Node[],
+  scopeSet: Set<string>,
+  fallback: acorn.Node
+): acorn.Node {
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    if (scopeSet.has(ancestors[i].type)) {
+      return ancestors[i];
+    }
+  }
+  return fallback;
+}
+
+/**
+ * Collects AST scope nodes where `identName` (default `'RegExp'`) is locally
+ * bound or shadowed, or where a `with` statement prevents static resolution.
+ */
+export function collectIdentifierShadowedScopes(
+  ast: acorn.Program,
+  identName = 'RegExp'
+): WeakSet<acorn.Node> {
+  const shadowed = new WeakSet<acorn.Node>();
+  walk.ancestor(ast, {
+    FunctionDeclaration(node: any, _state: any, ancestors: any[]) {
+      if (node.id?.name === identName) {
+        shadowed.add(
+          findEnclosingScope(ancestors.slice(0, -1), SCOPE_LEXICAL_TYPES, ast)
+        );
+        shadowed.add(node);
+      }
+      if (
+        Array.isArray(node.params) &&
+        node.params.some((p: any) => patternContainsIdentifier(p, identName))
+      ) {
+        shadowed.add(node);
+      }
+    },
+    FunctionExpression(node: any) {
+      if (
+        node.id?.name === identName ||
+        (Array.isArray(node.params) &&
+          node.params.some((p: any) => patternContainsIdentifier(p, identName)))
+      ) {
+        shadowed.add(node);
+      }
+    },
+    ArrowFunctionExpression(node: any) {
+      if (
+        Array.isArray(node.params) &&
+        node.params.some((p: any) => patternContainsIdentifier(p, identName))
+      ) {
+        shadowed.add(node);
+      }
+    },
+    ClassDeclaration(node: any, _state: any, ancestors: any[]) {
+      if (node.id?.name === identName) {
+        shadowed.add(
+          findEnclosingScope(ancestors.slice(0, -1), SCOPE_LEXICAL_TYPES, ast)
+        );
+        shadowed.add(node);
+      }
+    },
+    ClassExpression(node: any) {
+      if (node.id?.name === identName) {
+        shadowed.add(node);
+      }
+    },
+    CatchClause(node: any) {
+      if (node.param && patternContainsIdentifier(node.param, identName)) {
+        shadowed.add(node);
+      }
+    },
+    WithStatement(node: any) {
+      shadowed.add(node);
+    },
+    ImportDeclaration(node: any) {
+      if (
+        Array.isArray(node.specifiers) &&
+        node.specifiers.some((s: any) => s?.local?.name === identName)
+      ) {
+        shadowed.add(ast);
+      }
+    },
+    VariableDeclaration(node: any, _state: any, ancestors: any[]) {
+      if (
+        !Array.isArray(node.declarations) ||
+        !node.declarations.some((d: any) =>
+          patternContainsIdentifier(d?.id, identName)
+        )
+      ) {
+        return;
+      }
+      if (node.kind === 'var') {
+        for (let i = ancestors.length - 1; i >= 0; i--) {
+          const a = ancestors[i];
+          if (
+            SCOPE_FUNCTION_TYPES.has(a.type) ||
+            a.type === 'StaticBlock' ||
+            a.type === 'Program'
+          ) {
+            shadowed.add(a);
+            break;
+          }
+        }
+      } else {
+        shadowed.add(
+          findEnclosingScope(ancestors.slice(0, -1), SCOPE_LEXICAL_TYPES, ast)
+        );
+      }
+    },
+  });
+  return shadowed;
+}
+
+export function isEligibleSecretRegExp(
+  node: any,
+  ancestors: any[],
+  hotExemptNodes?: WeakSet<acorn.Node>,
+  exemptSubtreeRoots?: WeakSet<acorn.Node>,
+  getShadowedScopes?: () => WeakSet<acorn.Node>
+): boolean {
+  const pattern: unknown = node?.regex?.pattern;
+  if (typeof pattern !== 'string' || pattern.length === 0 || pattern.length > 4096) {
+    return false;
+  }
+  if (!hasRegexSecretRun(pattern)) {
+    return false;
+  }
+  if (isNodeInExemptSubtree(ancestors, exemptSubtreeRoots)) {
+    return false;
+  }
+  if (isInsideLoopOrSerialized(ancestors)) {
+    return false;
+  }
+  if (isNodeInExemptSubtree(ancestors, hotExemptNodes)) {
+    return false;
+  }
+  if (getShadowedScopes && isNodeInExemptSubtree(ancestors, getShadowedScopes())) {
+    return false;
+  }
+  return true;
+}
+
 export function applyStringVault(
   ast: acorn.Program,
   seed = 0x9e3779b9,
@@ -740,20 +1030,33 @@ export function applyStringVault(
   const shaderToIndex = new Map<string, number>();
   const shaderPayloads: string[] = [];
 
-  const targetsToReplace: {
+  interface VaultTarget {
     type: 'string' | 'shader';
     node: any;
     parent?: any;
     idx: number;
     scopeChain: acorn.Node[];
-  }[] = [];
+    replaceMode?: 'node' | 'regexp';
+    flags?: string;
+    onReplace?: (exprAst: any) => void;
+  }
+
+  const targetsToReplace: VaultTarget[] = [];
 
   const hotTargetsToReplace: {
     node: any;
     parent?: any;
     val: string;
     idx: number;
+    onReplace?: (exprAst: any) => void;
   }[] = [];
+
+  const interpolatedTemplates: InterpolatedTemplatePlan[] = [];
+  let regExpShadowedScopes: WeakSet<acorn.Node> | undefined;
+  const getRegExpShadowedScopes = (): WeakSet<acorn.Node> => {
+    regExpShadowedScopes ??= collectIdentifierShadowedScopes(ast, 'RegExp');
+    return regExpShadowedScopes;
+  };
 
   const customWalkBase = {
     ...walk.base,
@@ -767,17 +1070,18 @@ export function applyStringVault(
     val: string,
     node: any,
     parent: any,
-    ancestors: any[]
-  ): void {
+    ancestors: any[],
+    onReplace?: (exprAst: any) => void
+  ): boolean {
     if (isNodeInExemptSubtree(ancestors, exemptSubtreeRoots)) {
-      return;
+      return false;
     }
 
     if (
       parent.type === 'ExpressionStatement' &&
       (Boolean(parent.directive) || activeDirectives.has(val))
     ) {
-      return;
+      return false;
     }
 
     for (let i = ancestors.length - 2; i >= 0; i--) {
@@ -785,7 +1089,7 @@ export function applyStringVault(
         ancestors[i].type === 'ExpressionStatement' &&
         Boolean((ancestors[i] as any).directive)
       ) {
-        return;
+        return false;
       }
     }
 
@@ -823,8 +1127,9 @@ export function applyStringVault(
         parent,
         idx,
         scopeChain: extractScopeChain(ast, ancestors),
+        ...(onReplace ? { onReplace } : {}),
       });
-      return;
+      return true;
     }
 
     if (isHotExempt) {
@@ -847,9 +1152,11 @@ export function applyStringVault(
           parent,
           val,
           idx: hotTargetsToReplace.length,
+          ...(onReplace ? { onReplace } : {}),
         });
+        return true;
       }
-      return;
+      return false;
     }
 
     if (
@@ -861,7 +1168,7 @@ export function applyStringVault(
         customReserved
       )
     ) {
-      return;
+      return false;
     }
 
     let idx = stringToIndex.get(val);
@@ -876,13 +1183,46 @@ export function applyStringVault(
       parent,
       idx,
       scopeChain: extractScopeChain(ast, ancestors),
+      ...(onReplace ? { onReplace } : {}),
     });
+    return true;
   }
 
   walk.ancestor(
     ast,
     {
       Literal(node: any, _state: any, ancestors: any[]) {
+        if (node.regex) {
+          if (
+            isEligibleSecretRegExp(
+              node,
+              ancestors,
+              hotExemptNodes,
+              exemptSubtreeRoots,
+              getRegExpShadowedScopes
+            )
+          ) {
+            const pattern: string = node.regex.pattern;
+            const flags: string = node.regex.flags ?? '';
+            const parent = ancestors[ancestors.length - 2] as any;
+            let idx = stringToIndex.get(pattern);
+            if (idx === undefined) {
+              idx = uniqueStrings.length;
+              stringToIndex.set(pattern, idx);
+              uniqueStrings.push(pattern);
+            }
+            targetsToReplace.push({
+              type: 'string',
+              node,
+              parent,
+              idx,
+              scopeChain: extractScopeChain(ast, ancestors),
+              replaceMode: 'regexp',
+              flags,
+            });
+          }
+          return;
+        }
         if (typeof node.value !== 'string') return;
         const val: string = node.value;
         if (activeDirectives.has(val)) return;
@@ -922,23 +1262,50 @@ export function applyStringVault(
       },
 
       TemplateLiteral(node: any, _state: any, ancestors: any[]) {
-        if (!node.quasis || node.quasis.length !== 1) return;
-        if (node.expressions && node.expressions.length !== 0) return;
-
-        const val: string = node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
-        if (typeof val !== 'string' || activeDirectives.has(val)) return;
-
+        if (!Array.isArray(node.quasis) || node.quasis.length === 0) return;
         const parent = ancestors[ancestors.length - 2] as any;
-        if (!parent) return;
+        if (isExemptTemplateLiteral(node, parent)) return;
 
-        if (parent.type === 'TaggedTemplateExpression' && parent.quasi === node) {
+        const exprCount = Array.isArray(node.expressions)
+          ? node.expressions.length
+          : 0;
+        if (exprCount === 0) {
+          if (node.quasis.length !== 1) return;
+          const val: string =
+            node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
+          if (typeof val !== 'string' || activeDirectives.has(val)) return;
+          processVaultCandidate(val, node, parent, ancestors);
           return;
         }
-        if (parent.type === 'ImportExpression' && parent.source === node) {
+
+        if (node.quasis.length !== exprCount + 1) return;
+        if (
+          node.quasis.some((q: any) => typeof q?.value?.cooked !== 'string')
+        ) {
           return;
         }
 
-        processVaultCandidate(val, node, parent, ancestors);
+        const replacements = new Map<number, any>();
+        let queuedCount = 0;
+        for (let qIdx = 0; qIdx < node.quasis.length; qIdx++) {
+          const val: string = node.quasis[qIdx].value.cooked;
+          if (activeDirectives.has(val)) continue;
+          const queued = processVaultCandidate(
+            val,
+            node,
+            parent,
+            ancestors,
+            (exprAst) => {
+              replacements.set(qIdx, exprAst);
+            }
+          );
+          if (queued) {
+            queuedCount++;
+          }
+        }
+        if (queuedCount > 0) {
+          interpolatedTemplates.push({ node, replacements });
+        }
       },
     },
     customWalkBase
@@ -952,37 +1319,72 @@ export function applyStringVault(
     };
   }
 
-  for (const { node, parent, val, idx } of hotTargetsToReplace) {
+  for (const { node, parent, val, idx, onReplace } of hotTargetsToReplace) {
     const key = (idx % 3) + 1;
     let encodedStr = '';
     for (let i = 0; i < val.length; i++) {
       encodedStr += String.fromCharCode(val.charCodeAt(i) ^ key);
     }
+    const callExpr: any = {
+      type: 'CallExpression',
+      callee: {
+        type: 'Identifier',
+        name: '_hX',
+      },
+      arguments: [
+        {
+          type: 'Literal',
+          value: encodedStr,
+          raw: JSON.stringify(encodedStr),
+        },
+        {
+          type: 'Literal',
+          value: key,
+          raw: String(key),
+        },
+      ],
+      optional: false,
+    };
+    if (onReplace) {
+      onReplace(callExpr);
+      continue;
+    }
     if (parent?.type === 'Property' && parent.key === node) {
       parent.computed = true;
     }
     node.type = 'CallExpression';
-    node.callee = {
-      type: 'Identifier',
-      name: '_hX',
-    };
-    node.arguments = [
-      {
-        type: 'Literal',
-        value: encodedStr,
-        raw: JSON.stringify(encodedStr),
-      },
-      {
-        type: 'Literal',
-        value: key,
-        raw: String(key),
-      },
-    ];
+    node.callee = callExpr.callee;
+    node.arguments = callExpr.arguments;
     node.optional = false;
     delete node.value;
     delete node.raw;
     delete node.quasis;
     delete node.expressions;
+  }
+
+  function applyVaultTargetReplacement(
+    target: VaultTarget,
+    callExpr: any
+  ): void {
+    if (target.onReplace) {
+      target.onReplace(callExpr);
+      return;
+    }
+    if (target.replaceMode === 'regexp') {
+      mutateNodeToNewRegExp(target.node, callExpr, target.flags ?? '');
+      return;
+    }
+    if (target.parent?.type === 'Property' && target.parent.key === target.node) {
+      target.parent.computed = true;
+    }
+    target.node.type = 'CallExpression';
+    target.node.callee = callExpr.callee;
+    target.node.arguments = callExpr.arguments;
+    target.node.optional = false;
+    delete target.node.value;
+    delete target.node.raw;
+    delete target.node.quasis;
+    delete target.node.expressions;
   }
 
   let insertIdx = findVaultInsertIndex(ast, activeDirectives);
@@ -1008,28 +1410,28 @@ export function applyStringVault(
     }
     integrityToken = computeFnv1aHash(JSON.stringify(encryptedPayloads), seed);
 
-    for (const { type, node, parent, idx } of targetsToReplace) {
-      if (parent?.type === 'Property' && parent.key === node) {
-        parent.computed = true;
-      }
-      if (type === 'shader') {
-        node.type = 'CallExpression';
-        node.callee = { type: 'Identifier', name: shaderVarName };
-        node.arguments = [{ type: 'Literal', value: idx, raw: String(idx) }];
+    for (const target of targetsToReplace) {
+      let callExpr: any;
+      if (target.type === 'shader') {
+        callExpr = {
+          type: 'CallExpression',
+          callee: { type: 'Identifier', name: shaderVarName },
+          arguments: [{ type: 'Literal', value: target.idx, raw: String(target.idx) }],
+          optional: false,
+        };
       } else {
-        const salt = computeCallSiteSalt(seed, idx);
-        node.type = 'CallExpression';
-        node.callee = { type: 'Identifier', name: decryptFnName };
-        node.arguments = [
-          { type: 'Literal', value: idx, raw: String(idx) },
-          { type: 'Literal', value: salt, raw: String(salt) },
-        ];
+        const salt = computeCallSiteSalt(seed, target.idx);
+        callExpr = {
+          type: 'CallExpression',
+          callee: { type: 'Identifier', name: decryptFnName },
+          arguments: [
+            { type: 'Literal', value: target.idx, raw: String(target.idx) },
+            { type: 'Literal', value: salt, raw: String(salt) },
+          ],
+          optional: false,
+        };
       }
-      node.optional = false;
-      delete node.value;
-      delete node.raw;
-      delete node.quasis;
-      delete node.expressions;
+      applyVaultTargetReplacement(target, callExpr);
     }
   } else {
     // Deterministic seed-based PRNG permutation of unique string indices
@@ -1112,31 +1514,31 @@ export function applyStringVault(
       });
     }
 
-    for (const { type, node, parent, idx, scopeChain } of targetsToReplace) {
-      if (parent?.type === 'Property' && parent.key === node) {
-        parent.computed = true;
-      }
-      if (type === 'shader') {
-        node.type = 'CallExpression';
-        node.callee = { type: 'Identifier', name: shaderVarName };
-        node.arguments = [{ type: 'Literal', value: idx, raw: String(idx) }];
+    for (const target of targetsToReplace) {
+      let callExpr: any;
+      if (target.type === 'shader') {
+        callExpr = {
+          type: 'CallExpression',
+          callee: { type: 'Identifier', name: shaderVarName },
+          arguments: [{ type: 'Literal', value: target.idx, raw: String(target.idx) }],
+          optional: false,
+        };
       } else {
-        const { fragId, localIdx } = stringFragAssign[idx];
+        const { fragId, localIdx } = stringFragAssign[target.idx];
         const meta = fragMeta[fragId];
-        meta.chains.push(scopeChain);
+        meta.chains.push(target.scopeChain);
         const salt = computeCallSiteSalt(meta.fragSeed, localIdx);
-        node.type = 'CallExpression';
-        node.callee = { type: 'Identifier', name: meta.fnName };
-        node.arguments = [
-          { type: 'Literal', value: localIdx, raw: String(localIdx) },
-          { type: 'Literal', value: salt, raw: String(salt) },
-        ];
+        callExpr = {
+          type: 'CallExpression',
+          callee: { type: 'Identifier', name: meta.fnName },
+          arguments: [
+            { type: 'Literal', value: localIdx, raw: String(localIdx) },
+            { type: 'Literal', value: salt, raw: String(salt) },
+          ],
+          optional: false,
+        };
       }
-      node.optional = false;
-      delete node.value;
-      delete node.raw;
-      delete node.quasis;
-      delete node.expressions;
+      applyVaultTargetReplacement(target, callExpr);
     }
 
     const allPayloads: string[][] = [];
@@ -1164,6 +1566,8 @@ export function applyStringVault(
     }
     integrityToken = computeFnv1aHash(JSON.stringify(allPayloads), seed);
   }
+
+  rebuildInterpolatedTemplates(interpolatedTemplates);
 
   if (hotTargetsToReplace.length > 0) {
     const alreadyHasHx = ast.body.some(

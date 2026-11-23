@@ -75,40 +75,173 @@ function deriveWasmHostParams(seed: number) {
   return { gArr, sOff, rA0, rA1, rA2, rA3, gMask, pcMask };
 }
 
+export interface WasmAbiNames {
+  envMod: string;
+  gImport: string;
+  mImport: string;
+  kdfExport: string;
+  bulkMixExport: string;
+  memExport: string;
+  exportOrder: [number, number, number];
+}
+
+const ABI_START_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_';
+const ABI_CONT_CHARS = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_';
+const FORBIDDEN_ABI_NAMES = new Set([
+  'env',
+  'g',
+  'm',
+  'kdf',
+  'bulkmix',
+  'mem',
+  'as',
+  'do',
+  'if',
+  'in',
+  'of',
+  'for',
+  'int',
+  'let',
+  'new',
+  'try',
+  'var',
+  'nan',
+  'map',
+  'set',
+  'url',
+  'top',
+  'get',
+  'set',
+]);
+
+function avalancheMix32(h: number): number {
+  let x = h >>> 0;
+  x = Math.imul(x ^ (x >>> 16), 0x85ebca6b) >>> 0;
+  x = Math.imul(x ^ (x >>> 13), 0xc2b2ae35) >>> 0;
+  return (x ^ (x >>> 16)) >>> 0;
+}
+
+function encodeWasmName(name: string): number[] {
+  const utf8 = new TextEncoder().encode(name);
+  return [...encodeUnsignedLeb128(utf8.length), ...utf8];
+}
+
 /**
- * Creates the host-coupled `env` import object (`env.g`, `env.m`) required to
- * instantiate the v4 WebAssembly KDF binary.
+ * Deterministically derives compact (2-3 char), unique ASCII WASM import/export
+ * ABI names and a seed-shuffled export order permutation for `[0, 1, 2]`.
+ */
+export function deriveWasmAbiNames(seed: number): WasmAbiNames {
+  const s = seed >>> 0;
+  const used = new Set<string>(FORBIDDEN_ABI_NAMES);
+
+  const pickName = (role: string): string => {
+    for (let attempt = 0; attempt < 64; attempt++) {
+      const h = avalancheMix32(computeFnv1aHash(`wasm-abi:${role}:${attempt}`, s));
+      const len = (h >>> 18) & 1 ? 3 : 2;
+      const c0 = ABI_START_CHARS[h % ABI_START_CHARS.length];
+      const c1 = ABI_CONT_CHARS[(h >>> 6) % ABI_CONT_CHARS.length];
+      const c2 = len === 3 ? ABI_CONT_CHARS[(h >>> 12) % ABI_CONT_CHARS.length] : '';
+      const candidate = `${c0}${c1}${c2}`;
+      const lower = candidate.toLowerCase();
+      if (!candidate.startsWith('__') && !used.has(lower)) {
+        used.add(lower);
+        return candidate;
+      }
+    }
+    const fallback = `w${s.toString(36).slice(0, 2).padStart(2, '0')}`;
+    used.add(fallback.toLowerCase());
+    return fallback;
+  };
+
+  const envMod = pickName('envMod');
+  const gImport = pickName('gImport');
+  const mImport = pickName('mImport');
+  const kdfExport = pickName('kdfExport');
+  const bulkMixExport = pickName('bulkMixExport');
+  const memExport = pickName('memExport');
+
+  const exportOrder: [number, number, number] = [0, 1, 2];
+  const orderHash = avalancheMix32(computeFnv1aHash('wasm-abi:order', s));
+  const j2 = orderHash % 3;
+  [exportOrder[2], exportOrder[j2]] = [exportOrder[j2], exportOrder[2]];
+  const j1 = (orderHash >>> 8) % 2;
+  [exportOrder[1], exportOrder[j1]] = [exportOrder[j1], exportOrder[1]];
+
+  return {
+    envMod,
+    gImport,
+    mImport,
+    kdfExport,
+    bulkMixExport,
+    memExport,
+    exportOrder,
+  };
+}
+
+/**
+ * Creates the host-coupled import object (`env.g`, `env.m`, or polymorphic ABI
+ * equivalents when `options.polymorphicAbi` is true) required to instantiate the
+ * v4 WebAssembly KDF binary.
  */
 export function createWasmHostEnv(seed: number): {
   env: {
     g: (slot: number) => number;
     m: (acc: number, pc: number) => number;
   };
-} {
+};
+export function createWasmHostEnv(
+  seed: number,
+  options: { polymorphicAbi?: false }
+): {
+  env: {
+    g: (slot: number) => number;
+    m: (acc: number, pc: number) => number;
+  };
+};
+export function createWasmHostEnv(
+  seed: number,
+  options: { polymorphicAbi?: boolean }
+): Record<string, Record<string, (...args: number[]) => number>>;
+export function createWasmHostEnv(
+  seed: number,
+  options?: { polymorphicAbi?: boolean }
+): Record<string, Record<string, (...args: number[]) => number>> {
   const { gArr, sOff, rA0, rA1, rA2, rA3, gMask, pcMask } = deriveWasmHostParams(seed);
+  const gFn = (slot: number): number => {
+    const gObj = typeof globalThis !== 'undefined' ? (globalThis as any) : undefined;
+    const tp = gObj && gObj.__unpeek_tampered === true ? 0x5a5b : 0;
+    return (gArr[slot & 3] ^ gMask ^ tp) | 0;
+  };
+  const mFn = (acc: number, pc: number): number => {
+    const sb0 = (Math.imul(167, acc & 255) + sOff) & 255;
+    const sb1 = (Math.imul(167, (acc >>> 8) & 255) + sOff) & 255;
+    const sb = sb0 ^ (sb1 << 8);
+    const unmaskedPc = (pc ^ pcMask) | 0;
+    const riv = evalRivestPoly32((acc ^ sb ^ unmaskedPc) | 0, rA0, rA1, rA2, rA3) | 0;
+    return (riv ^ gArr[2]) | 0;
+  };
+  if (options?.polymorphicAbi) {
+    const { envMod, gImport, mImport } = deriveWasmAbiNames(seed);
+    return {
+      [envMod]: {
+        [gImport]: gFn,
+        [mImport]: mFn,
+      },
+    };
+  }
   return {
     env: {
-      g(slot: number): number {
-        const gObj = typeof globalThis !== 'undefined' ? (globalThis as any) : undefined;
-        const tp = gObj && gObj.__unpeek_tampered === true ? 0x5a5b : 0;
-        return (gArr[slot & 3] ^ gMask ^ tp) | 0;
-      },
-      m(acc: number, pc: number): number {
-        const sb0 = (Math.imul(167, acc & 255) + sOff) & 255;
-        const sb1 = (Math.imul(167, (acc >>> 8) & 255) + sOff) & 255;
-        const sb = sb0 ^ (sb1 << 8);
-        const unmaskedPc = (pc ^ pcMask) | 0;
-        const riv = evalRivestPoly32((acc ^ sb ^ unmaskedPc) | 0, rA0, rA1, rA2, rA3) | 0;
-        return (riv ^ gArr[2]) | 0;
-      },
+      g: gFn,
+      m: mFn,
     },
   };
 }
 
 /**
- * Builds a compact, host-coupled WebAssembly binary (<1.2 KB, within Chromium's 4 KB
+ * Builds a compact, host-coupled WebAssembly binary (<512 B, within Chromium's 4 KB
  * synchronous compilation threshold) that imports `env.g(i32) -> i32` and
- * `env.m(i32, i32) -> i32`, and exports:
+ * `env.m(i32, i32) -> i32` (or seed-derived polymorphic names when `options.polymorphicAbi`
+ * is true), and exports:
  * - `kdf(fnId: i32, callSiteSalt: i32, shieldHash: i32) -> i32`
  * - `bulkMix(ptr: i32, wordLen: i32, key: i32) -> i32`
  * - `mem` (1-page linear memory)
@@ -117,7 +250,10 @@ export function createWasmHostEnv(seed: number): {
  * or wrong keys without the host Rivest + S-Box state closure), while blinded `.data` shares
  * keep `seed`, `c1`, `c2`, and `k0` out of plaintext `i32.const` literals.
  */
-export function generateWasmKdfBinary(seed: number): Uint8Array {
+export function generateWasmKdfBinary(
+  seed: number,
+  options?: { polymorphicAbi?: boolean }
+): Uint8Array {
   const { sVal, c1, c2, k0, r1, r2 } = deriveKdfParams(seed);
   const { gMask, pcMask } = deriveWasmHostParams(seed);
   const memBase = ((seed >>> 0) & 0x7f) * 4;
@@ -365,11 +501,16 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
     ...typePayload,
   ];
 
-  // Section 2: Import section (env.g, env.m)
+  const abi = options?.polymorphicAbi ? deriveWasmAbiNames(seed) : null;
+  const envModName = abi ? abi.envMod : 'env';
+  const gImportName = abi ? abi.gImport : 'g';
+  const mImportName = abi ? abi.mImport : 'm';
+
+  // Section 2: Import section (env.g, env.m or polymorphic ABI equivalents)
   const importPayload = [
     0x02, // 2 imports
-    0x03, 0x65, 0x6e, 0x76, 0x01, 0x67, 0x00, 0x00, // env.g: func type 0
-    0x03, 0x65, 0x6e, 0x76, 0x01, 0x6d, 0x00, 0x01, // env.m: func type 1
+    ...encodeWasmName(envModName), ...encodeWasmName(gImportName), 0x00, 0x00, // g: func type 0
+    ...encodeWasmName(envModName), ...encodeWasmName(mImportName), 0x00, 0x01, // m: func type 1
   ];
   const importSection = [
     0x02,
@@ -389,12 +530,23 @@ export function generateWasmKdfBinary(seed: number): Uint8Array {
   const memSection = [0x05, 0x03, 0x01, 0x00, 0x01];
 
   // Section 7: Export section (kdf -> func 2, bulkMix -> func 3, mem -> mem 0)
-  const exportPayload = [
-    0x03, // 3 exports
-    0x03, 0x6b, 0x64, 0x66, 0x00, 0x02, // "kdf" -> func 2
-    0x07, 0x62, 0x75, 0x6c, 0x6b, 0x4d, 0x69, 0x78, 0x00, 0x03, // "bulkMix" -> func 3
-    0x03, 0x6d, 0x65, 0x6d, 0x02, 0x00, // "mem" -> memory 0
-  ];
+  const exportSpecs: Array<[string, number, number]> = abi
+    ? [
+        [abi.kdfExport, 0x00, 0x02],
+        [abi.bulkMixExport, 0x00, 0x03],
+        [abi.memExport, 0x02, 0x00],
+      ]
+    : [
+        ['kdf', 0x00, 0x02],
+        ['bulkMix', 0x00, 0x03],
+        ['mem', 0x02, 0x00],
+      ];
+  const exportOrder = abi ? abi.exportOrder : [0, 1, 2];
+  const exportPayload: number[] = [0x03]; // 3 exports
+  for (const idx of exportOrder) {
+    const [name, kind, targetIdx] = exportSpecs[idx];
+    exportPayload.push(...encodeWasmName(name), kind, targetIdx);
+  }
   const exportSection = [
     0x07,
     ...encodeUnsignedLeb128(exportPayload.length),
@@ -538,13 +690,14 @@ export function injectWasmVault(
     const id = existing?.declarations[0]?.id?.name ?? kdfFnName;
     return {
       kdfFnName: id,
-      wasmBytes: generateWasmKdfBinary(seed),
+      wasmBytes: generateWasmKdfBinary(seed, { polymorphicAbi: true }),
       wasmVarName,
       kdfParityVerified: true,
     };
   }
 
-  const wasmBytes = generateWasmKdfBinary(seed);
+  const abi = deriveWasmAbiNames(seed);
+  const wasmBytes = generateWasmKdfBinary(seed, { polymorphicAbi: true });
   const byteArrayLiteral = Array.from(wasmBytes).join(',');
 
   const { sVal, c1, c2, k0, r1, r2 } = deriveKdfParams(seed);
@@ -585,8 +738,8 @@ export function injectWasmVault(
   try {
     var ${wasmVarName} = new Uint8Array([${byteArrayLiteral}]);
     var _wm${suffix} = new WebAssembly.Module(${wasmVarName});
-    var _wi${suffix} = new WebAssembly.Instance(_wm${suffix}, { env: { g: _eG, m: _eM } });
-    ${kdfFnName} = _wi${suffix}.exports.kdf;
+    var _wi${suffix} = new WebAssembly.Instance(_wm${suffix}, { ${abi.envMod}: { ${abi.gImport}: _eG, ${abi.mImport}: _eM } });
+    ${kdfFnName} = _wi${suffix}.exports[${JSON.stringify(abi.kdfExport)}];
   } catch (e) {
     var _kx = [${rivEncodedTargets.join(',')}];
     var _k = [];

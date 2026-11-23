@@ -15,7 +15,7 @@ import { protectProject } from '../core/protect.js';
 import { checkProject } from '../core/check.js';
 import { symbolicateStackTrace } from '../core/vlq.js';
 
-const VERSION = '4.1.0';
+const VERSION = '4.2.0';
 let cachedPackageVersion: string | undefined;
 
 export function getPackageVersion(): string {
