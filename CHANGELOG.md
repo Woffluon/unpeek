@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.3.0] - 2026-11-24
+
+### Added
+- **Cold Anti-Strip Latch Coupling (C7)** (`cold-flow-guard.ts`, `ast/index.ts`, `string-vault.ts`, `salted-vault.ts`): Added `deriveColdLatchCoupling(seed)` (`LatchCouplingConfig`) backing shared `ArrayBuffer(32)` `Uint32Array` (`_uAl<sfx>`) and `Int32Array` (`_uAm<sfx>`) aliases with a hoisted, lazy-initialized `_uLr<sfx>()` latch coupled exclusively into vault cache-miss decode (`_ld`), silently corrupting decoded strings if stripped or tampered while emitting 0 bytes in `minimal` (`coldFlowGuardedCount === 0`).
+- **HTML & Web Worker Entry Graph Discovery (C16a)** (`detector.ts`, `protect.ts`): Added bounded `discoverHtmlEntryGraph` (`MAX_HTML_FILES = 64`, `MAX_SCAN_BYTES = 512 * 1024`, `MAX_JS_GRAPH_FILES = 1024`) when bundler manifests are absent to resolve actual HTML `<script>` entry chunks, relative imports, and `Worker`/`SharedWorker` targets while keeping `.next/server` excluded and filename heuristics as fallback.
+- **Micro-VM `OP_TOSTR` Template Coercion (C1)** (`micro-vm.ts`): Added `OP_TOSTR = 43` (`OPCODE_COUNT`: `43 -> 44`) after `TemplateLiteral` interpolations prior to `OP_ADD`, enforcing JavaScript `${v}` coercion (`toString()` before `valueOf()`, `TypeError` on `Symbol`).
+
+### Changed
+- **Cold `opaqueTrue` Statement Wrapping (C9)** (`cold-flow-guard.ts`): Wraps eligible cold `ExpressionStatement` and `IfStatement` statements in `if (!<opaqueFalse>)` within the `MAX_COLD_GUARDS_PER_CHUNK = 12` budget (reserving up to 4 slots for C9 when eligible statements exist, and exempting `Super`, directive prologues, declarations, control-flow jumps, `hotExemptNodes`, and `_unpeekSerialized`/`_unpeekVirtualized`).
+- **`"__proto__"` Preservation & Secret-Key Parity (C2)** (`string-vault.ts`, `salted-vault.ts`): Added `isEligibleObjectPropertyKey` and `VAULT_WALK_BASE` so non-computed object keys remain literal by default (preserving `"__proto__"` semantics), while `init`-position `isLikelySecretLiteral` keys move to computed vault lookups consistently across both vaults.
+- **Static Module & Asset URL Exemptions + ES2022 Codegen (C3)** (`boundary-classifier.ts`, `string-vault.ts`, `salted-vault.ts`, `scrubber.ts`, `codegen.ts`): Added `isStaticModuleOrAssetPosition` to exempt `new URL(<lit|tpl>, import.meta.url)`, `import.meta.resolve`, `require.resolve`, `require(<tpl>)`, and ES2022 string module specifiers, and extended `compactGenerator` in `codegen.ts` to emit `Literal` specifiers for `ExportSpecifier`, `ExportAllDeclaration`, and `ImportSpecifier`.
+
+### Security & Fixed
+- **Scope & Polymorphic Mangler Hardening (C6a/C6b)** (`cold-flow-guard.ts`, `wasm-vault.ts`, `polymorphic-mangler.ts`): Guarded `Math`-shadowed and `WithStatement` scopes, hoisted `_uMx`/`_uLr` with `try/catch` anti-strip guards, exempted lexical scopes enclosing or enclosed by direct `eval(...)` (keeping indirect eval mangled) and `WithStatement` blocks, and preserved sloppy-mode duplicate parameter bindings.
+
+---
+
 ## [4.2.0] - 2026-11-23
 
 ### Added

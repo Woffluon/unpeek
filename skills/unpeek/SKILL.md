@@ -29,7 +29,7 @@ Zero-config, call-graph-aware client-side JavaScript protection and source map i
 
 - **Tier 1 (`minimal` / Fast Baseline)**: Call-graph hot-path exemption (`TRUE_HOT_60FPS`, `SHALLOW_RENDER_COMPONENT`, `SERIALIZED_WORKER`), `mangler.minLength: 1` without cold-flow bloat (`coldFlow: false`), and order-independent `globalThis` runtime shield (`<2%` CPU, `<15%` Gzip).
 - **Tier 2 (`recommended` / Default)**: Adds 92-char involutory string vault, `>=4`-var semi-linear MBA + degree-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR guards, in-place `Uint8Array` shader vault, and non-poisoning async chunk handling.
-- **Tier 3 (`strict` / `--aggressive` Enclave)**: Targets `@unpeek-critical` or `critical.include` functions with a 43-opcode direct-threaded Micro-VM v2 (no `eval`), singleton `<1.2 KB` host-coupled WASM KDF (with bit-identical JS fallback), 64-bit call-site salted vault, and CWE-540 path scrubbing.
+- **Tier 3 (`strict` / `--aggressive` Enclave)**: Targets `@unpeek-critical` or `critical.include` functions with a 44-opcode direct-threaded Micro-VM v2 (no `eval`), singleton `<1.2 KB` host-coupled WASM KDF (with bit-identical JS fallback), 64-bit call-site salted vault, and CWE-540 path scrubbing.
 
 ## Reference Navigation
 

@@ -10,22 +10,28 @@ import {
 import {
   SAFE_ALPHA,
   DIRECTIVE_STRINGS,
+  VAULT_WALK_BASE,
   collectIdentifierShadowedScopes,
   createNewRegExpAst,
   createShaderVaultAst,
   findVaultInsertIndex,
+  isEligibleObjectPropertyKey,
   isEligibleSecretRegExp,
   isExemptTemplateLiteral,
   isShaderPayload,
   rebuildInterpolatedTemplates,
   shouldEncryptString,
   type InterpolatedTemplatePlan,
+  type LatchCouplingConfig,
 } from './string-vault.js';
 import { derivePolymorphicIdent, generateCompactJs } from './codegen.js';
 import { fallbackKdf, injectWasmVault } from './wasm-vault.js';
 import { generateRuntimeShield } from '../runtime/index.js';
 import { deriveWindowKeySymbol } from '../internal/runtime.js';
-import { isNodeInExemptSubtree } from './boundary-classifier.js';
+import {
+  isNodeInExemptSubtree,
+  isStaticModuleOrAssetPosition,
+} from './boundary-classifier.js';
 
 export interface SaltedVaultResult {
   encryptedStringsCount: number;
@@ -65,6 +71,25 @@ export function buildRivestDeltaExpr(seed: number, expectedDelta: number, varNam
   return `var _rx=(${xMasked}^${xMask | 0})|0,${varName}=(${rA0}+Math.imul(_rx,(${rA1}+Math.imul(_rx,(${rA2}+Math.imul(${rA3},_rx))|0))|0))&65535;`;
 }
 
+function buildLatchInitSnippet(
+  seed: number,
+  latchCoupling?: LatchCouplingConfig
+): { hasLatch: boolean; latchDecl: string } {
+  if (
+    !latchCoupling ||
+    typeof latchCoupling.latchFnName !== 'string' ||
+    !/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(latchCoupling.latchFnName)
+  ) {
+    return { hasLatch: false, latchDecl: '' };
+  }
+  const tamperByte = ((seed >>> 8) & 0x7f) | 0x35;
+  const expectedLatch = latchCoupling.expectedLatchByte & 255;
+  return {
+    hasLatch: true,
+    latchDecl: `var _ld=typeof ${latchCoupling.latchFnName}==="function"?((${latchCoupling.latchFnName}()^${expectedLatch})&255):${tamperByte};`,
+  };
+}
+
 /**
  * Creates the compact lazy-memoized decryptor function AST for Layer 1 on-demand resolution.
  * Uses an order-independent, non-poisoning state machine:
@@ -79,7 +104,8 @@ export function createSaltedDecryptorFnAst(
   windowKeySymbol: string,
   safeAlpha = SAFE_ALPHA,
   shieldCoupled = true,
-  _browserOnly = false
+  _browserOnly = false,
+  latchCoupling?: LatchCouplingConfig
 ): any {
   const propAccess = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(windowKeySymbol)
     ? `.${windowKeySymbol}`
@@ -93,6 +119,11 @@ export function createSaltedDecryptorFnAst(
     ? `.${flagSym}`
     : `[${JSON.stringify(flagSym)}]`;
   const tkExpr = `['__','unp','eek_t','ampered'].join('')`;
+  const { hasLatch, latchDecl } = buildLatchInitSnippet(seed, latchCoupling);
+  const charEmit = hasLatch
+    ? `o+=String.fromCharCode((k<0?ch:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92]).charCodeAt(0)^_ld);`
+    : `o+=k<0?ch:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92];`;
+  const cacheGuardSuffix = hasLatch ? '&&!_ld' : '';
 
   let fBody: string;
   if (!shieldCoupled) {
@@ -105,13 +136,14 @@ export function createSaltedDecryptorFnAst(
       `var w=typeof window<"u"?window:typeof self<"u"?self:0;` +
       `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||((""._u||a._u||0)!==0);` +
       `if(!tm&&(i in m))return m[i];` +
+      latchDecl +
       `var d=tm?(((Math.imul(i+1,0x9e3779b1)^0x5a5b)&65535)|1):0;` +
       `var q=(h^(""._u||a._u||0)^d)>>>0,p=a[i],o="";` +
       `if(p)for(var t=q^s^Math.imul(i+1,0x01000193),j=0;j<p.length;j++){` +
       `t=Math.imul(t^j+1,0x01000193)^0x811c9dc5;` +
       `var ch=p[j],k=A.indexOf(ch);` +
-      `o+=k<0?ch:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92];` +
-      `}if(!tm)m[i]=o;return o;};`;
+      charEmit +
+      `}if(!tm${cacheGuardSuffix})m[i]=o;return o;};`;
   } else {
     const edInit = buildRivestDeltaExpr(seed, expectedDelta, '_ed');
     const hasWindowKey = Boolean(windowKeySymbol);
@@ -131,13 +163,14 @@ export function createSaltedDecryptorFnAst(
       `var sr=G&&G${stateAccess}?G${stateAccess}:w&&w${stateAccess}?w${stateAccess}:void 0;` +
       `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||(sr&&sr[0]===2)||((""._u||a._u||0)!==0)||${svCheck};` +
       `if(!tm&&sv===_ed&&(i in m))return m[i];` +
+      latchDecl +
       `var d=tm?((_ed^(((Math.imul(i+1,0x9e3779b1)^0x5a5b)&65535)|1))&65535):_ed;` +
       `var q=(h^(""._u||a._u||0)^d)>>>0,p=a[i],o="";` +
       `if(p)for(var t=q^s^Math.imul(i+1,0x01000193),j=0;j<p.length;j++){` +
       `t=Math.imul(t^j+1,0x01000193)^0x811c9dc5;` +
       `var ch=p[j],k=A.indexOf(ch);` +
-      `o+=k<0?ch:A[(A.indexOf(P[(k-(t&65535)%92+92)%92])-(t>>>16)%92+92)%92];` +
-      `}if(!tm&&sv===_ed)m[i]=o;return o;};`;
+      charEmit +
+      `}if(!tm&&sv===_ed${cacheGuardSuffix})m[i]=o;return o;};`;
   }
 
   return (
@@ -264,7 +297,8 @@ export function applySaltedStringVault(
   deterrentMode?: DeterrentMode,
   shieldCoupled = true,
   detectHeadless = false,
-  exemptSubtreeRoots?: WeakSet<acorn.Node>
+  exemptSubtreeRoots?: WeakSet<acorn.Node>,
+  latchCoupling?: LatchCouplingConfig
 ): SaltedVaultResult {
   if (isAstAlreadySalted(ast)) {
     return {
@@ -419,116 +453,109 @@ export function applySaltedStringVault(
     return true;
   }
 
-  walk.ancestor(ast, {
-    Literal(node: any, ancestors: any[]) {
-      if (node.regex) {
+  walk.ancestor(
+    ast,
+    {
+      Literal(node: any, _state: any, ancestors: any[]) {
+        if (node.regex) {
+          if (
+            isEligibleSecretRegExp(
+              node,
+              ancestors,
+              hotExemptNodes,
+              exemptSubtreeRoots,
+              getRegExpShadowedScopes
+            )
+          ) {
+            pushSaltedTarget(
+              node.regex.pattern,
+              node,
+              ancestors[ancestors.length - 2],
+              {
+                replaceMode: 'regexp',
+                flags: node.regex.flags ?? '',
+              }
+            );
+          }
+          return;
+        }
+        if (typeof node.value !== 'string') return;
+        const val: string = node.value;
+        if (activeDirectives.has(val)) return;
+
+        const parent = ancestors[ancestors.length - 2];
+        if (!parent) return;
+
+        // Do not encrypt static module/bundler/asset URL strings
+        if (isStaticModuleOrAssetPosition(node, parent)) {
+          return;
+        }
+
+        // Keep non-computed object keys literal unless they carry a likely secret
+        if (parent.type === 'Property' && parent.key === node && !parent.computed) {
+          if (!isEligibleObjectPropertyKey(val, node, parent, ancestors)) {
+            return;
+          }
+        }
         if (
-          isEligibleSecretRegExp(
-            node,
-            ancestors,
-            hotExemptNodes,
-            exemptSubtreeRoots,
-            getRegExpShadowedScopes
-          )
+          (parent.type === 'MethodDefinition' ||
+            parent.type === 'PropertyDefinition') &&
+          parent.key === node &&
+          !parent.computed
         ) {
-          pushSaltedTarget(
-            node.regex.pattern,
+          return;
+        }
+
+        processSaltedCandidate(val, node, parent, ancestors);
+      },
+
+      TemplateLiteral(node: any, _state: any, ancestors: any[]) {
+        if (!Array.isArray(node.quasis) || node.quasis.length === 0) return;
+        const parent = ancestors[ancestors.length - 2];
+        if (isExemptTemplateLiteral(node, parent)) return;
+
+        const exprCount = Array.isArray(node.expressions)
+          ? node.expressions.length
+          : 0;
+        if (exprCount === 0) {
+          if (node.quasis.length !== 1) return;
+          const val: string =
+            node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
+          if (typeof val !== 'string' || activeDirectives.has(val)) return;
+          processSaltedCandidate(val, node, parent, ancestors);
+          return;
+        }
+
+        if (node.quasis.length !== exprCount + 1) return;
+        if (node.quasis.some((q: any) => typeof q?.value?.cooked !== 'string')) {
+          return;
+        }
+
+        const replacements = new Map<number, any>();
+        let queuedCount = 0;
+        for (let qIdx = 0; qIdx < node.quasis.length; qIdx++) {
+          const val: string = node.quasis[qIdx].value.cooked;
+          if (activeDirectives.has(val)) continue;
+          const queued = processSaltedCandidate(
+            val,
             node,
-            ancestors[ancestors.length - 2],
-            {
-              replaceMode: 'regexp',
-              flags: node.regex.flags ?? '',
+            parent,
+            ancestors,
+            (exprAst) => {
+              replacements.set(qIdx, exprAst);
             }
           );
-        }
-        return;
-      }
-      if (typeof node.value !== 'string') return;
-      const val: string = node.value;
-      if (activeDirectives.has(val)) return;
-
-      const parent = ancestors[ancestors.length - 2];
-      if (!parent) return;
-
-      // Do not encrypt module import/export source paths
-      if (
-        (parent.type === 'ImportDeclaration' ||
-          parent.type === 'ExportNamedDeclaration' ||
-          parent.type === 'ExportAllDeclaration' ||
-          parent.type === 'ImportExpression') &&
-        parent.source === node
-      ) {
-        return;
-      }
-
-      // Do not encrypt uncomputed object keys or class members
-      if (parent.type === 'Property' && parent.key === node && !parent.computed) {
-        return;
-      }
-      if (
-        (parent.type === 'MethodDefinition' ||
-          parent.type === 'PropertyDefinition') &&
-        parent.key === node &&
-        !parent.computed
-      ) {
-        return;
-      }
-      if (
-        parent.type === 'ImportAttribute' ||
-        parent.type === 'ImportSpecifier' ||
-        parent.type === 'ExportSpecifier'
-      ) {
-        return;
-      }
-
-      processSaltedCandidate(val, node, parent, ancestors);
-    },
-
-    TemplateLiteral(node: any, ancestors: any[]) {
-      if (!Array.isArray(node.quasis) || node.quasis.length === 0) return;
-      const parent = ancestors[ancestors.length - 2];
-      if (isExemptTemplateLiteral(node, parent)) return;
-
-      const exprCount = Array.isArray(node.expressions)
-        ? node.expressions.length
-        : 0;
-      if (exprCount === 0) {
-        if (node.quasis.length !== 1) return;
-        const val: string =
-          node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
-        if (typeof val !== 'string' || activeDirectives.has(val)) return;
-        processSaltedCandidate(val, node, parent, ancestors);
-        return;
-      }
-
-      if (node.quasis.length !== exprCount + 1) return;
-      if (node.quasis.some((q: any) => typeof q?.value?.cooked !== 'string')) {
-        return;
-      }
-
-      const replacements = new Map<number, any>();
-      let queuedCount = 0;
-      for (let qIdx = 0; qIdx < node.quasis.length; qIdx++) {
-        const val: string = node.quasis[qIdx].value.cooked;
-        if (activeDirectives.has(val)) continue;
-        const queued = processSaltedCandidate(
-          val,
-          node,
-          parent,
-          ancestors,
-          (exprAst) => {
-            replacements.set(qIdx, exprAst);
+          if (queued) {
+            queuedCount++;
           }
-        );
-        if (queued) {
-          queuedCount++;
         }
-      }
-      if (queuedCount > 0) {
-        interpolatedTemplates.push({ node, replacements });
-      }
+        if (queuedCount > 0) {
+          interpolatedTemplates.push({ node, replacements });
+        }
+      },
     },
-  });
+    VAULT_WALK_BASE
+  );
 
   if (targetsToReplace.length === 0 && shaderTargets.length === 0) {
     return {
@@ -581,6 +608,10 @@ export function applySaltedStringVault(
     const tkExpr = `['__','unp','eek_t','ampered'].join('')`;
     const dkExpr = `['__','unp','eek_d','elta'].join('')`;
 
+    const { hasLatch, latchDecl } = buildLatchInitSnippet(seed, latchCoupling);
+    const charMaskXor = hasLatch ? '^_ld' : '';
+    const cacheGuardSuffix = hasLatch ? '&&!_ld' : '';
+
     let helperFnSnippet: string;
     if (!shieldCoupled) {
       helperFnSnippet = `function ${decryptFnName}(i,s){` +
@@ -589,6 +620,7 @@ export function applySaltedStringVault(
         `var dv=(G&&G[_dk]!=null?G[_dk]:w&&w[_dk]!=null?w[_dk]:0)|0;` +
         `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||((""._u||0)!==0)||(dv!==0);` +
         `if(!tm&&${cacheVarName}[i]!==void 0)return ${cacheVarName}[i];` +
+        latchDecl +
         `if(${dCacheVarName}===void 0){` +
         `var c=Function.prototype.toString.call(${decryptFnName}),h=0x811c9dc5;` +
         `for(var l=0;l<c.length;l++)h=Math.imul(h^c.charCodeAt(l),0x01000193)>>>0;` +
@@ -599,9 +631,9 @@ export function applySaltedStringVault(
         `var p=${vaultVarName}[i],o="",rk=k|0;` +
         `for(var j=0;j<p.length;j++){` +
         `rk=(Math.imul(rk^(j+1),0x45d9f3b)+0x9e3779b9)|0;` +
-        `o+=String.fromCharCode(p.charCodeAt(j)^(((rk>>>16)&127)|1));` +
+        `o+=String.fromCharCode(p.charCodeAt(j)^(((rk>>>16)&127)|1)${charMaskXor});` +
         `}` +
-        `if(!tm)${cacheVarName}[i]=o;` +
+        `if(!tm${cacheGuardSuffix})${cacheVarName}[i]=o;` +
         `return o;` +
         `}`;
     } else {
@@ -621,6 +653,7 @@ export function applySaltedStringVault(
         `var dv=(G&&G[_dk]!=null?G[_dk]:w&&w[_dk]!=null?w[_dk]:0)|0;` +
         `var tm=(G&&(G[_tk]===!0||G${flagAccess}===!0))||(w&&(w[_tk]===!0||w${flagAccess}===!0))||(sr&&sr[0]===2)||((""._u||0)!==0)||(dv!==0)||${svCheck};` +
         `if(!tm&&sv===_ed&&${cacheVarName}[i]!==void 0)return ${cacheVarName}[i];` +
+        latchDecl +
         `if(${dCacheVarName}===void 0){` +
         `var c=Function.prototype.toString.call(${decryptFnName}),h=0x811c9dc5;` +
         `for(var l=0;l<c.length;l++)h=Math.imul(h^c.charCodeAt(l),0x01000193)>>>0;` +
@@ -631,9 +664,9 @@ export function applySaltedStringVault(
         `var p=${vaultVarName}[i],o="",rk=k|0;` +
         `for(var j=0;j<p.length;j++){` +
         `rk=(Math.imul(rk^(j+1),0x45d9f3b)+0x9e3779b9)|0;` +
-        `o+=String.fromCharCode(p.charCodeAt(j)^(((rk>>>16)&127)|1));` +
+        `o+=String.fromCharCode(p.charCodeAt(j)^(((rk>>>16)&127)|1)${charMaskXor});` +
         `}` +
-        `if(!tm&&sv===_ed)${cacheVarName}[i]=o;` +
+        `if(!tm&&sv===_ed${cacheGuardSuffix})${cacheVarName}[i]=o;` +
         `return o;` +
         `}`;
     }
@@ -681,6 +714,9 @@ export function applySaltedStringVault(
           createNewRegExpAst(callExpr, target.flags ?? '')
         );
       } else {
+        if (target.parent?.type === 'Property' && target.parent.key === target.node) {
+          target.parent.computed = true;
+        }
         replaceNodeInParent(target.parent, target.node, callExpr);
       }
     }

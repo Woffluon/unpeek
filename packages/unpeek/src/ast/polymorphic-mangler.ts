@@ -237,15 +237,71 @@ export function applyPolymorphicMangler(
   }
   const manglerConfig = config?.mangler;
   const scopeRecords = new Map<acorn.Node, ScopeRecord>();
+  const protectedScopeNodes = new Set<acorn.Node>();
   const barrierOrFreeIds = new Set<string>();
   const renamedTargetNodes = new WeakSet<any>();
   let counter = 0;
 
+  function hasStrictDirective(stmts: any[] | undefined): boolean {
+    if (!Array.isArray(stmts)) return false;
+    for (const stmt of stmts) {
+      if (stmt?.type !== 'ExpressionStatement') break;
+      const isStrLit =
+        stmt.expression?.type === 'Literal' && typeof stmt.expression.value === 'string';
+      if (!stmt.directive && !isStrLit) break;
+      if (stmt.directive === 'use strict' || stmt.expression?.value === 'use strict') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isSloppyFunctionNode(fnNode: any, ancestors: acorn.Node[]): boolean {
+    if (fnNode.type === 'ArrowFunctionExpression') return false;
+    if ((ast as any).sourceType === 'module') return false;
+    const parent = ancestors.length >= 2 ? (ancestors[ancestors.length - 2] as any) : null;
+    if (
+      parent &&
+      (parent.type === 'MethodDefinition' ||
+        (parent.type === 'Property' &&
+          (parent.method || parent.kind === 'get' || parent.kind === 'set')))
+    ) {
+      return false;
+    }
+    for (let i = 0; i < ancestors.length - 1; i++) {
+      const anc: any = ancestors[i];
+      if (anc.type === 'ClassDeclaration' || anc.type === 'ClassExpression') {
+        return false;
+      }
+      if (anc.type === 'Program' && hasStrictDirective(anc.body)) {
+        return false;
+      }
+      if (
+        FUNCTION_TYPES.has(anc.type) &&
+        anc.body?.type === 'BlockStatement' &&
+        hasStrictDirective(anc.body.body)
+      ) {
+        return false;
+      }
+    }
+    if (
+      fnNode.body?.type === 'BlockStatement' &&
+      hasStrictDirective(fnNode.body.body)
+    ) {
+      return false;
+    }
+    return true;
+  }
+
   function ensureScopeChain(ancestors: acorn.Node[]): ScopeRecord {
+    const insideWith = ancestors.some((a) => a.type === 'WithStatement');
     let prevScope: ScopeRecord | null = null;
     for (let i = 0; i < ancestors.length; i++) {
       const node = ancestors[i];
       if (!LEXICAL_SCOPE_TYPES.has(node.type)) continue;
+      if (insideWith) {
+        protectedScopeNodes.add(node);
+      }
       let record = scopeRecords.get(node);
       if (!record) {
         const isFn = FUNCTION_TYPES.has(node.type);
@@ -345,11 +401,24 @@ export function applyPolymorphicMangler(
 
   function registerFunctionParams(fnNode: any, ancestors: acorn.Node[]): void {
     ensureScopeChain(ancestors);
-    for (const param of fnNode.params || []) {
+    const params: any[] = fnNode.params || [];
+    const duplicateParamNames = new Set<string>();
+    const allSimpleParams = params.every((p: any) => p?.type === 'Identifier');
+    if (allSimpleParams && params.length > 1 && isSloppyFunctionNode(fnNode, ancestors)) {
+      const seen = new Set<string>();
+      for (const p of params) {
+        if (seen.has(p.name)) {
+          duplicateParamNames.add(p.name);
+        }
+        seen.add(p.name);
+      }
+    }
+    for (const param of params) {
       const targets: PatternTarget[] = [];
       collectPatternTargets(param, targets);
       for (const target of targets) {
-        registerBindingTarget(fnNode, target, true, fnNode);
+        const allowMangle = !duplicateParamNames.has(target.idNode.name);
+        registerBindingTarget(fnNode, target, allowMangle, fnNode);
       }
     }
   }
@@ -357,6 +426,26 @@ export function applyPolymorphicMangler(
   // Pass 1A: Build lexical scope tree and collect all declarations
   ensureScopeChain([ast]);
   walk.ancestor(ast, {
+    CallExpression(node: any, _state, ancestors) {
+      if (
+        !node.optional &&
+        node.callee?.type === 'Identifier' &&
+        node.callee.name === 'eval'
+      ) {
+        for (const anc of ancestors) {
+          if (LEXICAL_SCOPE_TYPES.has(anc.type)) {
+            protectedScopeNodes.add(anc);
+          }
+        }
+      }
+    },
+    WithStatement(_node: any, _state, ancestors) {
+      for (const anc of ancestors) {
+        if (LEXICAL_SCOPE_TYPES.has(anc.type)) {
+          protectedScopeNodes.add(anc);
+        }
+      }
+    },
     BlockStatement(_node: any, _state, ancestors) {
       ensureScopeChain(ancestors);
     },
@@ -473,6 +562,16 @@ export function applyPolymorphicMangler(
       }
     },
   });
+
+  // Pin all bindings in scopes exposed to direct eval(...) or WithStatement
+  for (const scopeNode of protectedScopeNodes) {
+    const scope = scopeRecords.get(scopeNode);
+    if (!scope) continue;
+    for (const entry of scope.bindings.values()) {
+      entry.shouldMangle = false;
+      barrierOrFreeIds.add(entry.origName);
+    }
+  }
 
   function resolveBinding(
     name: string,

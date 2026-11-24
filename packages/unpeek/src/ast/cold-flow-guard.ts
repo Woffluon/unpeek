@@ -37,6 +37,47 @@ export interface ApplyColdFlowGuardOptions {
   enableBitwiseMba?: boolean;
 }
 
+export interface LatchCouplingConfig {
+  readonly latchFnName: string;
+  readonly expectedLatchByte: number;
+}
+
+function deriveColdFlowSuffix(seed: number): string {
+  return (seed >>> 0).toString(36).slice(0, 4);
+}
+
+function deriveColdAliasInitWords(seed: number): number[] {
+  const words = [
+    mixSeed32(seed, 101),
+    mixSeed32(seed, 103),
+    mixSeed32(seed, 107),
+    mixSeed32(seed, 109),
+    mixSeed32(seed, 113),
+    mixSeed32(seed, 127),
+    mixSeed32(seed, 131),
+    mixSeed32(seed, 137),
+  ];
+  const latchByte = (words[0] ^ words[1]) & 0xff;
+  if (latchByte === 0 || latchByte === 0xff) {
+    words[1] = (words[1] ^ 0x5a) | 0;
+  }
+  return words;
+}
+
+/**
+ * Derives the deterministic C7 cold-flow latch function name and expected
+ * invariant byte `((initWords[0] ^ initWords[1]) & 0xff)` in range `1..254`.
+ */
+export function deriveColdLatchCoupling(seed: number): LatchCouplingConfig {
+  const sfx = deriveColdFlowSuffix(seed);
+  const initWords = deriveColdAliasInitWords(seed);
+  const expectedLatchByte = (initWords[0] ^ initWords[1]) & 0xff;
+  return {
+    latchFnName: `_uLr${sfx}`,
+    expectedLatchByte,
+  };
+}
+
 const NEUTRAL_DECOY_KEYS = [
   'telemetryOk',
   'retryBudget',
@@ -764,6 +805,15 @@ function makePropAccess(objExpr: any, propName: string): any {
   };
 }
 
+function makeSafeAliasRead(aliasIdent: string, slot: number): any {
+  return {
+    type: 'ConditionalExpression',
+    test: makeBinary('<', makeUnary('typeof', { type: 'Identifier', name: aliasIdent }), makeLiteral('u')),
+    consequent: makeMemberIndex(aliasIdent, makeLiteral(slot)),
+    alternate: makeLiteral(0),
+  };
+}
+
 function buildQnrBitExpr(qnrValRef: any, bitKind: 'xor1' | 'or2'): any {
   const shiftAmt = bitKind === 'xor1' ? 1 : 2;
   const combOp = bitKind === 'xor1' ? '^' : '|';
@@ -803,8 +853,9 @@ export function createSotaMbaPredicate(
   const qnrFamilyIdx = ((seed ^ Math.imul(fnIndex + 1, 0x9e3779b1)) >>> 0) % QNR_RESIDUE_FAMILIES.length;
   const qnrFamily = QNR_RESIDUE_FAMILIES[qnrFamilyIdx];
 
-  const slotA = (fnIndex + (seed & 3)) & 3;
-  const slotB = (slotA + 1 + ((seed >>> 2) & 1)) & 3;
+  // Keep alias mutations strictly in scratch slots 2..3 so slots 0..1 preserve the C7 latch invariant.
+  const slotA = 2 + ((fnIndex + (seed & 1)) & 1);
+  const slotB = slotA ^ 1;
   const hasAlias = Boolean(ctxOpts?.aliasIdentA);
   const aliasReadIdent = ctxOpts?.aliasIdentB ?? ctxOpts?.aliasIdentA ?? '';
 
@@ -1016,7 +1067,7 @@ export function createSotaMbaPredicate(
       pathACore = makeBinary(
         '^',
         pathACore,
-        makeBinary('&', makeMemberIndex(aliasReadIdent, makeLiteral(slotB)), makeLiteral(1))
+        makeBinary('&', makeSafeAliasRead(aliasReadIdent, slotB), makeLiteral(1))
       );
     }
     const pathA = ctxOpts?.scratchVarIdent
@@ -1029,7 +1080,7 @@ export function createSotaMbaPredicate(
       ? makeBinary(
           '^',
           makeLiteral(qnrFamily.expectedBit),
-          makeBinary('&', makeMemberIndex(ctxOpts!.aliasIdentA!, makeLiteral(slotB)), makeLiteral(1))
+          makeBinary('&', makeSafeAliasRead(ctxOpts!.aliasIdentA!, slotB), makeLiteral(1))
         )
       : makeLiteral(qnrFamily.expectedBit);
     testExpr = makeBinary('!==', makeBinary('^', pathA, pathB), makeLiteral(0));
@@ -1084,10 +1135,10 @@ export function createSotaMbaPredicate(
   } else if (predForm === 2) {
     // Form 2: Inequality (> / <) over two distinct _uAl / _uAm slots
     const slotReadB = hasAlias
-      ? makeBinary('&', makeMemberIndex(aliasReadIdent, makeLiteral(slotB)), makeLiteral(7))
+      ? makeBinary('&', makeSafeAliasRead(aliasReadIdent, slotB), makeLiteral(7))
       : makeBinary('&', makeTypeofGlobalLen(), makeLiteral(7));
     const slotWriteB = hasAlias
-      ? makeBinary('&', makeMemberIndex(ctxOpts!.aliasIdentA!, makeLiteral(slotB)), makeLiteral(7))
+      ? makeBinary('&', makeSafeAliasRead(ctxOpts!.aliasIdentA!, slotB), makeLiteral(7))
       : makeBinary('&', makeTypeofGlobalLen(), makeLiteral(7));
     let lhsExpr = makeBinary('+', qnrLeft, slotReadB);
     if (aliasInvZero) {
@@ -1098,10 +1149,10 @@ export function createSotaMbaPredicate(
   } else if (predForm === 3) {
     // Form 3: State-masked QNR target (non-literal RHS)
     const tagLhs = hasAlias
-      ? makeBinary('&', makeMemberIndex(ctxOpts!.aliasIdentA!, makeLiteral(slotB)), makeLiteral(0xf0))
+      ? makeBinary('&', makeSafeAliasRead(ctxOpts!.aliasIdentA!, slotB), makeLiteral(0xf0))
       : makeBinary('&', makeBinary('<<', makeTypeofGlobalLen(), makeLiteral(4)), makeLiteral(0xf0));
     const tagRhsBase = hasAlias
-      ? makeBinary('&', makeMemberIndex(aliasReadIdent, makeLiteral(slotB)), makeLiteral(0xf0))
+      ? makeBinary('&', makeSafeAliasRead(aliasReadIdent, slotB), makeLiteral(0xf0))
       : makeBinary('&', makeBinary('<<', makeTypeofGlobalLen(), makeLiteral(4)), makeLiteral(0xf0));
     const tagRhs = aliasInvZero
       ? makeBinary('^', tagRhsBase, makeBinary('&', aliasInvZero, makeLiteral(0x0f)))
@@ -1262,26 +1313,42 @@ function inferFunctionReturnDomain(fnNode: any): ColdReturnDomain {
   return 'object';
 }
 
-function createSboxAndAliasDeclarations(
+function buildSboxInitExpression(seed: number): any {
+  return acorn.parseExpressionAt(
+    `(function(){var a=[],i,s=${seed | 0},j,t;for(i=0;i<256;i++)a[i]=i;for(i=255;i>0;i--){s=(Math.imul(s,1664525)+1013904223)|0;j=(s>>>0)%(i+1);t=a[i];a[i]=a[j];a[j]=t;}return a;})()`,
+    0,
+    { ecmaVersion: 'latest' }
+  );
+}
+
+interface ColdFlowRuntimeDeclarations {
+  varDecl: acorn.VariableDeclaration;
+  aliasInitStmt: acorn.ExpressionStatement;
+  latchFnDecl: acorn.FunctionDeclaration;
+  mxFnDecl?: acorn.FunctionDeclaration;
+}
+
+function createColdFlowRuntimeDeclarations(
   sboxIdent: string,
   aliasIdentA: string,
   aliasIdentB: string,
   scratchVarIdent: string,
   seed: number,
+  latchFnName: string,
   mxIdent?: string
-): acorn.VariableDeclaration {
-  const sboxInit = acorn.parseExpressionAt(
-    `(function(){var a=[],i,s=${seed | 0},j,t;for(i=0;i<256;i++)a[i]=i;for(i=255;i>0;i--){s=(Math.imul(s,1664525)+1013904223)|0;j=(s>>>0)%(i+1);t=a[i];a[i]=a[j];a[j]=t;}return a;})()`,
-    0,
-    { ecmaVersion: 'latest' }
-  );
+): ColdFlowRuntimeDeclarations {
+  const sboxInit = buildSboxInitExpression(seed);
+  const initWords = deriveColdAliasInitWords(seed);
+  const wordsArrayExpr = {
+    type: 'ArrayExpression',
+    elements: initWords.map((v) => makeInt32Literal(v)),
+  };
 
-  const stateVals = [
-    mixSeed32(seed, 101),
-    mixSeed32(seed, 103),
-    mixSeed32(seed, 107),
-    mixSeed32(seed, 109),
-  ];
+  const newArrayBuffer32 = {
+    type: 'NewExpression',
+    callee: { type: 'Identifier', name: 'ArrayBuffer' },
+    arguments: [makeLiteral(32)],
+  };
 
   const declarations: any[] = [
     {
@@ -1293,14 +1360,26 @@ function createSboxAndAliasDeclarations(
       type: 'VariableDeclarator',
       id: { type: 'Identifier', name: aliasIdentA },
       init: {
-        type: 'ArrayExpression',
-        elements: stateVals.map((v) => makeInt32Literal(v)),
+        type: 'NewExpression',
+        callee: { type: 'Identifier', name: 'Uint32Array' },
+        arguments: [newArrayBuffer32],
       },
     },
     {
       type: 'VariableDeclarator',
       id: { type: 'Identifier', name: aliasIdentB },
-      init: { type: 'Identifier', name: aliasIdentA },
+      init: {
+        type: 'NewExpression',
+        callee: { type: 'Identifier', name: 'Int32Array' },
+        arguments: [
+          {
+            type: 'MemberExpression',
+            computed: false,
+            object: { type: 'Identifier', name: aliasIdentA },
+            property: { type: 'Identifier', name: 'buffer' },
+          },
+        ],
+      },
     },
     {
       type: 'VariableDeclarator',
@@ -1309,6 +1388,35 @@ function createSboxAndAliasDeclarations(
     },
   ];
 
+  const varDecl = {
+    type: 'VariableDeclaration',
+    kind: 'var',
+    declarations,
+  } as unknown as acorn.VariableDeclaration;
+
+  const aliasInitStmt = {
+    type: 'ExpressionStatement',
+    expression: {
+      type: 'CallExpression',
+      callee: {
+        type: 'MemberExpression',
+        computed: false,
+        object: { type: 'Identifier', name: aliasIdentB },
+        property: { type: 'Identifier', name: 'set' },
+      },
+      arguments: [cloneNode(wordsArrayExpr)],
+      optional: false,
+    },
+  } as unknown as acorn.ExpressionStatement;
+
+  const wordsList = initWords.map((w) => w | 0).join(',');
+  const latchFnParsed = acorn.parse(
+    `function ${latchFnName}(){try{return(${aliasIdentA}!==void 0&&${aliasIdentB}!==void 0)||(${aliasIdentA}=new Uint32Array(new ArrayBuffer(32)),${aliasIdentB}=new Int32Array(${aliasIdentA}.buffer),${aliasIdentB}.set([${wordsList}])),((${aliasIdentA}[0]^${aliasIdentB}[1])&255)}catch(e){return -1}}`,
+    { ecmaVersion: 'latest', sourceType: 'script' }
+  ) as unknown as acorn.Program;
+  const latchFnDecl = latchFnParsed.body[0] as unknown as acorn.FunctionDeclaration;
+
+  let mxFnDecl: acorn.FunctionDeclaration | undefined;
   if (mxIdent) {
     const mbaAst = buildMba4Ast(
       seed,
@@ -1318,9 +1426,48 @@ function createSboxAndAliasDeclarations(
       { type: 'Identifier', name: '$p' },
       { type: 'Identifier', name: '$q' }
     );
-    const mxFn = {
-      type: 'FunctionExpression',
-      id: null,
+    const slotExpr = makeBinary('+', makeLiteral(2), makeBinary('&', { type: 'Identifier', name: '$c' }, makeLiteral(1)));
+    const lazyAliasGuard = {
+      type: 'ExpressionStatement',
+      expression: {
+        type: 'LogicalExpression',
+        operator: '||',
+        left: {
+          type: 'LogicalExpression',
+          operator: '&&',
+          left: makeBinary('!==', { type: 'Identifier', name: aliasIdentA }, makeUnary('void', makeLiteral(0))),
+          right: makeBinary('!==', { type: 'Identifier', name: aliasIdentB }, makeUnary('void', makeLiteral(0))),
+        },
+        right: {
+          type: 'LogicalExpression',
+          operator: '||',
+          left: makeBinary('!==', makeUnary('typeof', { type: 'Identifier', name: latchFnName }), makeLiteral('function')),
+          right: {
+            type: 'CallExpression',
+            callee: { type: 'Identifier', name: latchFnName },
+            arguments: [],
+            optional: false,
+          },
+        },
+      },
+    };
+    const lazySboxGuard = {
+      type: 'ExpressionStatement',
+      expression: {
+        type: 'LogicalExpression',
+        operator: '||',
+        left: { type: 'Identifier', name: sboxIdent },
+        right: {
+          type: 'AssignmentExpression',
+          operator: '=',
+          left: { type: 'Identifier', name: sboxIdent },
+          right: buildSboxInitExpression(seed),
+        },
+      },
+    };
+    mxFnDecl = {
+      type: 'FunctionDeclaration',
+      id: { type: 'Identifier', name: mxIdent },
       params: [
         { type: 'Identifier', name: '$a' },
         { type: 'Identifier', name: '$b' },
@@ -1336,123 +1483,139 @@ function createSboxAndAliasDeclarations(
         type: 'BlockStatement',
         body: [
           {
-            type: 'VariableDeclaration',
-            kind: 'var',
-            declarations: [
-              { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$u' }, init: makeBinary('|', { type: 'Identifier', name: '$a' }, makeLiteral(0)) },
-              { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$v' }, init: makeBinary('|', { type: 'Identifier', name: '$b' }, makeLiteral(0)) },
-              { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$p' }, init: makeBinary('|', makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$c' }), makeLiteral(0)) },
-              { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$q' }, init: makeBinary('|', makeMemberIndex(aliasIdentB, { type: 'Identifier', name: '$d' }), makeLiteral(0)) },
-              { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$z' }, init: mbaAst },
-            ],
-          },
-          {
-            type: 'ExpressionStatement',
-            expression: {
-              type: 'AssignmentExpression',
-              operator: '=',
-              left: { type: 'Identifier', name: '$z' },
-              right: makeBinary(
-                '|',
-                makeBinary(
-                  '+',
-                  { type: 'Identifier', name: '$f' },
-                  makeImul(
-                    { type: 'Identifier', name: '$z' },
-                    makeBinary(
-                      '+',
-                      { type: 'Identifier', name: '$g' },
-                      makeImul(
-                        { type: 'Identifier', name: '$z' },
-                        makeBinary(
-                          '+',
-                          { type: 'Identifier', name: '$h' },
-                          makeImul({ type: 'Identifier', name: '$z' }, { type: 'Identifier', name: '$i' })
-                        )
-                      )
-                    )
-                  )
-                ),
-                makeLiteral(0)
-              ),
-            },
-          },
-          {
-            type: 'ExpressionStatement',
-            expression: {
-              type: 'AssignmentExpression',
-              operator: '=',
-              left: { type: 'Identifier', name: '$z' },
-              right: buildSboxMixAst(sboxIdent, '$z'),
-            },
-          },
-          {
-            type: 'VariableDeclaration',
-            kind: 'var',
-            declarations: [
-              {
-                type: 'VariableDeclarator',
-                id: { type: 'Identifier', name: '$m' },
-                init: makeBinary('^', makeBinary('<<', { type: 'Identifier', name: '$z' }, makeLiteral(3)), { type: 'Identifier', name: '$e' }),
-              },
-            ],
-          },
-          {
-            type: 'ExpressionStatement',
-            expression: {
-              type: 'AssignmentExpression',
-              operator: '=',
-              left: makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$c' }),
-              right: makeBinary('|', makeBinary('^', makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$c' }), { type: 'Identifier', name: '$m' }), makeLiteral(0)),
-            },
-          },
-          {
-            type: 'VariableDeclaration',
-            kind: 'var',
-            declarations: [
-              {
-                type: 'VariableDeclarator',
-                id: { type: 'Identifier', name: '$w' },
-                init: makeBinary(
-                  '^',
-                  makeBinary('|', makeBinary('^', makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$c' }), { type: 'Identifier', name: '$m' }), makeLiteral(0)),
-                  {
+            type: 'TryStatement',
+            block: {
+              type: 'BlockStatement',
+              body: [
+                lazyAliasGuard,
+                lazySboxGuard,
+                {
+                  type: 'VariableDeclaration',
+                  kind: 'var',
+                  declarations: [
+                    { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$s' }, init: slotExpr },
+                    { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$u' }, init: makeBinary('|', { type: 'Identifier', name: '$a' }, makeLiteral(0)) },
+                    { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$v' }, init: makeBinary('|', { type: 'Identifier', name: '$b' }, makeLiteral(0)) },
+                    { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$p' }, init: makeBinary('|', makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$s' }), makeLiteral(0)) },
+                    { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$q' }, init: makeBinary('|', makeMemberIndex(aliasIdentB, { type: 'Identifier', name: '$d' }), makeLiteral(0)) },
+                    { type: 'VariableDeclarator', id: { type: 'Identifier', name: '$z' }, init: mbaAst },
+                  ],
+                },
+                {
+                  type: 'ExpressionStatement',
+                  expression: {
                     type: 'AssignmentExpression',
                     operator: '=',
-                    left: makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$c' }),
-                    right: makeBinary('|', makeBinary('^', makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$c' }), { type: 'Identifier', name: '$m' }), makeLiteral(0)),
-                  }
-                ),
-              },
-            ],
-          },
-          {
-            type: 'ReturnStatement',
-            argument: {
-              type: 'AssignmentExpression',
-              operator: '=',
-              left: { type: 'Identifier', name: scratchVarIdent },
-              right: makeBinary('|', makeBinary('^', { type: 'Identifier', name: '$z' }, { type: 'Identifier', name: '$w' }), makeLiteral(0)),
+                    left: { type: 'Identifier', name: '$z' },
+                    right: makeBinary(
+                      '|',
+                      makeBinary(
+                        '+',
+                        { type: 'Identifier', name: '$f' },
+                        makeImul(
+                          { type: 'Identifier', name: '$z' },
+                          makeBinary(
+                            '+',
+                            { type: 'Identifier', name: '$g' },
+                            makeImul(
+                              { type: 'Identifier', name: '$z' },
+                              makeBinary(
+                                '+',
+                                { type: 'Identifier', name: '$h' },
+                                makeImul({ type: 'Identifier', name: '$z' }, { type: 'Identifier', name: '$i' })
+                              )
+                            )
+                          )
+                        )
+                      ),
+                      makeLiteral(0)
+                    ),
+                  },
+                },
+                {
+                  type: 'ExpressionStatement',
+                  expression: {
+                    type: 'AssignmentExpression',
+                    operator: '=',
+                    left: { type: 'Identifier', name: '$z' },
+                    right: buildSboxMixAst(sboxIdent, '$z'),
+                  },
+                },
+                {
+                  type: 'VariableDeclaration',
+                  kind: 'var',
+                  declarations: [
+                    {
+                      type: 'VariableDeclarator',
+                      id: { type: 'Identifier', name: '$m' },
+                      init: makeBinary('^', makeBinary('<<', { type: 'Identifier', name: '$z' }, makeLiteral(3)), { type: 'Identifier', name: '$e' }),
+                    },
+                  ],
+                },
+                {
+                  type: 'ExpressionStatement',
+                  expression: {
+                    type: 'AssignmentExpression',
+                    operator: '=',
+                    left: makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$s' }),
+                    right: makeBinary('|', makeBinary('^', makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$s' }), { type: 'Identifier', name: '$m' }), makeLiteral(0)),
+                  },
+                },
+                {
+                  type: 'VariableDeclaration',
+                  kind: 'var',
+                  declarations: [
+                    {
+                      type: 'VariableDeclarator',
+                      id: { type: 'Identifier', name: '$w' },
+                      init: makeBinary(
+                        '^',
+                        makeBinary('|', makeBinary('^', makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$s' }), { type: 'Identifier', name: '$m' }), makeLiteral(0)),
+                        {
+                          type: 'AssignmentExpression',
+                          operator: '=',
+                          left: makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$s' }),
+                          right: makeBinary('|', makeBinary('^', makeMemberIndex(aliasIdentA, { type: 'Identifier', name: '$s' }), { type: 'Identifier', name: '$m' }), makeLiteral(0)),
+                        }
+                      ),
+                    },
+                  ],
+                },
+                {
+                  type: 'ReturnStatement',
+                  argument: {
+                    type: 'AssignmentExpression',
+                    operator: '=',
+                    left: { type: 'Identifier', name: scratchVarIdent },
+                    right: makeBinary('|', makeBinary('^', { type: 'Identifier', name: '$z' }, { type: 'Identifier', name: '$w' }), makeLiteral(0)),
+                  },
+                },
+              ],
             },
+            handler: {
+              type: 'CatchClause',
+              param: { type: 'Identifier', name: '$e' },
+              body: {
+                type: 'BlockStatement',
+                body: [{ type: 'ReturnStatement', argument: makeLiteral(0) }],
+              },
+            },
+            finalizer: null,
           },
         ],
       },
       generator: false,
       async: false,
       expression: false,
-    };
-    declarations.push({
-      type: 'VariableDeclarator',
-      id: { type: 'Identifier', name: mxIdent },
-      init: mxFn,
-    });
+    } as unknown as acorn.FunctionDeclaration;
   }
 
   return {
-    type: 'VariableDeclaration',
-    kind: 'var',
-    declarations,
-  } as unknown as acorn.VariableDeclaration;
+    varDecl,
+    aliasInitStmt,
+    latchFnDecl,
+    ...(mxFnDecl ? { mxFnDecl } : {}),
+  };
 }
 
 /**
@@ -1915,6 +2078,197 @@ export function applyColdBitwiseMba(
   return mbaCount;
 }
 
+const UNSAFE_EXPRESSION_NODE_TYPES = new Set(['Super', 'WithStatement']);
+const UNSAFE_IF_NODE_TYPES = new Set([
+  'Super',
+  'WithStatement',
+  'FunctionDeclaration',
+  'ClassDeclaration',
+]);
+
+function containsAstNodeType(node: any, types: Set<string>): boolean {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      if (containsAstNodeType(item, types)) return true;
+    }
+    return false;
+  }
+  if (typeof node.type === 'string' && types.has(node.type)) {
+    return true;
+  }
+  for (const key of Object.keys(node)) {
+    if (
+      key === 'loc' ||
+      key === 'range' ||
+      key === 'start' ||
+      key === 'end' ||
+      key === 'comments' ||
+      key === 'tokens'
+    ) {
+      continue;
+    }
+    const val = node[key];
+    if (val && typeof val === 'object' && containsAstNodeType(val, types)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectMathUnsafeScopes(ast: acorn.Program): WeakSet<acorn.Node> {
+  const unsafe = new WeakSet<acorn.Node>();
+
+  const findEnclosing = (ancestors: any[]): any => {
+    for (let i = ancestors.length - 1; i >= 0; i--) {
+      if (BITWISE_LEXICAL_SCOPE_TYPES.has(ancestors[i].type)) {
+        return ancestors[i];
+      }
+    }
+    return ast;
+  };
+
+  const markScopeAndEnclosingFn = (ancestors: any[], scopeNode: any): void => {
+    unsafe.add(scopeNode);
+    const parent = ancestors.length >= 2 ? ancestors[ancestors.length - 2] : null;
+    if (
+      parent &&
+      BITWISE_FUNCTION_TYPES.has(parent.type) &&
+      parent.body === scopeNode
+    ) {
+      unsafe.add(parent);
+    }
+  };
+
+  const patternHasMath = (pat: any): boolean => {
+    const names: string[] = [];
+    collectBoundPatternNames(pat, names);
+    return names.includes('Math');
+  };
+
+  walk.ancestor(ast, {
+    WithStatement(node: any, _st: any, ancestors: any[]) {
+      unsafe.add(node);
+      for (let i = ancestors.length - 2; i >= 0; i--) {
+        const a = ancestors[i];
+        if (BITWISE_FUNCTION_TYPES.has(a.type)) {
+          unsafe.add(a);
+          break;
+        }
+        if (a.type === 'Program') break;
+      }
+    },
+    ImportSpecifier(node: any) {
+      if (node.local?.name === 'Math') unsafe.add(ast);
+    },
+    ImportDefaultSpecifier(node: any) {
+      if (node.local?.name === 'Math') unsafe.add(ast);
+    },
+    ImportNamespaceSpecifier(node: any) {
+      if (node.local?.name === 'Math') unsafe.add(ast);
+    },
+    FunctionDeclaration(node: any, _st: any, ancestors: any[]) {
+      if (node.id?.name === 'Math') {
+        const prefix = ancestors.slice(0, -1);
+        markScopeAndEnclosingFn(prefix, findEnclosing(prefix));
+        unsafe.add(node);
+      }
+      if (Array.isArray(node.params) && node.params.some(patternHasMath)) {
+        unsafe.add(node);
+      }
+    },
+    FunctionExpression(node: any) {
+      if (
+        node.id?.name === 'Math' ||
+        (Array.isArray(node.params) && node.params.some(patternHasMath))
+      ) {
+        unsafe.add(node);
+      }
+    },
+    ArrowFunctionExpression(node: any) {
+      if (Array.isArray(node.params) && node.params.some(patternHasMath)) {
+        unsafe.add(node);
+      }
+    },
+    ClassDeclaration(node: any, _st: any, ancestors: any[]) {
+      if (node.id?.name === 'Math') {
+        const prefix = ancestors.slice(0, -1);
+        markScopeAndEnclosingFn(prefix, findEnclosing(prefix));
+        unsafe.add(node);
+      }
+    },
+    ClassExpression(node: any) {
+      if (node.id?.name === 'Math') {
+        unsafe.add(node);
+      }
+    },
+    CatchClause(node: any) {
+      if (node.param && patternHasMath(node.param)) {
+        unsafe.add(node);
+      }
+    },
+    VariableDeclaration(node: any, _st: any, ancestors: any[]) {
+      if (
+        !Array.isArray(node.declarations) ||
+        !node.declarations.some((d: any) => patternHasMath(d?.id))
+      ) {
+        return;
+      }
+      if (node.kind === 'var') {
+        for (let i = ancestors.length - 1; i >= 0; i--) {
+          const a = ancestors[i];
+          if (
+            BITWISE_FUNCTION_TYPES.has(a.type) ||
+            a.type === 'StaticBlock' ||
+            a.type === 'Program'
+          ) {
+            unsafe.add(a);
+            break;
+          }
+        }
+      } else {
+        const prefix = ancestors.slice(0, -1);
+        markScopeAndEnclosingFn(prefix, findEnclosing(prefix));
+      }
+    },
+  });
+
+  return unsafe;
+}
+
+function isAnyAncestorInSet(ancestors: any[], set?: WeakSet<acorn.Node>): boolean {
+  if (!set) return false;
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    if (set.has(ancestors[i])) return true;
+  }
+  return false;
+}
+
+function isDirectiveStatement(stmt: any): boolean {
+  if (!stmt || stmt.type !== 'ExpressionStatement') return false;
+  if (stmt.directive) return true;
+  return (
+    stmt.expression?.type === 'Literal' &&
+    typeof stmt.expression.value === 'string' &&
+    /^(?:use\s+[a-zA-Z0-9_-]+)/.test(stmt.expression.value.trim())
+  );
+}
+
+function isSafeC9Statement(stmt: any, hotExemptNodes?: WeakSet<acorn.Node>): boolean {
+  if (!stmt || typeof stmt !== 'object') return false;
+  if ((stmt as any)._unpeekGuardSubtree === true) return false;
+  if (hotExemptNodes?.has(stmt)) return false;
+
+  if (stmt.type === 'ExpressionStatement') {
+    if (isDirectiveStatement(stmt)) return false;
+    return !containsAstNodeType(stmt, UNSAFE_EXPRESSION_NODE_TYPES);
+  }
+  if (stmt.type === 'IfStatement') {
+    return !containsAstNodeType(stmt, UNSAFE_IF_NODE_TYPES);
+  }
+  return false;
+}
+
 export function applyColdFlowGuard(
   ast: acorn.Program,
   coldFunctionNodes: WeakSet<acorn.Node>,
@@ -1925,23 +2279,27 @@ export function applyColdFlowGuard(
   shieldCoupled = false,
   options?: ApplyColdFlowGuardOptions
 ): number {
-  const sfx = (seed >>> 0).toString(36).slice(0, 4);
+  const sfx = deriveColdFlowSuffix(seed);
   const decoyIdent = `_uDec${sfx}`;
   const sboxIdent = `_uSb${sfx}`;
   const aliasIdentA = `_uAl${sfx}`;
   const aliasIdentB = `_uAm${sfx}`;
   const scratchVarIdent = `_uZt${sfx}`;
   const mxIdent = `_uMx${sfx}`;
+  const latchFnName = `_uLr${sfx}`;
 
   if (Array.isArray(ast.body)) {
     const alreadyGuarded = ast.body.some(
       (stmt: any) =>
-        stmt.type === 'VariableDeclaration' &&
-        stmt.declarations?.some(
-          (d: any) =>
-            d.id?.type === 'Identifier' &&
-            (d.id.name === decoyIdent || d.id.name === sboxIdent || d.id.name === mxIdent)
-        )
+        (stmt.type === 'VariableDeclaration' &&
+          stmt.declarations?.some(
+            (d: any) =>
+              d.id?.type === 'Identifier' &&
+              (d.id.name === decoyIdent || d.id.name === sboxIdent || d.id.name === mxIdent)
+          )) ||
+        (stmt.type === 'FunctionDeclaration' &&
+          stmt.id?.type === 'Identifier' &&
+          (stmt.id.name === mxIdent || stmt.id.name === latchFnName))
     );
     if (alreadyGuarded) return 0;
   }
@@ -1950,12 +2308,25 @@ export function applyColdFlowGuard(
     applyColdBitwiseMba(ast, coldFunctionNodes, seed, hotExemptNodes);
   }
 
-  let guardedCount = 0;
+  const mathUnsafeScopes = collectMathUnsafeScopes(ast);
+  const C9_RESERVED_SLOTS = 4;
 
-  function maybeInjectGuard(node: any): void {
-    if (guardedCount >= MAX_COLD_GUARDS_PER_CHUNK) return;
+  interface EligibleColdFnInfo {
+    node: any;
+    paramNames: string[];
+    firstParam?: string | acorn.Pattern;
+    isArrow: boolean;
+    returnDomain: ColdReturnDomain;
+  }
+
+  const eligibleColdFns: EligibleColdFnInfo[] = [];
+
+  function collectEligibleColdFn(node: any, _state: any, ancestors: any[]): void {
+    if (eligibleColdFns.length >= MAX_COLD_GUARDS_PER_CHUNK) return;
     if (!coldFunctionNodes.has(node)) return;
-    if (hotExemptNodes?.has(node) || (node as any)._unpeekSerialized) return;
+    if (isAnyAncestorInSet(ancestors, hotExemptNodes)) return;
+    if (isAnyAncestorInSet(ancestors, mathUnsafeScopes)) return;
+    if ((node as any)._unpeekSerialized) return;
     if ((node as any)._unpeekVirtualized === true) return;
     if (!node.body || node.body.type !== 'BlockStatement') return;
 
@@ -1963,30 +2334,64 @@ export function applyColdFlowGuard(
     for (const p of node.params || []) {
       extractParamNames(p, paramNames);
     }
-    const firstParam = node.params?.[0];
-    const isArrow = node.type === 'ArrowFunctionExpression';
-    const returnDomain = inferFunctionReturnDomain(node);
+    eligibleColdFns.push({
+      node,
+      paramNames,
+      firstParam: node.params?.[0],
+      isArrow: node.type === 'ArrowFunctionExpression',
+      returnDomain: inferFunctionReturnDomain(node),
+    });
+  }
 
+  walk.ancestor(ast, {
+    FunctionDeclaration: collectEligibleColdFn,
+    FunctionExpression: collectEligibleColdFn,
+    ArrowFunctionExpression: collectEligibleColdFn,
+  });
+
+  // Reserve up to C9_RESERVED_SLOTS for C9 opaqueTrue statement wrapping when eligible cold
+  // statements exist so large chunks (>=12 cold functions) still receive genuine C9 protection.
+  let availableC9Slots = 0;
+  for (const fnInfo of eligibleColdFns) {
+    if (availableC9Slots >= C9_RESERVED_SLOTS) break;
+    const bodyStmts: any[] = fnInfo.node.body.body;
+    let idx = 0;
+    while (idx < bodyStmts.length && isDirectiveStatement(bodyStmts[idx])) {
+      idx++;
+    }
+    for (; idx < bodyStmts.length; idx++) {
+      if (isSafeC9Statement(bodyStmts[idx], hotExemptNodes)) {
+        availableC9Slots++;
+        if (availableC9Slots >= C9_RESERVED_SLOTS) break;
+      }
+    }
+  }
+
+  const opaqueFalseLimit = MAX_COLD_GUARDS_PER_CHUNK - availableC9Slots;
+  let opaqueFalseCount = 0;
+
+  for (let i = 0; i < eligibleColdFns.length && opaqueFalseCount < opaqueFalseLimit; i++) {
+    const fnInfo = eligibleColdFns[i];
     const guardStmt = createSotaMbaPredicate(
       seed,
-      guardedCount,
-      firstParam,
+      opaqueFalseCount,
+      fnInfo.firstParam,
       decoyIdent,
-      isArrow,
+      fnInfo.isArrow,
       {
-        liveVars: paramNames,
+        liveVars: fnInfo.paramNames,
         sboxIdent,
         aliasIdentA,
         aliasIdentB,
         scratchVarIdent,
         mxIdent,
-        returnDomain,
+        returnDomain: fnInfo.returnDomain,
         windowKeySymbol,
         expectedDelta,
         shieldCoupled,
       }
     );
-    guardedCount++;
+    opaqueFalseCount++;
     (guardStmt as any)._unpeekGuardSubtree = true;
 
     if (hotExemptNodes) {
@@ -1994,46 +2399,115 @@ export function applyColdFlowGuard(
       hotExemptNodes.add(guardStmt.consequent);
     }
 
-    // Insert after any leading 'use strict' directive inside the function body
+    // Insert after any leading 'use strict' / directive prologue inside the function body
     let insertIdx = 0;
     while (
-      insertIdx < node.body.body.length &&
-      node.body.body[insertIdx].type === 'ExpressionStatement' &&
-      node.body.body[insertIdx].directive
+      insertIdx < fnInfo.node.body.body.length &&
+      isDirectiveStatement(fnInfo.node.body.body[insertIdx])
     ) {
       insertIdx++;
     }
-    node.body.body.splice(insertIdx, 0, guardStmt);
+    fnInfo.node.body.body.splice(insertIdx, 0, guardStmt);
   }
 
-  walk.simple(ast, {
-    FunctionDeclaration: maybeInjectGuard,
-    FunctionExpression: maybeInjectGuard,
-    ArrowFunctionExpression: maybeInjectGuard,
-  });
+  // C9: Cold `if (!<opaqueFalse>) { stmt; }` statement wrapping across all eligible cold functions
+  let c9WrappedCount = 0;
+  if (
+    eligibleColdFns.length > 0 &&
+    opaqueFalseCount < MAX_COLD_GUARDS_PER_CHUNK
+  ) {
+    const fnCursors = eligibleColdFns.map((fnInfo) => {
+      const bodyStmts: any[] = fnInfo.node.body.body;
+      let startIdx = 0;
+      while (startIdx < bodyStmts.length && isDirectiveStatement(bodyStmts[startIdx])) {
+        startIdx++;
+      }
+      return { fnInfo, bodyStmts, idx: startIdx };
+    });
 
-  if (guardedCount > 0 && Array.isArray(ast.body)) {
+    let progress = true;
+    while (progress && opaqueFalseCount + c9WrappedCount < MAX_COLD_GUARDS_PER_CHUNK) {
+      progress = false;
+      for (const cursor of fnCursors) {
+        if (opaqueFalseCount + c9WrappedCount >= MAX_COLD_GUARDS_PER_CHUNK) break;
+        const { fnInfo, bodyStmts } = cursor;
+        while (cursor.idx < bodyStmts.length) {
+          const stmt = bodyStmts[cursor.idx];
+          const curIdx = cursor.idx++;
+          if (!isSafeC9Statement(stmt, hotExemptNodes)) continue;
+
+          const pred = createSotaMbaPredicate(
+            seed,
+            opaqueFalseCount + c9WrappedCount,
+            fnInfo.firstParam,
+            decoyIdent,
+            fnInfo.isArrow,
+            {
+              liveVars: fnInfo.paramNames,
+              sboxIdent,
+              aliasIdentA,
+              aliasIdentB,
+              scratchVarIdent,
+              mxIdent,
+              returnDomain: 'void',
+              windowKeySymbol,
+              expectedDelta,
+              shieldCoupled,
+            }
+          );
+          const negatedTest = makeUnary('!', pred.test);
+          (negatedTest as any)._unpeekGuardSubtree = true;
+          if (hotExemptNodes) {
+            hotExemptNodes.add(negatedTest);
+          }
+
+          bodyStmts[curIdx] = {
+            type: 'IfStatement',
+            test: negatedTest,
+            consequent: {
+              type: 'BlockStatement',
+              body: [stmt],
+            },
+            alternate: null,
+          };
+          c9WrappedCount++;
+          progress = true;
+          break;
+        }
+      }
+    }
+  }
+
+  if ((opaqueFalseCount > 0 || c9WrappedCount > 0) && Array.isArray(ast.body)) {
     const sharedDecoyDecl = createSharedDecoyDeclaration(
       decoyIdent,
-      guardedCount,
+      Math.max(1, opaqueFalseCount),
       seed
     );
-    const sboxAliasDecl = createSboxAndAliasDeclarations(
-      sboxIdent,
-      aliasIdentA,
-      aliasIdentB,
-      scratchVarIdent,
-      seed,
-      mxIdent
-    );
+    const { varDecl, aliasInitStmt, latchFnDecl, mxFnDecl } =
+      createColdFlowRuntimeDeclarations(
+        sboxIdent,
+        aliasIdentA,
+        aliasIdentB,
+        scratchVarIdent,
+        seed,
+        latchFnName,
+        mxIdent
+      );
+
+    (aliasInitStmt as any)._unpeekGuardSubtree = true;
+    (latchFnDecl as any)._unpeekGuardSubtree = true;
+    if (mxFnDecl) {
+      (mxFnDecl as any)._unpeekGuardSubtree = true;
+    }
 
     if (hotExemptNodes) {
       hotExemptNodes.add(sharedDecoyDecl);
-      hotExemptNodes.add(sboxAliasDecl);
-      for (const decl of sboxAliasDecl.declarations || []) {
-        if (decl.init?.type === 'FunctionExpression') {
-          hotExemptNodes.add(decl.init);
-        }
+      hotExemptNodes.add(varDecl);
+      hotExemptNodes.add(aliasInitStmt);
+      hotExemptNodes.add(latchFnDecl);
+      if (mxFnDecl) {
+        hotExemptNodes.add(mxFnDecl);
       }
       for (const decl of sharedDecoyDecl.declarations || []) {
         if (decl.init?.type === 'ArrayExpression' && decl.init.elements) {
@@ -2059,8 +2533,15 @@ export function applyColdFlowGuard(
         break;
       }
     }
-    ast.body.splice(insertIdx, 0, sboxAliasDecl, sharedDecoyDecl);
+    const injectedDecls: any[] = [
+      varDecl,
+      aliasInitStmt,
+      latchFnDecl,
+      ...(mxFnDecl ? [mxFnDecl] : []),
+      sharedDecoyDecl,
+    ];
+    ast.body.splice(insertIdx, 0, ...injectedDecls);
   }
 
-  return guardedCount;
+  return opaqueFalseCount;
 }

@@ -18,8 +18,14 @@ import {
   createSaltedDecryptorFnAst,
   createSaltedVaultHelperAst,
 } from './salted-vault.js';
-import { isNodeInExemptSubtree } from './boundary-classifier.js';
-import { hasRegexSecretRun } from './secret-patterns.js';
+import {
+  isNodeInExemptSubtree,
+  isStaticModuleOrAssetPosition,
+} from './boundary-classifier.js';
+import {
+  hasRegexSecretRun,
+  isLikelySecretLiteral,
+} from './secret-patterns.js';
 
 export const SAFE_ALPHA =
   " !#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~";
@@ -304,28 +310,16 @@ function isEligibleHotLiteral(
     return false;
   }
 
-  // Skip import/export source specifiers and class methods
+  // Skip static module/asset specifiers and non-computed class members
   if (parent) {
-    if (
-      parent.type === 'ImportDeclaration' ||
-      parent.type === 'ExportNamedDeclaration' ||
-      parent.type === 'ExportAllDeclaration' ||
-      parent.type === 'ImportExpression'
-    ) {
-      if (parent.source === node) return false;
+    if (isStaticModuleOrAssetPosition(node, parent)) {
+      return false;
     }
     if (
       (parent.type === 'MethodDefinition' ||
         parent.type === 'PropertyDefinition') &&
       parent.key === node &&
       !parent.computed
-    ) {
-      return false;
-    }
-    if (
-      parent.type === 'ImportAttribute' ||
-      parent.type === 'ImportSpecifier' ||
-      parent.type === 'ExportSpecifier'
     ) {
       return false;
     }
@@ -434,6 +428,111 @@ export function shouldEncryptString(
   if (isReservedProp(val, customReserved)) return false;
   if (isSvgPathString(val, parent)) return false;
   if (isTailwindNoise(val)) return false;
+  return true;
+}
+
+export interface LatchCouplingConfig {
+  readonly latchFnName: string;
+  readonly expectedLatchByte: number;
+}
+
+export const VAULT_WALK_BASE = {
+  ...walk.base,
+  Property(node: any, st: any, c: any) {
+    c(node.key, st);
+    if (node.value) c(node.value, st);
+  },
+};
+
+function isCjsExportsTarget(lhs: any): boolean {
+  if (!lhs || typeof lhs !== 'object') return false;
+  if (lhs.type === 'ParenthesizedExpression') {
+    return isCjsExportsTarget(lhs.expression);
+  }
+  if (lhs.type === 'Identifier') {
+    return lhs.name === 'exports';
+  }
+  if (lhs.type === 'MemberExpression') {
+    if (
+      lhs.object?.type === 'Identifier' &&
+      lhs.object.name === 'module' &&
+      ((!lhs.computed &&
+        lhs.property?.type === 'Identifier' &&
+        lhs.property.name === 'exports') ||
+        (lhs.computed &&
+          lhs.property?.type === 'Literal' &&
+          lhs.property.value === 'exports'))
+    ) {
+      return true;
+    }
+    return isCjsExportsTarget(lhs.object);
+  }
+  return false;
+}
+
+function isInsideCjsExportsObject(ancestors: any[], objIdx: number): boolean {
+  if (objIdx < 1) return false;
+  let cur = ancestors[objIdx];
+  for (let i = objIdx - 1; i >= 0; i--) {
+    const anc = ancestors[i];
+    if (!anc) break;
+    if (anc.type === 'ParenthesizedExpression') {
+      cur = anc;
+      continue;
+    }
+    if (anc.type === 'AssignmentExpression' && anc.right === cur) {
+      if (isCjsExportsTarget(anc.left)) {
+        return true;
+      }
+      cur = anc;
+      continue;
+    }
+    if (
+      anc.type === 'CallExpression' &&
+      anc.callee?.type === 'MemberExpression' &&
+      !anc.callee.computed &&
+      anc.callee.object?.type === 'Identifier' &&
+      anc.callee.object.name === 'Object' &&
+      anc.callee.property?.type === 'Identifier' &&
+      anc.callee.property.name === 'assign' &&
+      Array.isArray(anc.arguments) &&
+      anc.arguments.slice(1).includes(cur) &&
+      isCjsExportsTarget(anc.arguments[0])
+    ) {
+      return true;
+    }
+    break;
+  }
+  return false;
+}
+
+/**
+ * Returns true only when a non-computed object Property key is a likely plaintext
+ * secret and can be safely promoted to a computed vault lookup without altering
+ * `__proto__` prototype semantics, accessors, destructuring patterns, or CJS exports.
+ */
+export function isEligibleObjectPropertyKey(
+  val: string,
+  node: any,
+  parent: any,
+  ancestors: any[]
+): boolean {
+  if (!parent || parent.type !== 'Property' || parent.key !== node || parent.computed) {
+    return false;
+  }
+  if (val === '__proto__') return false;
+  if (parent.kind !== 'init' || parent.shorthand) return false;
+  if (!isLikelySecretLiteral(val)) return false;
+
+  const containerIdx = ancestors.length - 3;
+  const container = containerIdx >= 0 ? ancestors[containerIdx] : undefined;
+  if (!container || container.type === 'ObjectPattern') return false;
+  if (
+    container.type === 'ObjectExpression' &&
+    isInsideCjsExportsObject(ancestors, containerIdx)
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -656,7 +755,7 @@ export function isExemptTemplateLiteral(node: any, parent: any): boolean {
   if (parent.type === 'TaggedTemplateExpression' && parent.quasi === node) {
     return true;
   }
-  if (parent.type === 'ImportExpression' && parent.source === node) {
+  if (isStaticModuleOrAssetPosition(node, parent)) {
     return true;
   }
   return false;
@@ -946,7 +1045,8 @@ export function applyStringVault(
   config?: UnpeekConfig,
   shieldCoupled = true,
   detectHeadless = false,
-  exemptSubtreeRoots?: WeakSet<acorn.Node>
+  exemptSubtreeRoots?: WeakSet<acorn.Node>,
+  latchCoupling?: LatchCouplingConfig
 ): StringVaultResult {
   const minLen = config?.vault?.minStringLength ?? minStringLength;
   const activeDirectives = new Set(DIRECTIVE_STRINGS);
@@ -1018,7 +1118,8 @@ export function applyStringVault(
     sym,
     SAFE_ALPHA,
     shieldCoupled,
-    browserOnly
+    browserOnly,
+    latchCoupling
   );
   const compactFnStr = generateCompactJs(fnAst);
   const buildH = computeIntegrityHash(compactFnStr, 0);
@@ -1056,14 +1157,6 @@ export function applyStringVault(
   const getRegExpShadowedScopes = (): WeakSet<acorn.Node> => {
     regExpShadowedScopes ??= collectIdentifierShadowedScopes(ast, 'RegExp');
     return regExpShadowedScopes;
-  };
-
-  const customWalkBase = {
-    ...walk.base,
-    Property(node: any, st: any, c: any) {
-      c(node.key, st);
-      if (node.value) c(node.value, st);
-    },
   };
 
   function processVaultCandidate(
@@ -1230,14 +1323,9 @@ export function applyStringVault(
         const parent = ancestors[ancestors.length - 2] as any;
         if (!parent) return;
 
-        // Skip import/export source specifiers
-        if (
-          parent.type === 'ImportDeclaration' ||
-          parent.type === 'ExportNamedDeclaration' ||
-          parent.type === 'ExportAllDeclaration' ||
-          parent.type === 'ImportExpression'
-        ) {
-          if (parent.source === node) return;
+        // Skip static module/bundler/asset URL strings
+        if (isStaticModuleOrAssetPosition(node, parent)) {
+          return;
         }
 
         // Skip class property/method keys
@@ -1250,12 +1338,11 @@ export function applyStringVault(
           return;
         }
 
-        if (
-          parent.type === 'ImportAttribute' ||
-          parent.type === 'ImportSpecifier' ||
-          parent.type === 'ExportSpecifier'
-        ) {
-          return;
+        // Keep non-computed object Property keys literal unless they carry a likely secret
+        if (parent.type === 'Property' && parent.key === node && !parent.computed) {
+          if (!isEligibleObjectPropertyKey(val, node, parent, ancestors)) {
+            return;
+          }
         }
 
         processVaultCandidate(val, node, parent, ancestors);
@@ -1308,7 +1395,7 @@ export function applyStringVault(
         }
       },
     },
-    customWalkBase
+    VAULT_WALK_BASE
   );
 
   if (targetsToReplace.length === 0 && hotTargetsToReplace.length === 0) {
@@ -1485,7 +1572,8 @@ export function applyStringVault(
         sym,
         SAFE_ALPHA,
         shieldCoupled,
-        browserOnly
+        browserOnly,
+        latchCoupling
       );
       const buildHF = computeIntegrityHash(generateCompactJs(fnAstF), 0);
       const expectedKeyF =

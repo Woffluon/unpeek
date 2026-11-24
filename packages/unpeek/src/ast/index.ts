@@ -15,7 +15,10 @@ import {
 } from './hot-path-detector.js';
 import { applyStringVault } from './string-vault.js';
 import { applyPolymorphicMangler } from './polymorphic-mangler.js';
-import { applyColdFlowGuard } from './cold-flow-guard.js';
+import {
+  applyColdFlowGuard,
+  deriveColdLatchCoupling,
+} from './cold-flow-guard.js';
 import {
   generateCompactJs,
   generateCompactJsWithMap,
@@ -118,6 +121,8 @@ function isAstAlreadyProtected(ast: acorn.Program): boolean {
         (fnName.startsWith('_uD') ||
           fnName.startsWith('_uVm') ||
           fnName.startsWith('_wKdf') ||
+          fnName.startsWith('_uLr') ||
+          fnName.startsWith('_uMx') ||
           fnName === '_hX')
       ) {
         return true;
@@ -338,8 +343,9 @@ export function transformJavaScript(
   }
 
   // 2. Inject polymorphic opaque guards only on cold functions (<2% runtime CPU budget), skipped in Tier 1 minimal
+  let coldFlowGuardedCount = 0;
   if (effectiveProfile !== 'minimal' && effectiveConfig?.coldFlow !== false) {
-    applyColdFlowGuard(
+    coldFlowGuardedCount = applyColdFlowGuard(
       ast,
       coldFunctionNodes,
       seed,
@@ -350,6 +356,9 @@ export function transformJavaScript(
       { enableBitwiseMba: isAggressive || effectiveProfile === 'strict' }
     );
   }
+
+  const latchCoupling =
+    coldFlowGuardedCount > 0 ? deriveColdLatchCoupling(seed) : undefined;
 
   // 3. Mangle local parameters & function-scoped variables safely
   const mangledSymbolsCount = applyPolymorphicMangler(
@@ -375,7 +384,8 @@ export function transformJavaScript(
       deterrentMode,
       shieldCoupled,
       detectHeadless,
-      boundary.exemptSubtreeRoots
+      boundary.exemptSubtreeRoots,
+      latchCoupling
     );
     encryptedStringsCount = saltedRes.encryptedStringsCount;
     integrityToken = saltedRes.integrityToken;
@@ -392,7 +402,8 @@ export function transformJavaScript(
       effectiveConfig,
       shieldCoupled,
       detectHeadless,
-      boundary.exemptSubtreeRoots
+      boundary.exemptSubtreeRoots,
+      latchCoupling
     );
     encryptedStringsCount = vaultRes.encryptedStringsCount;
     integrityToken = vaultRes.integrityToken;

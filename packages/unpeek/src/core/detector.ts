@@ -4,9 +4,19 @@ import type { UnpeekConfig, UnpeekFramework } from '../config.js';
 
 export const SUPPORTED_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 
+export const MAX_HTML_FILES = 64;
+export const MAX_SCAN_BYTES = 512 * 1024;
+const MAX_JS_GRAPH_FILES = 1024;
+
 export const EXCLUDED_DIR_NAMES = new Set([
   'node_modules',
   '.unpeek-maps',
+]);
+
+const HTML_WALK_EXCLUDED_DIR_NAMES = new Set([
+  'node_modules',
+  '.unpeek-maps',
+  '.git',
 ]);
 
 const WORKER_OR_SW_BASENAME_REGEX =
@@ -459,4 +469,466 @@ export function scanClientBundles(outDir: string, config?: UnpeekConfig): string
 
   walk(resolvedOutDir);
   return results.sort();
+}
+
+export interface HtmlEntryGraph {
+  /** Relative POSIX paths (from outDir) of JS files referenced by <script src> or inline module entry imports */
+  htmlEntryFiles: Set<string>;
+  /** Relative POSIX paths (from outDir) of JS files referenced by <link rel="modulepreload|preload" href> */
+  preloadedFiles: Set<string>;
+  /** Relative POSIX paths (from outDir) of JS files registered as Worker / SharedWorker entries */
+  workerEntryFiles: Set<string>;
+  /** Relative POSIX paths (from outDir) of all reachable JS files (entries, preloads, imports, workers) */
+  reachableFiles: Set<string>;
+  /** Effective entry chunk paths (HTML entry scripts + Worker entries, or preloaded entries if no <script src>) */
+  entryFiles: Set<string>;
+  /** Number of HTML files read (bounded by MAX_HTML_FILES) */
+  scannedHtmlFiles: number;
+  /** Number of JS files read during import/worker traversal (each bounded by MAX_SCAN_BYTES) */
+  scannedJsFiles: number;
+}
+
+const SCRIPT_TAG_REGEX = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+const LINK_TAG_REGEX = /<link\b([^>]*)>/gi;
+const HTML_COMMENT_REGEX = /<!--[\s\S]*?-->/g;
+const ATTR_SRC_REGEX = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
+const ATTR_HREF_REGEX = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
+const ATTR_REL_REGEX = /\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
+const ATTR_AS_REGEX = /\bas\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
+const ATTR_TYPE_REGEX = /\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
+
+const STATIC_FROM_IMPORT_REGEX = /\bfrom\s*(['"`])([^'"`\r\n${}]+)\1/g;
+const SIDE_EFFECT_IMPORT_REGEX = /(?:^|[;}\n])\s*import\s*(['"`])([^'"`\r\n${}]+)\1/g;
+const DYNAMIC_IMPORT_REGEX =
+  /\bimport\s*\(\s*(?:\/\*[^*]{0,120}\*\/\s*)?(['"`])([^'"`\r\n${}]+)\1/g;
+const WORKER_META_URL_REGEX =
+  /\bnew\s+(?:(?:window|self|globalThis)\s*\.\s*)?(?:Shared)?Worker\s*\(\s*new\s+URL\s*\(\s*(['"`])([^'"`\r\n${}]+)\1\s*,\s*import\.meta\.url\s*\)/g;
+const WORKER_DIRECT_URL_REGEX =
+  /\bnew\s+(?:(?:window|self|globalThis)\s*\.\s*)?(?:Shared)?Worker\s*\(\s*(['"`])([^'"`\r\n${}]+)\1/g;
+
+function getHtmlAttr(attrs: string, regex: RegExp): string | undefined {
+  const match = attrs.match(regex);
+  if (!match) return undefined;
+  return (match[1] ?? match[2] ?? match[3] ?? '').trim();
+}
+
+function readBoundedText(filePath: string, maxBytes: number): string {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const stat = fs.fstatSync(fd);
+    const toRead = Math.min(stat.size, maxBytes);
+    if (toRead <= 0) return '';
+    const buf = Buffer.allocUnsafe(toRead);
+    let offset = 0;
+    while (offset < toRead) {
+      const bytesRead = fs.readSync(fd, buf, offset, toRead - offset, offset);
+      if (bytesRead <= 0) break;
+      offset += bytesRead;
+    }
+    return buf.subarray(0, offset).toString('utf8');
+  } catch {
+    return '';
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // ignore close error
+      }
+    }
+  }
+}
+
+function buildServerDirPrefixes(config?: UnpeekConfig): string[] {
+  const prefixes: string[] = [];
+  if (config?.next?.distDir) {
+    prefixes.push(
+      path.join(config.next.distDir, 'server'),
+      path.join(config.next.distDir, 'ssr')
+    );
+  }
+  if (config?.vite?.outDir) {
+    prefixes.push(path.join(config.vite.outDir, 'server'));
+  }
+  return prefixes;
+}
+
+function getAllowedExtensions(config?: UnpeekConfig): Set<string> {
+  return config?.extensions && config.extensions.length > 0
+    ? new Set(
+        config.extensions.map((e) => (e.startsWith('.') ? e.toLowerCase() : `.${e.toLowerCase()}`))
+      )
+    : SUPPORTED_EXTENSIONS;
+}
+
+function isExcludedPathSegment(fullPath: string): boolean {
+  const normalized = fullPath.replace(/\\/g, '/');
+  return (
+    normalized.includes('/.git/') ||
+    normalized.endsWith('/.git') ||
+    normalized.includes('/node_modules/') ||
+    normalized.endsWith('/node_modules') ||
+    normalized.includes('/.unpeek-maps/') ||
+    normalized.endsWith('/.unpeek-maps')
+  );
+}
+
+function resolveOutDirJsTarget(
+  rawSpecifier: string,
+  baseDir: string,
+  resolvedOutDir: string,
+  allowedExtensions: Set<string>,
+  serverDirPrefixes: string[],
+  fallbackRootDir?: string
+): { absPath: string; relPath: string } | undefined {
+  const trimmed = rawSpecifier.trim();
+  if (
+    !trimmed ||
+    trimmed.startsWith('#') ||
+    /^(?:https?:|data:|blob:|javascript:|mailto:|\/\/)/i.test(trimmed)
+  ) {
+    return undefined;
+  }
+
+  const withoutQuery = trimmed.split('?')[0].split('#')[0];
+  let cleanSpec = withoutQuery;
+  try {
+    cleanSpec = decodeURIComponent(withoutQuery);
+  } catch {
+    // keep raw if malformed percent encoding
+  }
+  if (!cleanSpec) return undefined;
+
+  const candidates: string[] = [];
+  if (cleanSpec.startsWith('/')) {
+    const stripped = cleanSpec.replace(/^\/+/, '');
+    candidates.push(path.resolve(resolvedOutDir, stripped));
+    if (fallbackRootDir && fallbackRootDir !== resolvedOutDir) {
+      candidates.push(path.resolve(fallbackRootDir, stripped));
+    }
+  } else {
+    candidates.push(path.resolve(baseDir, cleanSpec));
+  }
+
+  for (const baseCandidate of candidates) {
+    const ext = path.extname(baseCandidate).toLowerCase();
+    const withExts = ext
+      ? [baseCandidate]
+      : Array.from(allowedExtensions).map((e) => `${baseCandidate}${e}`);
+
+    for (const candidate of withExts) {
+      const candExt = path.extname(candidate).toLowerCase();
+      if (!allowedExtensions.has(candExt)) continue;
+      if (isExcludedPathSegment(candidate)) continue;
+      if (hasNextServerSegment(candidate, resolvedOutDir, serverDirPrefixes)) continue;
+
+      const rel = path.relative(resolvedOutDir, candidate).replace(/\\/g, '/');
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
+
+      try {
+        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+          return { absPath: candidate, relPath: rel };
+        }
+      } catch {
+        // ignore stat errors
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function extractRelativeSpecifiers(
+  jsText: string,
+  allowBareRelativeFromRoot: boolean
+): { imports: string[]; workers: string[] } {
+  const imports: string[] = [];
+  const workers: string[] = [];
+
+  const collectMatches = (regex: RegExp, target: string[], requireDotPrefix: boolean) => {
+    regex.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(jsText)) !== null) {
+      const spec = m[2];
+      if (!spec) continue;
+      if (
+        spec.startsWith('./') ||
+        spec.startsWith('../') ||
+        (!requireDotPrefix && !/^(?:https?:|data:|blob:)/i.test(spec))
+      ) {
+        target.push(spec);
+      }
+    }
+  };
+
+  collectMatches(STATIC_FROM_IMPORT_REGEX, imports, true);
+  collectMatches(SIDE_EFFECT_IMPORT_REGEX, imports, true);
+  collectMatches(DYNAMIC_IMPORT_REGEX, imports, true);
+  collectMatches(WORKER_META_URL_REGEX, workers, !allowBareRelativeFromRoot);
+  collectMatches(WORKER_DIRECT_URL_REGEX, workers, true);
+
+  return { imports, workers };
+}
+
+/**
+ * Bounded build-time scanner that discovers real HTML entry scripts (<script src>),
+ * preload hints (<link rel="modulepreload|preload">), reachable relative imports,
+ * and Web Worker / SharedWorker entries inside `outDir`.
+ */
+export function discoverHtmlEntryGraph(
+  outDir: string,
+  config?: UnpeekConfig,
+  extraHtmlDirs: string[] = []
+): HtmlEntryGraph {
+  const htmlEntryFiles = new Set<string>();
+  const preloadedFiles = new Set<string>();
+  const workerEntryFiles = new Set<string>();
+  const reachableFiles = new Set<string>();
+
+  const emptyResult = (): HtmlEntryGraph => ({
+    htmlEntryFiles,
+    preloadedFiles,
+    workerEntryFiles,
+    reachableFiles,
+    entryFiles: new Set<string>(),
+    scannedHtmlFiles: 0,
+    scannedJsFiles: 0,
+  });
+
+  const resolvedOutDir = path.resolve(outDir);
+  if (!fs.existsSync(resolvedOutDir)) {
+    return emptyResult();
+  }
+
+  const serverDirPrefixes = buildServerDirPrefixes(config);
+  const allowedExtensions = getAllowedExtensions(config);
+  const htmlFiles: Array<{ filePath: string; rootDir: string }> = [];
+
+  function walkHtml(currentDir: string): void {
+    if (htmlFiles.length >= MAX_HTML_FILES) return;
+    if (hasNextServerSegment(currentDir, resolvedOutDir, serverDirPrefixes)) return;
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+    for (const entry of entries) {
+      if (htmlFiles.length >= MAX_HTML_FILES) break;
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        if (HTML_WALK_EXCLUDED_DIR_NAMES.has(entry.name.toLowerCase())) continue;
+        if (hasNextServerSegment(fullPath, resolvedOutDir, serverDirPrefixes)) continue;
+        walkHtml(fullPath);
+      } else if (entry.isFile()) {
+        if (hasNextServerSegment(fullPath, resolvedOutDir, serverDirPrefixes)) continue;
+        if (path.extname(entry.name).toLowerCase() === '.html') {
+          htmlFiles.push({ filePath: fullPath, rootDir: resolvedOutDir });
+        }
+      }
+    }
+  }
+
+  walkHtml(resolvedOutDir);
+
+  if (htmlFiles.length === 0 && extraHtmlDirs.length > 0) {
+    for (const extraDir of extraHtmlDirs) {
+      if (htmlFiles.length >= MAX_HTML_FILES) break;
+      const resolvedExtra = path.resolve(extraDir);
+      if (
+        !fs.existsSync(resolvedExtra) ||
+        isExcludedPathSegment(resolvedExtra) ||
+        hasNextServerSegment(resolvedExtra, resolvedExtra, serverDirPrefixes)
+      ) {
+        continue;
+      }
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(resolvedExtra, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      for (const entry of entries) {
+        if (htmlFiles.length >= MAX_HTML_FILES) break;
+        if (entry.isFile() && path.extname(entry.name).toLowerCase() === '.html') {
+          htmlFiles.push({ filePath: path.join(resolvedExtra, entry.name), rootDir: resolvedExtra });
+        }
+      }
+    }
+  }
+
+  const jsQueue: Array<{ absPath: string; relPath: string }> = [];
+  const queuedOrVisitedJs = new Set<string>();
+
+  const enqueueJs = (resolved: { absPath: string; relPath: string } | undefined) => {
+    if (!resolved) return;
+    reachableFiles.add(resolved.relPath);
+    if (!queuedOrVisitedJs.has(resolved.relPath) && queuedOrVisitedJs.size < MAX_JS_GRAPH_FILES) {
+      queuedOrVisitedJs.add(resolved.relPath);
+      jsQueue.push(resolved);
+    }
+  };
+
+  for (const { filePath: htmlPath, rootDir: htmlRootDir } of htmlFiles) {
+    const rawHtml = readBoundedText(htmlPath, MAX_SCAN_BYTES);
+    if (!rawHtml) continue;
+    const htmlText = rawHtml.replace(HTML_COMMENT_REGEX, '');
+    const htmlDir = path.dirname(htmlPath);
+
+    SCRIPT_TAG_REGEX.lastIndex = 0;
+    let scriptMatch: RegExpExecArray | null;
+    while ((scriptMatch = SCRIPT_TAG_REGEX.exec(htmlText)) !== null) {
+      const attrs = scriptMatch[1] ?? '';
+      const body = scriptMatch[2] ?? '';
+      const scriptType = (getHtmlAttr(attrs, ATTR_TYPE_REGEX) ?? '').toLowerCase();
+      const isJsScript =
+        !scriptType ||
+        scriptType === 'module' ||
+        scriptType.includes('javascript') ||
+        scriptType.includes('ecmascript');
+      if (!isJsScript) continue;
+
+      const src = getHtmlAttr(attrs, ATTR_SRC_REGEX);
+      if (src) {
+        const resolved = resolveOutDirJsTarget(
+          src,
+          htmlDir,
+          resolvedOutDir,
+          allowedExtensions,
+          serverDirPrefixes,
+          htmlRootDir
+        );
+        if (resolved) {
+          htmlEntryFiles.add(resolved.relPath);
+          enqueueJs(resolved);
+        }
+      } else if (body.trim()) {
+        const { imports, workers } = extractRelativeSpecifiers(body, false);
+        for (const imp of imports) {
+          const resolved = resolveOutDirJsTarget(
+            imp,
+            htmlDir,
+            resolvedOutDir,
+            allowedExtensions,
+            serverDirPrefixes,
+            htmlRootDir
+          );
+          if (resolved) {
+            htmlEntryFiles.add(resolved.relPath);
+            enqueueJs(resolved);
+          }
+        }
+        for (const workerSpec of workers) {
+          const resolved = resolveOutDirJsTarget(
+            workerSpec,
+            htmlDir,
+            resolvedOutDir,
+            allowedExtensions,
+            serverDirPrefixes,
+            htmlRootDir
+          );
+          if (resolved) {
+            workerEntryFiles.add(resolved.relPath);
+            enqueueJs(resolved);
+          }
+        }
+      }
+    }
+
+    LINK_TAG_REGEX.lastIndex = 0;
+    let linkMatch: RegExpExecArray | null;
+    while ((linkMatch = LINK_TAG_REGEX.exec(htmlText)) !== null) {
+      const attrs = linkMatch[1] ?? '';
+      const relAttr = (getHtmlAttr(attrs, ATTR_REL_REGEX) ?? '').toLowerCase();
+      if (!relAttr) continue;
+      const relTokens = relAttr.split(/\s+/);
+      const isModulePreload = relTokens.includes('modulepreload');
+      const isPreload = relTokens.includes('preload');
+      if (!isModulePreload && !isPreload) continue;
+
+      if (isPreload && !isModulePreload) {
+        const asAttr = (getHtmlAttr(attrs, ATTR_AS_REGEX) ?? '').toLowerCase();
+        if (asAttr && asAttr !== 'script' && asAttr !== 'worker') {
+          continue;
+        }
+      }
+
+      const href = getHtmlAttr(attrs, ATTR_HREF_REGEX);
+      if (!href) continue;
+      const resolved = resolveOutDirJsTarget(
+        href,
+        htmlDir,
+        resolvedOutDir,
+        allowedExtensions,
+        serverDirPrefixes,
+        htmlRootDir
+      );
+      if (resolved) {
+        preloadedFiles.add(resolved.relPath);
+        enqueueJs(resolved);
+      }
+    }
+  }
+
+  let scannedJsFiles = 0;
+  let head = 0;
+  while (head < jsQueue.length && scannedJsFiles < MAX_JS_GRAPH_FILES) {
+    const current = jsQueue[head++];
+    const jsText = readBoundedText(current.absPath, MAX_SCAN_BYTES);
+    scannedJsFiles++;
+    if (!jsText) continue;
+
+    const currentDir = path.dirname(current.absPath);
+    const { imports, workers } = extractRelativeSpecifiers(jsText, true);
+
+    for (const imp of imports) {
+      const resolved = resolveOutDirJsTarget(
+        imp,
+        currentDir,
+        resolvedOutDir,
+        allowedExtensions,
+        serverDirPrefixes
+      );
+      if (resolved) {
+        enqueueJs(resolved);
+      }
+    }
+
+    for (const workerSpec of workers) {
+      const resolved = resolveOutDirJsTarget(
+        workerSpec,
+        currentDir,
+        resolvedOutDir,
+        allowedExtensions,
+        serverDirPrefixes
+      );
+      if (resolved) {
+        workerEntryFiles.add(resolved.relPath);
+        enqueueJs(resolved);
+      }
+    }
+  }
+
+  const entryFiles = new Set<string>([...htmlEntryFiles, ...workerEntryFiles]);
+  if (htmlEntryFiles.size === 0 && preloadedFiles.size > 0) {
+    for (const preloaded of preloadedFiles) {
+      entryFiles.add(preloaded);
+    }
+  }
+
+  return {
+    htmlEntryFiles,
+    preloadedFiles,
+    workerEntryFiles,
+    reachableFiles,
+    entryFiles,
+    scannedHtmlFiles: htmlFiles.length,
+    scannedJsFiles,
+  };
 }

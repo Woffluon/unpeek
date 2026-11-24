@@ -9,6 +9,9 @@ import type { UnpeekProfile } from '../config.js';
 import { loadUnpeekConfig } from '../config.js';
 import {
   detectTargetFramework,
+  discoverHtmlEntryGraph,
+  hasNextServerSegment,
+  type HtmlEntryGraph,
   isWorkerOrServiceWorkerFile,
   scanClientBundles,
 } from './detector.js';
@@ -188,27 +191,41 @@ function isEntryChunk(
   index: number,
   allRelPaths: string[],
   manifestEntries: Set<string>,
-  isWorkerTarget: boolean
+  isWorkerTarget: boolean,
+  htmlGraph?: HtmlEntryGraph
 ): boolean {
   const norm = relPath.replace(/\\/g, '/');
   const base = path.basename(norm);
   if (isWorkerTarget && isWorkerOrServiceWorkerFile(norm)) {
     return true;
   }
+  if (htmlGraph?.workerEntryFiles.has(norm)) {
+    return true;
+  }
   if (matchesManifestEntry(norm, manifestEntries)) {
     return true;
   }
+
+  const hasKnownManifestEntry =
+    manifestEntries.size > 0 &&
+    allRelPaths.some((p) => matchesManifestEntry(p.replace(/\\/g, '/'), manifestEntries));
+  const hasKnownHtmlEntry =
+    manifestEntries.size === 0 &&
+    Boolean(htmlGraph && allRelPaths.some((p) => htmlGraph.entryFiles.has(p.replace(/\\/g, '/'))));
+
+  if (hasKnownHtmlEntry) {
+    return htmlGraph!.entryFiles.has(norm);
+  }
+
   if (ENTRY_PATTERN.test(norm) || ENTRY_PATTERN.test(base)) {
     return true;
   }
-  const hasAnyKnownEntry = allRelPaths.some((p) => {
-    const n = p.replace(/\\/g, '/');
-    return (
-      matchesManifestEntry(n, manifestEntries) ||
-      ENTRY_PATTERN.test(n) ||
-      ENTRY_PATTERN.test(path.basename(n))
-    );
-  });
+  const hasAnyKnownEntry =
+    hasKnownManifestEntry ||
+    allRelPaths.some((p) => {
+      const n = p.replace(/\\/g, '/');
+      return ENTRY_PATTERN.test(n) || ENTRY_PATTERN.test(path.basename(n));
+    });
   if (!hasAnyKnownEntry && index === 0) {
     return true;
   }
@@ -339,6 +356,18 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
   const allRelPaths = clientFiles.map((f) => path.relative(outDir, f).replace(/\\/g, '/'));
   const manifestEntries = collectManifestEntryFiles(outDir, cwd, config);
   const isWorkerTarget = config.target === 'worker';
+  const extraHtmlDirs: string[] = [];
+  const parentOutDir = path.dirname(outDir);
+  const relParent = path.relative(cwd, parentOutDir);
+  if (
+    relParent &&
+    !relParent.startsWith('..') &&
+    !path.isAbsolute(relParent) &&
+    !hasNextServerSegment(parentOutDir, cwd)
+  ) {
+    extraHtmlDirs.push(parentOutDir);
+  }
+  const htmlGraph = discoverHtmlEntryGraph(outDir, config, extraHtmlDirs);
 
   let originalBytes = 0;
   let protectedBytes = 0;
@@ -407,7 +436,14 @@ export async function protectProject(options: ProtectOptions = {}): Promise<Prot
         ? readOriginalSourceMapForFile(filePath, relPath, vaultResult.vaultDir, deferVaultWrites)
         : undefined;
       const preExistingHits = countPreExistingEvalCalls(codeToTransform);
-      const isEntry = isEntryChunk(relPath, i, allRelPaths, manifestEntries, isWorkerTarget);
+      const isEntry = isEntryChunk(
+        relPath,
+        i,
+        allRelPaths,
+        manifestEntries,
+        isWorkerTarget,
+        htmlGraph
+      );
       const shouldInjectShield = injectRuntimeShield && isEntry;
       const fileSeed = computeFnv1aHash(`${relPath}:${i}`, seed);
       const transformOptions: InternalTransformOptions = {

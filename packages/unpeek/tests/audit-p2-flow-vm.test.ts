@@ -124,7 +124,7 @@ describe('P2 Audit Remediation: Cold-Flow QNR Diversification & Micro-VM v2 Non-
         }
       }
       // Double-applied state update must preserve _uAl invariant values
-      expect(cleanCtx[`_uAl${sfx}`]).toEqual(initialAlias);
+      expect(Array.from(cleanCtx[`_uAl${sfx}`])).toEqual(initialAlias);
 
       // Tampered shield state (sym_s[0] === 2) must trigger shield-coupled guard decoy
       const tamperCtx: Record<string, any> = {

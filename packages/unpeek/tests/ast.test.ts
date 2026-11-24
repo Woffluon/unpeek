@@ -508,12 +508,14 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(new Function(res.code)()).toBe(true);
     });
 
-    it('transforms string literal object keys into computed member expressions while preserving runtime semantics and identifier keys', () => {
+    it('preserves ordinary string literal object keys while transforming secret object keys into computed vault lookups', () => {
+      const secretKey = 'r9Kp2xQm8Vz4Nw7Lc3Yt6Hb0Jf5Gd1Ws';
       const code = `
         function getCredentials() {
           const payload = {
             "authToken": "super_secret_token_123",
             "emailAddress": "admin@unpeek.internal",
+            "${secretKey}": "vaulted_key_secret_value",
             staticKey: "unmangled_key_value"
           };
           const dynamicAccess = payload["authToken"];
@@ -521,6 +523,7 @@ describe('AST & Call-Graph Transformation Engine', () => {
           return {
             token: dynamicAccess,
             email: dotAccess,
+            secret: payload["${secretKey}"],
             static: payload.staticKey
           };
         }
@@ -532,14 +535,13 @@ describe('AST & Call-Graph Transformation Engine', () => {
         minStringLength: 4,
       });
 
-      // String literal keys must not appear in plaintext
-      expect(res.code).not.toContain('"authToken"');
-      expect(res.code).not.toContain('"emailAddress"');
-
-      // Identifier keys like staticKey: must remain as identifier keys
+      // Ordinary object literal keys and identifier keys stay literal
+      expect(res.code).toContain('"authToken":');
+      expect(res.code).toContain('"emailAddress":');
       expect(res.code).toContain('staticKey:');
 
-      // String literal keys must be transformed into computed expressions with salted lazy resolution
+      // High-entropy secret key must not appear in plaintext and must become a computed vault expression
+      expect(res.code).not.toContain(secretKey);
       expect(res.code).toMatch(/\[(_a[a-z0-9]+|_uC[a-z0-9]+|_uD[a-z0-9]*)(\[\d+\]|\(\d+,\s*\d+\))\]:/);
 
       // Verify that the code executes with 100% semantic equivalence
@@ -547,6 +549,7 @@ describe('AST & Call-Graph Transformation Engine', () => {
       expect(result).toEqual({
         token: 'super_secret_token_123',
         email: 'admin@unpeek.internal',
+        secret: 'vaulted_key_secret_value',
         static: 'unmangled_key_value',
       });
     });

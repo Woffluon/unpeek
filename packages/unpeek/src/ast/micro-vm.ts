@@ -46,8 +46,9 @@ export const OP_TRY = 39;
 export const OP_ENDTRY = 40;
 export const OP_NULLISH = 41;
 export const OP_DUP = 42;
+export const OP_TOSTR = 43;
 
-const OPCODE_COUNT = 43;
+const OPCODE_COUNT = 44;
 
 export interface MicroVmResult {
   virtualizedCount: number;
@@ -330,6 +331,7 @@ export function createInterpreterSource(
     [OP_ENDTRY]: { body: '$f.r=($f.r+$Z)|0;$f.e.pop();$f.r=($f.r-$B)|0;' },
     [OP_NULLISH]: { body: '$f.r=($f.r+$Z)|0;var $v=$f.q[$f.r-(1+$B)];$f.q[$f.r-(1+$B)]=($v===null||$v===void 0);$f.r=($f.r-$B)|0;' },
     [OP_DUP]: { body: '$f.r=($f.r+$Z)|0;var $top=$f.q[$f.r-(1+$B)];$f.q[($f.r++)-$B]=$top;$f.r=($f.r-$B)|0;' },
+    [OP_TOSTR]: { body: '$f.r=($f.r+$Z)|0;var $v=$f.q[$f.r-(1+$B)];$f.r=($f.r-$B)|0;$f.q[$f.r-1]=`${$v}`;' },
   };
 
   const handlers = new Array<string>(opCount);
@@ -1050,6 +1052,7 @@ export function compileFunctionToBytecode(
         emit(OP_LDC, addConst(quasis[0]?.value?.cooked ?? quasis[0]?.value?.raw ?? ''));
         for (let i = 0; i < exprs.length; i++) {
           if (!compileExpr(exprs[i], true)) return false;
+          emit(OP_TOSTR);
           emit(OP_ADD);
           const qStr = quasis[i + 1]?.value?.cooked ?? quasis[i + 1]?.value?.raw ?? '';
           if (qStr.length > 0) {

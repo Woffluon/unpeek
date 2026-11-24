@@ -120,7 +120,7 @@ The default `--min-string-length` is `4`. Short strings (`"ok"`, `""`, `"id"`) c
 ## 6. Targeting Tier 3 Enclaves (`@unpeek-critical`) & Worker Bundles
 
 ### Prioritizing Sensitive Functions for Micro-VM v2
-Annotate critical cold functions with `// @unpeek-critical` (or `/* @unpeek-critical */`) or match them via `critical.include` in `unpeek.config.js` when running `--aggressive` / `--profile strict`. Hot-path functions remain exempt, and `maxFunctionsPerChunk` (default `12`) priority-scores `@unpeek-critical` enclaves (`+1000`), submit/validation/auth/checkout/server-action handlers (`+500`), and multi-statement logic ahead of trivial helpers before compiling into the 43-opcode Micro-VM v2.
+Annotate critical cold functions with `// @unpeek-critical` (or `/* @unpeek-critical */`) or match them via `critical.include` in `unpeek.config.js` when running `--aggressive` / `--profile strict`. Hot-path functions remain exempt, and `maxFunctionsPerChunk` (default `12`) priority-scores `@unpeek-critical` enclaves (`+1000`), submit/validation/auth/checkout/server-action handlers (`+500`), and multi-statement logic ahead of trivial helpers before compiling into the 44-opcode Micro-VM v2.
 
 ### Standalone Web Worker Protection
 Service Workers and Web Workers (`sw.js`, `*.worker.js`) are excluded by default under `target: 'browser'` so worker registration stays safe. For dedicated worker builds, set `target: 'worker'` in `unpeek.config.js` (or rely on `unpeek/vite`, which wires `worker.plugins` automatically); the `globalThis`/`self` runtime shield operates cleanly in `WorkerGlobalScope`.

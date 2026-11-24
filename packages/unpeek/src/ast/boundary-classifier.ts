@@ -182,6 +182,97 @@ function unwrapAssignedHostMember(
   }
 }
 
+function isImportMetaMember(node: any, propName: string): boolean {
+  if (!node || node.type !== 'MemberExpression') return false;
+  const obj = node.object;
+  if (
+    obj?.type !== 'MetaProperty' ||
+    obj.meta?.type !== 'Identifier' ||
+    obj.meta.name !== 'import' ||
+    obj.property?.type !== 'Identifier' ||
+    obj.property.name !== 'meta'
+  ) {
+    return false;
+  }
+  if (!node.computed && node.property?.type === 'Identifier') {
+    return node.property.name === propName;
+  }
+  return (
+    node.computed &&
+    node.property?.type === 'Literal' &&
+    node.property.value === propName
+  );
+}
+
+function isRequireResolveCallee(callee: any): boolean {
+  if (!callee || callee.type !== 'MemberExpression') return false;
+  if (callee.object?.type !== 'Identifier' || callee.object.name !== 'require') {
+    return false;
+  }
+  if (!callee.computed && callee.property?.type === 'Identifier') {
+    return callee.property.name === 'resolve';
+  }
+  return (
+    callee.computed &&
+    callee.property?.type === 'Literal' &&
+    callee.property.value === 'resolve'
+  );
+}
+
+/**
+ * Returns true when a Literal or TemplateLiteral sits in a static module specifier,
+ * ES2022 string import/export binding, bundler asset URL, or require/resolve call
+ * that must stay literal for bundlers, packagers, and module linkers.
+ */
+export function isStaticModuleOrAssetPosition(node: any, parent: any): boolean {
+  if (!node || !parent) return false;
+
+  if (
+    parent.type === 'ImportDeclaration' ||
+    parent.type === 'ExportNamedDeclaration'
+  ) {
+    return parent.source === node;
+  }
+  if (parent.type === 'ExportAllDeclaration') {
+    return parent.source === node || parent.exported === node;
+  }
+  if (parent.type === 'ImportExpression') {
+    return parent.source === node;
+  }
+  if (parent.type === 'ImportSpecifier') {
+    return parent.imported === node;
+  }
+  if (parent.type === 'ExportSpecifier') {
+    return parent.local === node || parent.exported === node;
+  }
+  if (parent.type === 'ImportAttribute') {
+    return true;
+  }
+
+  if (parent.type === 'NewExpression') {
+    return (
+      parent.callee?.type === 'Identifier' &&
+      parent.callee.name === 'URL' &&
+      Array.isArray(parent.arguments) &&
+      parent.arguments.length >= 2 &&
+      parent.arguments[0] === node &&
+      isImportMetaMember(parent.arguments[1], 'url')
+    );
+  }
+
+  if (parent.type === 'CallExpression') {
+    if (!Array.isArray(parent.arguments) || parent.arguments[0] !== node) {
+      return false;
+    }
+    const callee = parent.callee;
+    if (isImportMetaMember(callee, 'resolve')) return true;
+    if (isRequireResolveCallee(callee)) return true;
+    if (callee?.type === 'Identifier' && callee.name === 'require') return true;
+  }
+
+  return false;
+}
+
 /**
  * Single-pass Acorn AST boundary classifier for Next.js RSC flight payloads,
  * Turbopack bootstrap blocks, Vite preload manifests, and dynamic import() sources.
@@ -197,6 +288,17 @@ export function classifyChunkBoundary(ast: acorn.Program): BoundaryClassificatio
 
   walk.simple(ast, {
     CallExpression(node: any) {
+      const firstArg = Array.isArray(node.arguments)
+        ? node.arguments[0]
+        : undefined;
+      if (
+        firstArg &&
+        (firstArg.type === 'Literal' || firstArg.type === 'TemplateLiteral') &&
+        isStaticModuleOrAssetPosition(firstArg, node)
+      ) {
+        exemptSubtreeRoots.add(firstArg);
+      }
+
       const callee = node.callee;
       const isPushCall =
         callee?.type === 'MemberExpression' &&
@@ -276,6 +378,62 @@ export function classifyChunkBoundary(ast: acorn.Program): BoundaryClassificatio
       if (node.id?.type === 'Identifier' && node.id.name === '__vite__mapDeps') {
         hasPreloadManifest = true;
         exemptSubtreeRoots.add(node);
+      }
+    },
+
+    NewExpression(node: any) {
+      const firstArg = Array.isArray(node.arguments)
+        ? node.arguments[0]
+        : undefined;
+      if (
+        firstArg &&
+        (firstArg.type === 'Literal' || firstArg.type === 'TemplateLiteral') &&
+        isStaticModuleOrAssetPosition(firstArg, node)
+      ) {
+        exemptSubtreeRoots.add(firstArg);
+      }
+    },
+
+    ImportDeclaration(node: any) {
+      if (node.source && typeof node.source === 'object') {
+        exemptSubtreeRoots.add(node.source);
+      }
+      if (Array.isArray(node.specifiers)) {
+        for (const spec of node.specifiers) {
+          if (
+            spec?.type === 'ImportSpecifier' &&
+            spec.imported?.type === 'Literal'
+          ) {
+            exemptSubtreeRoots.add(spec.imported);
+          }
+        }
+      }
+    },
+
+    ExportNamedDeclaration(node: any) {
+      if (node.source && typeof node.source === 'object') {
+        exemptSubtreeRoots.add(node.source);
+      }
+      if (Array.isArray(node.specifiers)) {
+        for (const spec of node.specifiers) {
+          if (spec?.type === 'ExportSpecifier') {
+            if (spec.local?.type === 'Literal') {
+              exemptSubtreeRoots.add(spec.local);
+            }
+            if (spec.exported?.type === 'Literal') {
+              exemptSubtreeRoots.add(spec.exported);
+            }
+          }
+        }
+      }
+    },
+
+    ExportAllDeclaration(node: any) {
+      if (node.source && typeof node.source === 'object') {
+        exemptSubtreeRoots.add(node.source);
+      }
+      if (node.exported && typeof node.exported === 'object') {
+        exemptSubtreeRoots.add(node.exported);
       }
     },
 

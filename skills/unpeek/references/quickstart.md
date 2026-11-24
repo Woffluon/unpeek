@@ -100,7 +100,7 @@ unpeek provides three protection tiers aligned with `minimal`, `recommended`, an
   - Employs 3-tier bidirectional call-graph exemption (`TRUE_HOT_60FPS`, `SHALLOW_RENDER_COMPONENT`, `SERIALIZED_WORKER`), 92-char zero-escape involutory string vaulting, `>=4`-variable semi-linear MBA + degree-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR predicates, in-place re-encrypting `Uint8Array` shader vault, and non-poisoning `globalThis` anti-tamper shield.
 - **Tier 3 (`--profile strict` / `--aggressive`)**:
   - Command: `npx unpeek protect --aggressive` (or `--profile strict`)
-  - Targets `@unpeek-critical` annotated functions and `critical.include` enclaves with a 43-opcode direct-threaded Bytecode Micro-VM v2 (supporting `for`/`while`, `&&`/`||`/`??`, `?:`, `try/throw`, closures without `eval`/`new Function`), a shared singleton `<1.2 KB` host-coupled WASM KDF (`env.g`/`env.m`, with bit-identical non-linear JS fallback), 64-bit call-site salted decoders, and CWE-540 path scrubbing.
+  - Targets `@unpeek-critical` annotated functions and `critical.include` enclaves with a 44-opcode direct-threaded Bytecode Micro-VM v2 (supporting `for`/`while`, `&&`/`||`/`??`, `?:`, `try/throw`, closures without `eval`/`new Function`), a shared singleton `<1.2 KB` host-coupled WASM KDF (`env.g`/`env.m`, with bit-identical non-linear JS fallback), 64-bit call-site salted decoders, and CWE-540 path scrubbing.
 
 ---
 
@@ -126,7 +126,7 @@ Subcommands:
 | `--private-maps-dir <dir>` | `string` | `.unpeek-maps` | Target directory for extracted production source maps. |
 | `--min-string-length <num>` | `number` | `4` | Minimum string literal character length for string vault encryption. |
 | `--no-shield` | `boolean` | `false` | Skips injecting the runtime anti-tamper deterrent shield into entry chunks. |
-| `--aggressive` | `boolean` | `false` | Enables Tier 3 strict protection: 43-opcode Micro-VM v2, singleton host-coupled WASM KDF, and 64-bit salted vault. |
+| `--aggressive` | `boolean` | `false` | Enables Tier 3 strict protection: 44-opcode Micro-VM v2, singleton host-coupled WASM KDF, and 64-bit salted vault. |
 | `-v, --version` | `boolean` | — | Prints installed unpeek version. |
 | `-h, --help` | `boolean` | — | Displays command-line help. |
 

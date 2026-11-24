@@ -713,7 +713,8 @@ export function injectWasmVault(
 
   const helperSnippet = `var ${kdfFnName};
 (function(){
-  var _G = typeof globalThis < 'u' ? globalThis : typeof self < 'u' ? self : 0;
+  var _G = typeof globalThis < 'u' ? globalThis : typeof self < 'u' ? self : typeof window < 'u' ? window : 0;
+  var _M = (_G && _G.Math) || Math;
   var _reg = _G ? (_G.__unpeek_wasm_kdf || (_G.__unpeek_wasm_kdf = {})) : 0;
   if (_reg && _reg['${suffix}']) {
     ${kdfFnName} = _reg['${suffix}'];
@@ -721,10 +722,10 @@ export function injectWasmVault(
   }
   var _g = [${gArr.join(',')}];
   var _evR = function(x) {
-    return (${rA0} + Math.imul(x, (${rA1} + Math.imul(x, (${rA2} + Math.imul(${rA3}, x)) | 0)) | 0)) | 0;
+    return (${rA0} + _M.imul(x, (${rA1} + _M.imul(x, (${rA2} + _M.imul(${rA3}, x)) | 0)) | 0)) | 0;
   };
   var _sb = function(b) {
-    return (Math.imul(167, b & 255) + ${sOff}) & 255;
+    return (_M.imul(167, b & 255) + ${sOff}) & 255;
   };
   var _tk = ['__','unp','eek_t','ampered'].join('');
   var _eG = function(sl) {
@@ -751,7 +752,7 @@ export function injectWasmVault(
     for (var _i = 0; _i < _c.length; _i++) {
       _p += String.fromCharCode(_c[_i] ^ ${strKey});
     }
-    var _m = Math[_p];
+    var _m = _M[_p];
     ${kdfFnName} = function(f, s, h) {
       var _x = (f ^ _k[2] ^ _k[3] ^ (_eG(0) ^ ${gMask})) | 0;
       _x = (_x ^ (_x >>> 16)) | 0;

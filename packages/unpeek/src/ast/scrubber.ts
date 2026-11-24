@@ -1,7 +1,10 @@
 import type * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
 import type { ScrubberOptions } from './types.js';
-import { isNodeInExemptSubtree } from './boundary-classifier.js';
+import {
+  isNodeInExemptSubtree,
+  isStaticModuleOrAssetPosition,
+} from './boundary-classifier.js';
 
 const FILE_URI_USER_RE =
   /file:\/\/\/(?:[A-Za-z]:\/)?(?:Users|home)\/[^/\s"'`]+\/([^\s"'`]+)/gi;
@@ -117,13 +120,7 @@ export function scrubResidualPaths(
       const parent = ancestors[ancestors.length - 2] as any;
       if (!parent) return;
 
-      if (
-        (parent.type === 'ImportDeclaration' ||
-          parent.type === 'ExportNamedDeclaration' ||
-          parent.type === 'ExportAllDeclaration' ||
-          parent.type === 'ImportExpression') &&
-        parent.source === node
-      ) {
+      if (isStaticModuleOrAssetPosition(node, parent)) {
         return;
       }
 
@@ -159,7 +156,7 @@ export function scrubResidualPaths(
       }
 
       const parent = ancestors[ancestors.length - 2] as any;
-      if (parent?.type === 'ImportExpression' && parent.source === node) {
+      if (isStaticModuleOrAssetPosition(node, parent)) {
         return;
       }
 

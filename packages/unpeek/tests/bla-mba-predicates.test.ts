@@ -192,7 +192,7 @@ describe('bla MBA Integration: modInverseUint32, Unsigned & Affine Predicates, a
           expect(ctx[`coldOp${i}`](input)).toBe((input ^ (i + 1)) | 0);
         }
       }
-      expect(ctx[`_uAl${sfx}`]).toEqual(initialAl);
+      expect(Array.from(ctx[`_uAl${sfx}`])).toEqual(initialAl);
     });
   });
 

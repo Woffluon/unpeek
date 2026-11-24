@@ -704,7 +704,131 @@ export const compactGenerator: Generator = Object.assign({}, baseGenerator, {
     }
     state.write(')');
   },
+
+  ImportSpecifier(this: any, node: any, state: any) {
+    writeModuleBindingName(this, node.imported, state);
+    const sameIdent =
+      node.imported?.type === 'Identifier' &&
+      node.local?.type === 'Identifier' &&
+      node.imported.name === node.local.name;
+    if (!sameIdent && node.local?.name) {
+      state.write(' as ' + node.local.name);
+    }
+  },
+
+  ExportSpecifier(this: any, node: any, state: any) {
+    writeModuleBindingName(this, node.local, state);
+    const sameIdent =
+      node.local?.type === 'Identifier' &&
+      node.exported?.type === 'Identifier' &&
+      node.local.name === node.exported.name;
+    if (!sameIdent && node.exported) {
+      state.write(' as ');
+      writeModuleBindingName(this, node.exported, state);
+    }
+  },
+
+  ImportDeclaration(this: any, node: any, state: any) {
+    state.write('import ');
+    const specifiers = node.specifiers || [];
+    const len = specifiers.length;
+    let i = 0;
+    if (len > 0) {
+      while (i < len) {
+        if (i > 0) state.write(', ');
+        const spec = specifiers[i];
+        const tag = spec.type[6];
+        if (tag === 'D') {
+          state.write(spec.local.name, spec);
+          i++;
+        } else if (tag === 'N') {
+          state.write('* as ' + spec.local.name, spec);
+          i++;
+        } else {
+          break;
+        }
+      }
+      if (i < len) {
+        state.write('{');
+        for (;;) {
+          this.ImportSpecifier(specifiers[i], state);
+          if (++i < len) {
+            state.write(', ');
+          } else {
+            break;
+          }
+        }
+        state.write('}');
+      }
+      state.write(' from ');
+    }
+    this.Literal(node.source, state);
+    writeImportAttributes(this, node.attributes, state);
+    state.write(';');
+  },
+
+  ExportNamedDeclaration(this: any, node: any, state: any) {
+    state.write('export ');
+    if (node.declaration) {
+      this[node.declaration.type](node.declaration, state);
+      return;
+    }
+    state.write('{');
+    const specifiers = node.specifiers || [];
+    const len = specifiers.length;
+    if (len > 0) {
+      for (let i = 0; ; ) {
+        this.ExportSpecifier(specifiers[i], state);
+        if (++i < len) {
+          state.write(', ');
+        } else {
+          break;
+        }
+      }
+    }
+    state.write('}');
+    if (node.source) {
+      state.write(' from ');
+      this.Literal(node.source, state);
+    }
+    writeImportAttributes(this, node.attributes, state);
+    state.write(';');
+  },
+
+  ExportAllDeclaration(this: any, node: any, state: any) {
+    if (node.exported == null) {
+      state.write('export * from ');
+    } else {
+      state.write('export * as ');
+      writeModuleBindingName(this, node.exported, state);
+      state.write(' from ');
+    }
+    this.Literal(node.source, state);
+    writeImportAttributes(this, node.attributes, state);
+    state.write(';');
+  },
 } as any);
+
+function writeModuleBindingName(generator: any, node: any, state: any): void {
+  if (!node) return;
+  if (node.type === 'Literal') {
+    generator.Literal(node, state);
+  } else {
+    state.write(node.name, node);
+  }
+}
+
+function writeImportAttributes(generator: any, attributes: any[] | undefined, state: any): void {
+  if (!attributes || attributes.length === 0) return;
+  state.write(' with { ');
+  for (let i = 0; i < attributes.length; i++) {
+    generator.ImportAttribute(attributes[i], state);
+    if (i < attributes.length - 1) {
+      state.write(', ');
+    }
+  }
+  state.write(' }');
+}
 
 export interface CompactJsMapResult {
   code: string;

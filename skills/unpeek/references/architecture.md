@@ -15,7 +15,7 @@ unpeek operates on three protection tiers aligned with `minimal`, `recommended`,
   - **Key Features**: 3-tier call-graph hot-path exemption (`TRUE_HOT_60FPS`, `SHALLOW_RENDER_COMPONENT`, `SERIALIZED_WORKER`), zero-escape 92-char involutory permutation string vault, Tailwind CSS & SVG noise filtering, `>=4`-variable semi-linear MBA + degree-3 Rivest $\mathbb{Z}_{2^{32}}$ QNR predicates, In-Place Re-Encrypting `Uint8Array` Shader Vault (supporting WebGPU `@vgpu/wgsl` and GLSL), `mangler.minLength: 1` with deterministic polymorphic identifier prefixes, and order-independent `globalThis` runtime shield.
 - **Tier 3 (`strict` / `--aggressive` Profile — Critical Enclave Virtualization)**:
   - **Targets**: `@unpeek-critical` annotated functions, `critical.include` patterns, high-value client IP, licensing algorithms, financial models, and WebGPU compute shaders.
-  - **Key Features**: Micro-VM v2 (43-opcode direct-threaded trampoline with pre-VM AST lowering and inter-block `$f.ac` accumulator ratchet, `[8, 400]` node window, no `eval`/`new Function`), shared singleton `<1.2 KB` (`371 B` binary) host-coupled WASM KDF (`env.g`/`env.m` with bit-identical non-linear JS fallback), 64-bit call-site salted lazy string vault, and CWE-540 path scrubbing (`rootDir`, `[project]/`, `webpack://`, Windows `C:\`).
+  - **Key Features**: Micro-VM v2 (44-opcode direct-threaded trampoline with pre-VM AST lowering and inter-block `$f.ac` accumulator ratchet, `[8, 400]` node window, no `eval`/`new Function`), shared singleton `<1.2 KB` (`371 B` binary) host-coupled WASM KDF (`env.g`/`env.m` with bit-identical non-linear JS fallback), 64-bit call-site salted lazy string vault, and CWE-540 path scrubbing (`rootDir`, `[project]/`, `webpack://`, Windows `C:\`).
 
 ---
 
@@ -91,7 +91,7 @@ Injected exclusively into entry chunks as a `WorkerGlobalScope`-safe (`self`/`gl
 
 When `--aggressive` or `tier: 'Tier 3'` (`--profile strict`) is enabled:
 
-### Bytecode Micro-VM v2 (43-Opcode Direct-Threaded Trampoline)
+### Bytecode Micro-VM v2 (44-Opcode Direct-Threaded Trampoline)
 - Priority-scores cold functions for `maxFunctionsPerChunk` (`@unpeek-critical` / `critical.include` > submit/validation/auth/checkout/server-action/`fetch` handlers > multi-statement logic; default `12`, `[8, 400]` AST node window) without touching hot paths.
 - Pre-VM AST lowering supports `&&`/`||`/`??`, `?:`, sequence expressions, `for`/`while`/`do..while` loops, `try/throw` (`OP_THROW`), `this`, `new`, template literals, destructuring/default parameters, and `obj.arguments`/`obj.eval` member accesses, and prunes unreachable post-`RET`/`THROW` epilogues.
 - Shares per-`(scope, seed)` runtime instances on `globalThis.__unpeek_vm`, checks `_uVm*` `Function.prototype.toString()` for pretty-print formatting (`$flt = 1`), verifies 32-bit `sym_s[1]` (`expectedStateHash`), and executes via a `$step` direct-threaded closure trampoline with an inter-block `$f.ac` accumulator ratchet and per-`(seed, op)` non-zero semantic handler biases (`1..31`)—zero `eval()` or `new Function()`, 100% strict CSP compliant.

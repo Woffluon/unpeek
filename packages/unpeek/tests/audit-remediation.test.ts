@@ -1215,7 +1215,7 @@ export function runDomainService() {
         },
       });
       expect(handlerArrayNode).not.toBeNull();
-      expect(handlerArrayNode.elements).toHaveLength(43);
+      expect(handlerArrayNode.elements).toHaveLength(44);
 
       let nonZeroConstantCount = 0;
       for (const handlerFn of handlerArrayNode.elements) {
@@ -1239,7 +1239,7 @@ export function runDomainService() {
         expect(val).not.toBe(0);
         if (val !== 0) nonZeroConstantCount++;
       }
-      expect(nonZeroConstantCount).toBe(43);
+      expect(nonZeroConstantCount).toBe(44);
     });
 
     it('Finding 8 (P2): hybrid browser context lock fails closed in bare node:vm while preserving browser async order-independence, and prunes dead post-RET epilogue', () => {
